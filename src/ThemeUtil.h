@@ -6,7 +6,7 @@
 #include <cstring>
 
 // ── Pure theme/color helpers (no imgui, no SDL) ───────────────────────────────
-// Shared by the host (src/UI/Theme.cpp), the SettingsMenu plugin, and unit tests.
+// Shared by the host (src/ui/Theme.cpp), the SettingsMenu plugin, and unit tests.
 // Header-only so it compiles into every translation unit that needs it without a
 // shared library — consistent with how the SDK helper sources are compiled in.
 namespace ThemeUtil
