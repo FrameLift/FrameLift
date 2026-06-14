@@ -200,7 +200,7 @@ jobs:
   # so it's packaged in its own job. Configure (no host build) stages the `sdk`
   # install component; the clean-room build then validates the package with a native
   # compiler, outside the source tree, proving it is self-contained.
-  # Produces framelift-sdk-<ver>.zip.
+  # Produces FrameLift-sdk-<ver>.zip.
   build-sdk:
     needs: test
     runs-on: ubuntu-latest
@@ -226,12 +226,12 @@ jobs:
           cmake --build "$GITHUB_WORKSPACE/sdk-cleanroom"
           test -f "$GITHUB_WORKSPACE/sdk-cleanroom/Plugins/HelloPlugin.so"
           # cmake -E tar with --format=zip avoids needing the zip package installed.
-          (cd "$GITHUB_WORKSPACE/sdk-stage" && cmake -E tar cf "$GITHUB_WORKSPACE/$BUILD_DIR/framelift-sdk-${VERSION}.zip" --format=zip .)
+          (cd "$GITHUB_WORKSPACE/sdk-stage" && cmake -E tar cf "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-sdk-${VERSION}.zip" --format=zip .)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: framelift-sdk
-          path: ${{ env.BUILD_DIR }}/framelift-sdk-*.zip
+          name: FrameLift-sdk
+          path: ${{ env.BUILD_DIR }}/FrameLift-sdk-*.zip
 
   # ── Release ─────────────────────────────────────────────────────────────────
   # On v<X.Y.Z> tags, attach the build outputs to a GitHub Release with
@@ -254,4 +254,4 @@ jobs:
           files: |
             artifacts/FrameLift-win64/FrameLift-win64.zip
             artifacts/FrameLift-linux/FrameLift-linux-x64.tar.gz
-            artifacts/framelift-sdk/framelift-sdk-*.zip
+            artifacts/FrameLift-sdk/FrameLift-sdk-*.zip
