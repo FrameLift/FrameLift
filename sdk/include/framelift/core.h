@@ -18,3 +18,4 @@
 #include <framelift/PluginBase.h>
 #include <framelift/PluginExports.h>
 #include <framelift/PluginFields.h>
+#include <framelift/UrlUtils.h>

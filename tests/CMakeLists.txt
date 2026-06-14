@@ -67,6 +67,7 @@ add_executable(framelift_tests
         KeyNamesTests.cpp
         SemVerTests.cpp
         PluginAbiTests.cpp
+        UrlUtilsTests.cpp
         ExtensionFilterTests.cpp
         FFmpegFiltersTests.cpp
         MediaEventTests.cpp
@@ -113,6 +114,7 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/Overlay"
             "${FRAMELIFT_ROOT}/plugins/DebugOverlay"
             "${FRAMELIFT_ROOT}/plugins/Benchmark"
+            "${FRAMELIFT_ROOT}/plugins/RemoteStream"
     )
     target_link_libraries(${name} PRIVATE
             GTest::gtest_main GTest::gmock Threads::Threads nlohmann_json::nlohmann_json)
@@ -162,3 +164,7 @@ add_framelift_plugin_test(framelift_test_benchmark
         BenchmarkTests.cpp
         "${FRAMELIFT_ROOT}/plugins/Benchmark/Benchmark.cpp"
         "${FRAMELIFT_ROOT}/plugins/Benchmark/SysStats.cpp")
+
+add_framelift_plugin_test(framelift_test_remotestream
+        RemoteStreamTests.cpp
+        "${FRAMELIFT_ROOT}/plugins/RemoteStream/RemoteStream.cpp")

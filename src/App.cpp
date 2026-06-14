@@ -205,6 +205,15 @@ void App::BuildContextMenu()
             OpenFileAction();
         }
     );
+    framelift::AddItem(
+        contextMenu_, "Open Network Stream\xe2\x80\xa6",
+        [this]
+        {
+            // The RemoteStream plugin owns the URL-entry modal and all stream
+            // handling; the host just surfaces the entry point next to "Open File".
+            pluginCtx_->Publish<OpenNetworkStreamRequestEvent>({});
+        }
+    );
     contextMenu_.AddSeparator();
     framelift::AddItem(
         contextMenu_, "Play / Pause", "togglePause",

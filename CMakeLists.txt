@@ -133,6 +133,7 @@ add_subdirectory(plugins/History)
 add_subdirectory(plugins/SettingsMenu)
 add_subdirectory(plugins/DebugOverlay)
 add_subdirectory(plugins/Benchmark)
+add_subdirectory(plugins/RemoteStream)
 if (FRAMELIFT_ENABLE_UPDATER)
     add_subdirectory(plugins/Updater)
 endif ()
@@ -145,6 +146,7 @@ set(FRAMELIFT_PLUGIN_TARGETS
         SettingsMenu
         DebugOverlay
         Benchmark
+        RemoteStream
 )
 if (FRAMELIFT_ENABLE_UPDATER)
     list(APPEND FRAMELIFT_PLUGIN_TARGETS Updater)

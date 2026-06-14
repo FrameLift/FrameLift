@@ -61,8 +61,8 @@ struct Settings
 
     // List of plugin base names to load from the plugins/ directory.
     // Serialized under [plugins] enabled=Name1;Name2;... in the ini file.
-    std::vector<std::string> enabledPlugins = {"Playlist",     "History",      "Overlay",  "DebugOverlay",
-                                               "SettingsMenu", "Benchmark",    "Updater"};
+    std::vector<std::string> enabledPlugins = {"Playlist",     "History",   "Overlay",      "DebugOverlay",
+                                               "SettingsMenu", "Benchmark", "RemoteStream", "Updater"};
 
     // Read settings from an ini-style "section.name=value" file at path.
     // Missing keys are left at their defaults; unknown keys are silently ignored.

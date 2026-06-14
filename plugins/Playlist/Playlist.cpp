@@ -149,6 +149,14 @@ void Playlist::OnInstall(IPluginContext& ctx)
         ctx,
         [this](const OpenFileRequestEvent& e)
         {
+            // Remote URLs (http://, flsec://, ...) are owned by the RemoteStream
+            // plugin. Ignore them here so we neither reject them as missing files
+            // nor try to scan a directory for a non-filesystem path.
+            if (framelift::IsRemoteUrl(e.path))
+            {
+                return;
+            }
+
             if (e.path && e.path[0])
             {
                 std::error_code ec;

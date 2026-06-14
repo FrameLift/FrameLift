@@ -37,6 +37,14 @@ struct OpenFileRequestEvent
     bool rebuildPlaylist = false; // true = rescan the directory and rebuild; false = just play this file
 };
 
+// Request to prompt the user for a remote stream URL. Published by the host's
+// "Open Network Stream…" context-menu item; the RemoteStream plugin subscribes
+// and opens its URL-entry modal. No payload — it is purely a "show the prompt".
+struct OpenNetworkStreamRequestEvent
+{
+    static constexpr const char* EventId = "framelift.OpenNetworkStreamRequestEvent";
+};
+
 // Published by Panel whenever its animated visible width changes; consumers
 // (e.g. Overlay's controls-bar inset) cache the latest value per side.
 struct PanelLayoutEvent
