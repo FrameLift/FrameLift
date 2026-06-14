@@ -161,7 +161,7 @@ TEST(SettingsTest, EmptyFileSeedsDefaults)
     Settings reloaded;
     reloaded.Load(f.str());
     EXPECT_FLOAT_EQ(reloaded.panelWidth, 320.f);
-    EXPECT_EQ(reloaded.enabledPlugins.size(), 7u);
+    EXPECT_EQ(reloaded.enabledPlugins.size(), 8u);
 }
 
 TEST(SettingsTest, SaveLoadRoundTrip)
