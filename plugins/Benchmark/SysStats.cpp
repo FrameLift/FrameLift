@@ -28,7 +28,8 @@ struct SysSampler::Impl
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER counter = nullptr;
     bool gpuAvailable = false;
-    std::string pidNeedle; // "pid_<id>" — filters instances belonging to us
+    bool gpuInitTried = false; // PDH query opened lazily on first SampleGpu
+    std::string pidNeedle;     // "pid_<id>" — filters instances belonging to us
 };
 
 static uint64_t FileTimeToU64(const FILETIME& ft)
@@ -46,22 +47,34 @@ SysSampler::SysSampler() : impl_(new Impl)
     impl_->numProcessors = std::max<DWORD>(1, si.dwNumberOfProcessors);
 
     impl_->pidNeedle = "pid_" + std::to_string(GetCurrentProcessId());
+}
 
-    if (PdhOpenQueryA(nullptr, 0, &impl_->query) == ERROR_SUCCESS)
+// Open the PDH GPU query on first use. Priming the wildcard GPU counter
+// enumerates every GPU engine instance — hundreds of ms on the first call — so
+// it is deferred out of the constructor (which runs at plugin load) to here,
+// reached only once the benchmark overlay is actually sampling.
+static void EnsureGpuQuery(SysSampler::Impl& s)
+{
+    if (s.gpuInitTried)
     {
-        const PDH_STATUS st = PdhAddCounterA(
-            impl_->query, "\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &impl_->counter
-        );
+        return;
+    }
+    s.gpuInitTried = true;
+
+    if (PdhOpenQueryA(nullptr, 0, &s.query) == ERROR_SUCCESS)
+    {
+        const PDH_STATUS st =
+            PdhAddCounterA(s.query, "\\GPU Engine(*engtype_3D)\\Utilization Percentage", 0, &s.counter);
         if (st == ERROR_SUCCESS)
         {
-            // Prime the counter so the first Sample() has a delta to format.
-            PdhCollectQueryData(impl_->query);
-            impl_->gpuAvailable = true;
+            // Prime the counter so the next Sample() has a delta to format.
+            PdhCollectQueryData(s.query);
+            s.gpuAvailable = true;
         }
         else
         {
-            PdhCloseQuery(impl_->query);
-            impl_->query = nullptr;
+            PdhCloseQuery(s.query);
+            s.query = nullptr;
         }
     }
 }
@@ -77,6 +90,7 @@ SysSampler::~SysSampler()
 
 static double SampleGpu(SysSampler::Impl& s)
 {
+    EnsureGpuQuery(s);
     if (!s.gpuAvailable || PdhCollectQueryData(s.query) != ERROR_SUCCESS)
     {
         return -1.0;
