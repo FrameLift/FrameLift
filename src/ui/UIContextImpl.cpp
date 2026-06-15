@@ -307,6 +307,13 @@ void UIContextImpl::Text(const char* text) noexcept
     ImGui::TextUnformatted(text);
 }
 
+void UIContextImpl::TextWrapped(const char* text) noexcept
+{
+    ImGui::PushTextWrapPos(0.0f); // wrap to the window content region's right edge
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+}
+
 void UIContextImpl::TextColored(UI::Color4f col, const char* text) noexcept
 {
     ImGui::PushStyleColor(ImGuiCol_Text, V(col));
@@ -466,6 +473,15 @@ bool UIContextImpl::MenuItem(const char* label, const char* shortcut, bool check
 void UIContextImpl::TextDisabled(const char* text) noexcept
 {
     ImGui::TextDisabled("%s", text);
+}
+
+void UIContextImpl::TextDisabledWrapped(const char* text) noexcept
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    ImGui::PushTextWrapPos(0.0f); // wrap to the window content region's right edge
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
 }
 
 bool UIContextImpl::BeginMenu(const char* label) noexcept

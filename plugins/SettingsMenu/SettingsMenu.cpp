@@ -780,7 +780,7 @@ void SettingsMenu::RenderPagePlugins(UIContext& ctx)
         return;
     }
 
-    ctx.TextDisabled("Enabling or disabling a plugin takes effect after restarting FrameLift.");
+    ctx.TextDisabledWrapped("Enabling or disabling a plugin takes effect after restarting FrameLift.");
     ctx.Dummy({0.f, 6.f});
 
     // Walk the host's plugin catalogue and render one block per plugin. State
@@ -834,7 +834,7 @@ void SettingsMenu::RenderPagePlugins(UIContext& ctx)
 
                 if (info.description && info.description[0])
                 {
-                    ctx->Text(info.description);
+                    ctx->TextWrapped(info.description);
                 }
             }
             else if (loadFailed)
@@ -902,18 +902,18 @@ void SettingsMenu::RenderPageConfig(UIContext& ctx)
     }
     if (configPath_.empty())
     {
-        ctx.TextDisabled("Settings file path is unavailable.");
+        ctx.TextDisabledWrapped("Settings file path is unavailable.");
         return;
     }
 
     ctx.TextDisabled(configPath_.c_str());
-    ctx.TextDisabled(
+    ctx.TextDisabledWrapped(
         "Edit the raw settings.ini below. \"Save to disk\" applies core settings live; "
         "changes to plugin-owned sections take effect after a restart."
     );
     if (configTruncated_)
     {
-        ctx.TextDisabled(
+        ctx.TextDisabledWrapped(
             "Warning: the file is larger than the 64 KB editor buffer. Saving is disabled "
             "to avoid losing the rest of the file."
         );

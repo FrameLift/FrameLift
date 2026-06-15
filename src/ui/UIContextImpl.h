@@ -87,6 +87,7 @@ public:
 
     bool Selectable(const char* label, bool selected, UI::SelectableFlags flags, UI::Vec2 size) noexcept override;
     void Text(const char* text) noexcept override;
+    void TextWrapped(const char* text) noexcept override;
     void TextColored(UI::Color4f col, const char* text) noexcept override;
     bool Checkbox(const char* label, bool* v) noexcept override;
     bool Button(const char* label, UI::Vec2 size) noexcept override;
@@ -115,6 +116,7 @@ public:
     bool MenuItem(const char* label, const char* shortcut) noexcept override;
     bool MenuItem(const char* label, const char* shortcut, bool checked) noexcept override;
     void TextDisabled(const char* text) noexcept override;
+    void TextDisabledWrapped(const char* text) noexcept override;
     bool BeginMenu(const char* label) noexcept override;
     void EndMenu() noexcept override;
 

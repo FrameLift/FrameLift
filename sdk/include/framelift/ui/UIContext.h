@@ -199,4 +199,14 @@ public:
     // window is clipped at the host window's bounds instead. No-op without
     // multi-viewport.
     virtual void PinNextWindowToMainViewport() noexcept = 0;
+
+    // ── Wrapped text ─────────────────────────────────────────────────────────────
+    // Like Text(), but wraps long lines to the window's content region instead of
+    // clipping at the right edge. Used for multi-line descriptions/help text.
+    // Appended at the end to preserve the vtable layout for plugins built against
+    // an earlier minor.
+    virtual void TextWrapped(const char* text) noexcept = 0;
+
+    // Like TextDisabled(), but wraps long lines to the window's content region.
+    virtual void TextDisabledWrapped(const char* text) noexcept = 0;
 };

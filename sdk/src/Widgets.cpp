@@ -25,7 +25,7 @@ void Description(UIContext& ctx, const char* description)
 {
     if (description && description[0])
     {
-        ctx.TextDisabled(description);
+        ctx.TextDisabledWrapped(description);
     }
 }
 } // namespace
