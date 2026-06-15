@@ -1,4 +1,5 @@
 #include "App.h"
+#include "Cli.h"
 #include "IconData.h"
 #include "SettingsMapping.h"
 #include "platform/watch/DirWatcher.h"
@@ -39,10 +40,9 @@ PluginRegistry& App::Registry()
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
-App::App(const char* title, const int width, const int height)
-    : appWindow_(std::make_unique<SdlAppWindow>(title, width, height)),
-      player_(std::make_unique<FFmpegPlayer>()),
-      dirWatcher_(CreateDirWatcher())
+App::App(const char* title, const int width, const int height, const int cliArgc, const char* const* cliArgv)
+    : cliArgc_(cliArgc), cliArgv_(cliArgv), appWindow_(std::make_unique<SdlAppWindow>(title, width, height)),
+      player_(std::make_unique<FFmpegPlayer>()), dirWatcher_(CreateDirWatcher())
 {
     (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
 
@@ -748,6 +748,15 @@ void App::BindPlayerHotkeys()
 
 int App::Run()
 {
+    // Hand the command line to plugins (all loaded and subscribed by now), then
+    // open the first positional file/URL argument — the same request drag-drop and
+    // the Open-File dialog publish, so Playlist/RemoteStream route it by scheme.
+    pluginCtx_->Publish<CliCommandEvent>({cliArgc_, cliArgv_});
+    if (const std::string target = ParseOpenTarget(cliArgc_, cliArgv_); !target.empty())
+    {
+        pluginCtx_->Publish<OpenFileRequestEvent>({target.c_str(), true});
+    }
+
     // Paint one frame before the loop so the window (created hidden) is shown
     // already displaying the idle screen instead of a black framebuffer. The
     // hidden window emits no WindowExposed event, so we cannot rely on the loop

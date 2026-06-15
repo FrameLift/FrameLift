@@ -24,7 +24,7 @@
 class App
 {
 public:
-    App(const char* title, int width, int height);
+    App(const char* title, int width, int height, int cliArgc = 0, const char* const* cliArgv = nullptr);
     ~App();
 
     // Return type globally-qualified: the member name `Services` otherwise shadows
@@ -55,6 +55,12 @@ private:
     void LoadPlugins();
     void BuildContextMenu();
     void BuildRenderables();
+
+    // Process command line, forwarded from main(). main()'s argv stays valid for
+    // the program lifetime, so storing the pointer is safe. Broadcast verbatim as
+    // a CliCommandEvent at startup; the first positional arg also opens a file.
+    int cliArgc_ = 0;
+    const char* const* cliArgv_ = nullptr;
 
     std::unique_ptr<IAppWindow> appWindow_;
     std::unique_ptr<IMediaPlayer> player_;

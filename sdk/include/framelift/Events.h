@@ -61,3 +61,17 @@ struct SettingsVisibilityEvent
     static constexpr const char* EventId = "framelift.SettingsVisibilityEvent";
     bool open = false;
 };
+
+// Published once by the host at startup (after all plugins are loaded and
+// subscribed) carrying the process command line verbatim. The host itself only
+// consumes the first positional argument as a file/URL to open; this event lets
+// any plugin interpret the remaining arguments — subcommands, flags, batch or
+// analysis tasks — without the host knowing about them. `argv[0]` is the program
+// name. The argv array originates from main() and stays valid for the process
+// lifetime, but copy any strings you retain to keep with the POD-lifetime rule.
+struct CliCommandEvent
+{
+    static constexpr const char* EventId = "framelift.CliCommandEvent";
+    int argc = 0;
+    const char* const* argv = nullptr;
+};

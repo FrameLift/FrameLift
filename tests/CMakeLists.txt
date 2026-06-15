@@ -60,6 +60,7 @@ set(FRAMELIFT_SDK_TEST_SOURCES
 
 # ── framelift_tests: pure-logic + platform-builder suites (no plugin exports) ───────
 add_executable(framelift_tests
+        CliTests.cpp
         SettingsTests.cpp
         PluginContextTests.cpp
         PluginSettingsTests.cpp
