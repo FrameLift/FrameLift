@@ -2,6 +2,7 @@
 
 #include <framelift/platform/IMediaPlayer.h>
 
+#include "../../ReadAheadCache.h"
 #include "FFmpegSubtitles.h"
 #include "FFmpegVideoRenderer.h"
 
@@ -58,6 +59,7 @@ public:
     void SetImageDisplayDuration(double seconds) noexcept override;
     void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept override;
     void SetPlaybackOptions(const PlaybackOptions& opts) noexcept override;
+    void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept override;
 
     void ToggleSubtitles() noexcept override;
     void CycleSubtitleTrack() noexcept override;
@@ -235,6 +237,10 @@ private:
 
     // Audio output + per-file packet queues (forward-declared; defined in the .cpp
     // so libav/SDL stay out of this header).
+    // Shared memory-bounded read-ahead budget + hit/miss metrics for the three
+    // queues. Declared before the queues so it outlives them: their
+    // destructors Flush() and touch this via their budget_ pointer.
+    ReadAheadCache cache_;
     std::unique_ptr<FFmpegAudioOutput> audioOut_;
     std::unique_ptr<FFmpegPacketQueue> audioQ_;
     std::unique_ptr<FFmpegPacketQueue> videoQ_;

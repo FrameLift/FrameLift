@@ -127,6 +127,8 @@ void DebugOverlay::RequestRefresh()
     player->GetInt64Async(PlayerProperty::DroppedFrames, i64Cb, new I64Field{&dropped_, 0});
     player->GetInt64Async(PlayerProperty::MistimedFrames, i64Cb, new I64Field{&mistimed_, 0});
     player->GetInt64Async(PlayerProperty::CacheUsed, i64Cb, new I64Field{&cacheUsed_, 0});
+    player->GetInt64Async(PlayerProperty::CacheHits, i64Cb, new I64Field{&cacheHits_, 0});
+    player->GetInt64Async(PlayerProperty::CacheMisses, i64Cb, new I64Field{&cacheMisses_, 0});
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -215,7 +217,10 @@ void DebugOverlay::OnRender(UIContext& ctx)
 
         row("HwDec: ", hwDec_.c_str());
 
-        std::snprintf(buf, sizeof(buf), "Used: %" PRId64 " KB", cacheUsed_);
+        std::snprintf(
+            buf, sizeof(buf), "Used: %" PRId64 " KB  (hits %" PRId64 " / miss %" PRId64 ")", cacheUsed_, cacheHits_,
+            cacheMisses_
+        );
         row("Cache: ", buf);
 
         std::snprintf(buf, sizeof(buf), "%" PRId64, dropped_);

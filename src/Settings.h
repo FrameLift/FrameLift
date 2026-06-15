@@ -18,6 +18,9 @@
     X(playback, videoSync,          bool,        true,  "Synchronize video timing to the display refresh.") \
     X(playback, subAutoLoad,        bool,        true,  "Auto-load subtitle files matching the opened media.") \
     X(playback, audioFileAutoLoad,  bool,        true,  "Auto-load external audio files matching the opened media.") \
+    /* ── Cache ────────────────────────────────────────────────────────────── */ \
+    X(cache,    readAheadEnabled,   bool,        true,  "Enable the memory-bounded demuxer read-ahead cache.") \
+    X(cache,    readAheadSizeMB,    int,           64,  "Read-ahead demuxer cache size in MB (total across audio/video/subtitle).") \
     /* ── UI ───────────────────────────────────────────────────────────────── */ \
     X(ui,       panelWidth,         float,     320.f,   "Width in pixels of the side panels (playlist, etc.).") \
     X(ui,       slideSpeed,         float,      18.f,   "Panel slide-in/out animation speed.") \

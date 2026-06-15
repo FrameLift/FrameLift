@@ -37,3 +37,29 @@ TEST(SettingsMappingTest, PlaybackOptionsMapBooleans)
     EXPECT_TRUE(o.subAutoLoad);
     EXPECT_FALSE(o.audioFileAutoLoad);
 }
+
+TEST(SettingsMappingTest, ReadAheadDefaultsConvertMbToBytes)
+{
+    const Settings s;
+    const ReadAheadCacheOptions o = ReadAheadOptsFromSettings(s);
+    EXPECT_TRUE(o.enabled);
+    EXPECT_EQ(o.maxBytes, static_cast<int64_t>(s.readAheadSizeMB) * 1024 * 1024);
+}
+
+TEST(SettingsMappingTest, ReadAheadTracksEditedSettings)
+{
+    Settings s;
+    s.readAheadEnabled = false;
+    s.readAheadSizeMB = 128;
+    const ReadAheadCacheOptions o = ReadAheadOptsFromSettings(s);
+    EXPECT_FALSE(o.enabled);
+    EXPECT_EQ(o.maxBytes, int64_t{128} * 1024 * 1024);
+}
+
+TEST(SettingsMappingTest, ReadAheadClampsNegativeSizeToZero)
+{
+    Settings s;
+    s.readAheadSizeMB = -10;
+    const ReadAheadCacheOptions o = ReadAheadOptsFromSettings(s);
+    EXPECT_EQ(o.maxBytes, 0);
+}

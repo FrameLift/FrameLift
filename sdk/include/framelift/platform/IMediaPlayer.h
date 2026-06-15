@@ -55,7 +55,7 @@ enum class PlayerProperty : std::uint8_t
     HwDecCurrent,   // "hwdec-current"         String – active hardware decoder name
     DroppedFrames,  // "frame-drop-count"      Int64  – number of dropped frames
     MistimedFrames, // "mistimed-frame-count"  Int64  – number of mistimed frames
-    CacheUsed,      // "cache-used"            Int64  – cache currently used (KB)
+    CacheUsed,      // "cache-used"            Int64  – read-ahead cache currently used (KB)
 
     // ── Additional observable state (pushed via PropertyChange events) ────────
     Mute,           // "mute"            Flag   – true when audio is muted
@@ -65,6 +65,11 @@ enum class PlayerProperty : std::uint8_t
     EofReached,     // "eof-reached"     Flag   – true when the end of the file was reached
     Speed,          // "speed"           Double – current playback speed multiplier
     PercentPos,     // "percent-pos"     Double – playback position as a percentage (0-100)
+
+    // ── Read-ahead cache metrics (appended before Unknown to keep the
+    //    ABI ordinals above stable). Polled via GetInt64Async. ───────────────────
+    CacheHits,   // "cache-hit-count"   Int64 – packets served without a read-ahead stall
+    CacheMisses, // "cache-miss-count"  Int64 – read-ahead underruns (decode worker had to wait)
 
     Unknown, // placeholder for unrecognised properties – safe to ignore
 };
@@ -132,6 +137,15 @@ struct PlaybackOptions
     bool hrSeek = true;            // exact-frame seeking vs. nearest-keyframe seeking
     bool subAutoLoad = true;       // auto-load sidecar subtitle files matching the media
     bool audioFileAutoLoad = true; // auto-load sidecar audio files matching the media
+};
+
+// Read-ahead (demuxer) cache options. The cache bounds how far the
+// demuxer prefetches ahead of playback by total buffered packet bytes, shared
+// across the audio/video/subtitle streams.
+struct ReadAheadCacheOptions
+{
+    bool enabled = true;         // false ⇒ fall back to the per-stream packet-count bound
+    int64_t maxBytes = 64 << 20; // memory budget in bytes (default 64 MiB)
 };
 
 // Pure interface for a media playback backend.
@@ -207,4 +221,10 @@ public:
     virtual void SetRenderUpdateCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
     [[nodiscard]] virtual bool HasNewFrame() noexcept = 0;
     virtual void RenderFrame(int w, int h) noexcept = 0;
+
+    // ── Read-ahead cache ───────────────────────────────────────────
+    // Configure the memory-bounded demuxer read-ahead cache. Applied on the next
+    // LoadFile(). Appended at the end of the interface to keep the vtable layout
+    // of earlier slots stable (host-provided surface; MINOR ABI addition).
+    virtual void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept = 0;
 };

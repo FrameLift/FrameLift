@@ -125,6 +125,7 @@ void SettingsMenu::RegisterCorePages(IPluginContext& ctx)
     corePages_ = {{
         {this, &SettingsMenu::RenderPageGeneral, "General", "general"},
         {this, &SettingsMenu::RenderPagePlayback, "Playback", "playback"},
+        {this, &SettingsMenu::RenderPageCache, "Cache", "cache"},
         {this, &SettingsMenu::RenderPageUI, "UI", "ui"},
         {this, &SettingsMenu::RenderPageTheme, "Theme", "theme"},
         {this, &SettingsMenu::RenderPageFiles, "Files", "files"},
@@ -473,6 +474,23 @@ void SettingsMenu::RenderPagePlayback(UIContext& ctx)
     dirty_ |= Widgets::Checkbox(
         ctx, "External audio files", "Automatically load external audio files found in the same directory.",
         settings_.audioFileAutoLoad
+    );
+}
+
+void SettingsMenu::RenderPageCache(UIContext& ctx)
+{
+    Widgets::SectionHeader(ctx, "Read-ahead buffer");
+    dirty_ |= Widgets::Checkbox(
+        ctx, "Read-ahead enabled",
+        "Prefetch upcoming demuxed packets to smooth playback and reduce stalls. "
+        "Disable to fall back to a small fixed packet buffer.",
+        settings_.readAheadEnabled
+    );
+    dirty_ |= Widgets::SliderInt(
+        ctx, "Cache size",
+        "Memory budget for the read-ahead buffer in MB, shared across audio/video/subtitle. "
+        "Larger values prefetch further ahead at the cost of memory (default: 64).",
+        settings_.readAheadSizeMB, 8, 512
     );
 }
 

@@ -82,6 +82,30 @@ dynaudnormFrameLen=250
     EXPECT_EQ(s.dynaudnormFrameLen, 250);
 }
 
+TEST(SettingsTest, ReadAheadCacheDefaults)
+{
+    const Settings s;
+    EXPECT_TRUE(s.readAheadEnabled);
+    EXPECT_EQ(s.readAheadSizeMB, 64);
+}
+
+TEST(SettingsTest, ReadAheadCacheLoadAndRoundTrip)
+{
+    const TempFile f("[cache]\nreadAheadEnabled=0\nreadAheadSizeMB=256\n");
+
+    Settings s;
+    s.Load(f.str());
+    EXPECT_FALSE(s.readAheadEnabled);
+    EXPECT_EQ(s.readAheadSizeMB, 256);
+
+    const TempFile out;
+    s.Save(out.str());
+    Settings s2;
+    s2.Load(out.str());
+    EXPECT_FALSE(s2.readAheadEnabled);
+    EXPECT_EQ(s2.readAheadSizeMB, 256);
+}
+
 TEST(SettingsTest, MissingKeysKeepDefaults)
 {
     const TempFile f("[ui]\npanelWidth=400\n");
