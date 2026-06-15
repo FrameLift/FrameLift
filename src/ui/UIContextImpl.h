@@ -75,6 +75,8 @@ public:
     UI::Vec2 GetWindowPos() const noexcept override;
     float GetWindowWidth() const noexcept override;
     float GetWindowHeight() const noexcept override;
+    UI::Vec2 GetMainWindowScreenPos() const noexcept override;
+    void PinNextWindowToMainViewport() noexcept override;
     void SetCursorPosX(float x) noexcept override;
     void SetCursorPosY(float y) noexcept override;
     void SameLine() noexcept override;

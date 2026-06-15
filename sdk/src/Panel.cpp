@@ -4,6 +4,7 @@
 #include <framelift/FocusManager.h>
 #include <framelift/Guard.h>
 #include <framelift/IPluginContext.h>
+#include <framelift/platform/IAppWindow.h>
 #include <framelift/ui/Panel.h>
 #include <framelift/ui/UIContext.h>
 
@@ -21,23 +22,7 @@ void Panel::SetFocusManager(FocusManager* fm, IPlugin* self)
 
 void Panel::Toggle()
 {
-    const bool wasOpen = open_;
-    open_ = !open_;
-    if (!wasOpen && open_)
-    {
-        if (focusManager_)
-        {
-            focusManager_->Acquire(selfPlugin_);
-        }
-        OnOpened();
-    }
-    else if (wasOpen && !open_)
-    {
-        if (focusManager_)
-        {
-            focusManager_->Release(selfPlugin_);
-        }
-    }
+    SetOpen(!open_);
 }
 
 void Panel::SetOpen(const bool v)
@@ -54,6 +39,13 @@ void Panel::SetOpen(const bool v)
     }
     else if (wasOpen && !open_)
     {
+        // Closing a popped-out panel re-docks it to the edge (hidden, snapped — no
+        // slide) so the next open uses the normal docked slide-in.
+        if (poppedOut_)
+        {
+            poppedOut_ = false;
+            animX_ = side_ == Side::Left ? -GetWidth() : GetWidth();
+        }
         if (focusManager_)
         {
             focusManager_->Release(selfPlugin_);
@@ -159,6 +151,10 @@ void Panel::Render(const int windowW, const int windowH, UIContext& ctx) noexcep
     // ── Panel position ────────────────────────────────────────────────────────
     const float posX = side_ == Side::Left ? animX_ : static_cast<float>(windowW) - w + animX_;
 
+    // Keep the docked panel inside the host window: while it slides off-screen on
+    // close its position passes the main window's edge, and without this the
+    // multi-viewport backend would detach it into its own OS window mid-animation.
+    ctx.PinNextWindowToMainViewport();
     ctx.SetNextWindowPos(UI::Vec2(posX, 0.f), UI::Cond::Always);
     ctx.SetNextWindowSize(UI::Vec2(w, static_cast<float>(windowH)), UI::Cond::Always);
     ctx.SetNextWindowBgAlpha(0.92f);
@@ -198,12 +194,35 @@ void Panel::RenderPoppedOut(const int windowW, const int windowH, UIContext& ctx
 
     if (justPoppedOut_)
     {
-        // Seed the window just past the main window's right edge (coordinates are
-        // main-window-relative, so windowW is that edge). The host maps this to
-        // screen space outside the host viewport, so ImGui spawns a real OS window;
-        // afterwards the user owns its position and size.
-        ctx.SetNextWindowPos(UI::Vec2(static_cast<float>(windowW) + 30.f, 40.f), UI::Cond::Always);
-        ctx.SetNextWindowSize(UI::Vec2(w, static_cast<float>(windowH) * 0.7f), UI::Cond::Always);
+        // Seed the window beside the main window on the panel's anchored side: a
+        // left panel pops out to the left, a right panel to the right. The host
+        // maps these (main-window-relative) coordinates to screen space outside the
+        // host viewport, so ImGui spawns a real OS window; afterwards the user owns
+        // its position and size.
+        constexpr float gap = 30.f;
+        const float popH = static_cast<float>(windowH) * 0.7f;
+
+        // Work in screen space so we can clamp against the monitor's usable bounds,
+        // then convert back to the main-window-relative coordinates SetNextWindowPos
+        // expects.
+        const UI::Vec2 mainPos = ctx.GetMainWindowScreenPos();
+        float screenX = side_ == Side::Left ? mainPos.x - w - gap : mainPos.x + static_cast<float>(windowW) + gap;
+        float screenY = mainPos.y + 40.f;
+
+        if (auto* win = panelCtx_ ? panelCtx_->GetService<IAppWindow>() : nullptr)
+        {
+            // Keep the whole window on the display the main window lives on, so a
+            // maximized or edge-docked app never spawns the pop-out off-screen.
+            const Rect b = win->GetDisplayUsableBounds();
+            if (b.w > 0 && b.h > 0)
+            {
+                screenX = std::clamp(screenX, static_cast<float>(b.x), static_cast<float>(b.x + b.w) - w);
+                screenY = std::clamp(screenY, static_cast<float>(b.y), static_cast<float>(b.y + b.h) - popH);
+            }
+        }
+
+        ctx.SetNextWindowPos(UI::Vec2(screenX - mainPos.x, screenY - mainPos.y), UI::Cond::Always);
+        ctx.SetNextWindowSize(UI::Vec2(w, popH), UI::Cond::Always);
         justPoppedOut_ = false;
     }
 

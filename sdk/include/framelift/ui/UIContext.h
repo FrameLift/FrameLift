@@ -171,7 +171,7 @@ public:
     // (e.g. {0, -36} fills the available width and leaves 36px below). Returns true on edit.
     virtual bool InputTextMultiline(const char* label, char* buf, int bufSize, UI::Vec2 size = {}) noexcept = 0;
 
-    // ── Window geometry (ABI minor 1) ──────────────────────────────────────────
+    // ── Window geometry ─────────────────────────────────────────────────────────
     // Appended at the end of the interface to preserve the vtable layout for
     // plugins built against an earlier minor. Companion to GetWindowWidth();
     // used by the Panel base when it pops out into its own OS window.
@@ -180,4 +180,18 @@ public:
     // at the main window's top-left). The host maps them to/from screen space, so
     // plugins never deal with multi-viewport screen offsets.
     [[nodiscard]] virtual float GetWindowHeight() const noexcept = 0;
+
+    // ── Main window origin ───────────────────────────────────────
+    // Screen-space position of the main window's top-left. Companion to
+    // IAppWindow::GetDisplayUsableBounds(); lets a popped-out panel convert
+    // between main-window-relative and screen coordinates to clamp itself onto
+    // the monitor. Zero unless multi-viewport is active.
+    [[nodiscard]] virtual UI::Vec2 GetMainWindowScreenPos() const noexcept = 0;
+
+    // Pin the next window to the main OS window's viewport so it never detaches
+    // into its own platform window when positioned past the main window's edge —
+    // e.g. a docked panel sliding off-screen during its close animation. Such a
+    // window is clipped at the host window's bounds instead. No-op without
+    // multi-viewport.
+    virtual void PinNextWindowToMainViewport() noexcept = 0;
 };

@@ -250,6 +250,16 @@ float UIContextImpl::GetWindowHeight() const noexcept
     return ImGui::GetWindowHeight();
 }
 
+UI::Vec2 UIContextImpl::GetMainWindowScreenPos() const noexcept
+{
+    return {mainPosX_, mainPosY_};
+}
+
+void UIContextImpl::PinNextWindowToMainViewport() noexcept
+{
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+}
+
 void UIContextImpl::SetCursorPosX(float x) noexcept
 {
     ImGui::SetCursorPosX(x);
