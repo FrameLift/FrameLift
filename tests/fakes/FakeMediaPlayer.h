@@ -63,6 +63,10 @@ public:
     {
     }
 
+    void SetReadAheadCache(const ReadAheadCacheOptions&) noexcept override
+    {
+    }
+
     // ── Tracks ─────────────────────────────────────────────────────────────────
     void EnumerateSubtitleTracks(void (*)(const SubtitleTrack*, void*), void*) const noexcept override
     {

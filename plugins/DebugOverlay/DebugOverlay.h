@@ -59,6 +59,8 @@ private:
     int64_t dropped_ = 0;
     int64_t mistimed_ = 0;
     int64_t cacheUsed_ = 0;
+    int64_t cacheHits_ = 0;
+    int64_t cacheMisses_ = 0;
 
     std::chrono::steady_clock::time_point lastRefresh_{};
     static constexpr double refreshInterval = 1.0; // seconds

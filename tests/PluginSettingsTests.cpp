@@ -76,7 +76,7 @@ TEST(PluginSettingsTest, BadNumericFallsBackToDefault)
 }
 
 // Plugin keybinds live in their own [<Plugin>.keybinds] section, so writing them
-// must leave the host-owned, commented [keybinds] section untouched (issue #12).
+// must leave the host-owned, commented [keybinds] section untouched.
 TEST(PluginSettingsTest, PluginKeybindSectionLeavesHostKeybindsIntact)
 {
     const TempFile f(

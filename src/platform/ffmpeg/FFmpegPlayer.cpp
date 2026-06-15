@@ -90,6 +90,12 @@ FFmpegPlayer::FFmpegPlayer()
     // Created once here (not per-file) so Wake() never races a null handle.
     videoWakeEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 #endif
+    // Share one read-ahead budget across the three queues; push a PausedForCache
+    // PropertyChange when a decode worker first stalls / last recovers.
+    audioQ_->SetBudget(&cache_);
+    videoQ_->SetBudget(&cache_);
+    subQ_->SetBudget(&cache_);
+    cache_.SetStallCallback([this](bool stalling) { EmitFlag(PlayerProperty::PausedForCache, stalling); });
     decodeThread_ = std::thread(&FFmpegPlayer::DecodeThreadMain, this);
 }
 
@@ -328,6 +334,10 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     AVPacket* pkt = av_packet_alloc();
     bool stop = false;
 
+    // Fresh hit/miss counters for this file (the budget itself was configured via
+    // SetReadAheadCache and persists across files).
+    cache_.ResetMetrics();
+
     while (!stop)
     {
         // ── Apply a pending audio/subtitle track switch (workers are joined) ───
@@ -419,6 +429,9 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         audioQ_->Flush();
         videoQ_->Flush();
         subQ_->Flush();
+        // Clear the read-ahead accounting + abort flag (the queues were aborted on
+        // the seek that brought us here) so the demuxer can refill for this read.
+        cache_.Reset();
         if (aud.dec)
         {
             audioThread_ = std::thread(&FFmpegPlayer::AudioWorker, this, aud.dec, aud.stream, aud.startOffset);
@@ -1569,6 +1582,12 @@ void FFmpegPlayer::SetPlaybackOptions(const PlaybackOptions& opts) noexcept
     audioFileAutoLoad_ = opts.audioFileAutoLoad;
 }
 
+void FFmpegPlayer::SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept
+{
+    // Takes effect immediately; the new byte budget governs the next WaitForSpace.
+    cache_.Configure(opts.enabled, opts.maxBytes);
+}
+
 // ── Subtitle / audio tracks ───────────────────────────────────────────────────
 
 void FFmpegPlayer::ToggleSubtitles() noexcept
@@ -1765,7 +1784,13 @@ void FFmpegPlayer::GetInt64Async(PlayerProperty prop, void (*cb)(int64_t, bool, 
         cb(mistimedFrames_.load(), true, ud);
         return;
     case PlayerProperty::CacheUsed:
-        cb(0, true, ud); // local playback — no demuxer read-ahead cache (a network-only metric)
+        cb(cache_.UsedKB(), true, ud);
+        return;
+    case PlayerProperty::CacheHits:
+        cb(cache_.Hits(), true, ud);
+        return;
+    case PlayerProperty::CacheMisses:
+        cb(cache_.Misses(), true, ud);
         return;
     default:
         cb(0, false, ud);
@@ -1862,7 +1887,7 @@ void FFmpegPlayer::ObserveProperty(PlayerProperty prop) noexcept
         EmitFlag(prop, false); // not seeking at subscription time
         break;
     case PlayerProperty::PausedForCache:
-        EmitFlag(prop, false); // local playback never stalls on a cache
+        EmitFlag(prop, cache_.Stalling()); // true while a decode worker is stalled on a cache underrun
         break;
     case PlayerProperty::Duration:
         EmitDouble(prop, duration_.load());

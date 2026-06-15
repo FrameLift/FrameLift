@@ -15,3 +15,9 @@ inline PlaybackOptions PlaybackOptsFromSettings(const Settings& s)
 {
     return {s.hwdec, s.hrSeek, s.subAutoLoad, s.audioFileAutoLoad};
 }
+
+inline ReadAheadCacheOptions ReadAheadOptsFromSettings(const Settings& s)
+{
+    const int64_t mb = s.readAheadSizeMB > 0 ? s.readAheadSizeMB : 0;
+    return {s.readAheadEnabled, mb * 1024 * 1024};
+}

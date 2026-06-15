@@ -5,15 +5,23 @@ extern "C"
 #include <libavcodec/packet.h>
 }
 
+#include "../../ReadAheadCache.h"
+
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
 #include <queue>
 
 // Thread-safe, bounded hand-off of demuxed AVPackets from the demux thread to a
-// single decode worker (issue #8, Phase 3). One instance per stream (audio /
-// video). The bound caps memory when one stream is read far ahead of the other:
-// Push() blocks once the queue is full so the demuxer naturally paces itself.
+// single decode worker. One instance per stream (audio /
+// video). The per-queue packet-count bound caps memory when one stream is read
+// far ahead of the other: Push() blocks once the queue is full so the demuxer
+// naturally paces itself.
+//
+// When a shared ReadAheadCache budget is attached, Push() also waits
+// for byte-space in the common budget, so read-ahead is bounded by a configured
+// memory size across all streams; Pop() records hit/miss metrics and brackets
+// underruns so the player can surface CacheUsed / PausedForCache.
 //
 // Header-only and ffmpeg-side (it touches AVPacket), so it is only ever compiled
 // into the FFmpeg backend translation units, never the tests.
@@ -22,6 +30,13 @@ class FFmpegPacketQueue
 public:
     explicit FFmpegPacketQueue(std::size_t maxPackets = 256) : maxPackets_(maxPackets)
     {
+    }
+
+    // Attach the shared read-ahead budget (null ⇒ packet-count bound only). Set
+    // once before the queue is used by the demux/worker threads.
+    void SetBudget(ReadAheadCache* budget)
+    {
+        budget_ = budget;
     }
 
     ~FFmpegPacketQueue()
@@ -37,6 +52,15 @@ public:
     // the queue was aborted while waiting.
     bool Push(AVPacket* pkt)
     {
+        const int64_t sz = pkt->size;
+
+        // Wait for byte-space in the shared budget before taking ownership, so
+        // total read-ahead across streams stays within the configured memory.
+        if (budget_ && !budget_->WaitForSpace(sz))
+        {
+            return false; // aborted while waiting (seek / stop)
+        }
+
         AVPacket* owned = av_packet_alloc();
         if (!owned)
         {
@@ -55,6 +79,10 @@ public:
         q_.push(owned);
         lock.unlock();
         notEmpty_.notify_one();
+        if (budget_)
+        {
+            budget_->AddBytes(sz);
+        }
         return true;
     }
 
@@ -65,13 +93,39 @@ public:
     bool Pop(AVPacket* out)
     {
         std::unique_lock lock(m_);
+
+        // A non-EOF empty queue means the worker must wait for the demuxer to
+        // catch up — a read-ahead underrun. Count it as a miss and bracket the
+        // wait as a cache stall (drives PausedForCache); otherwise it's a hit.
+        const bool stall = budget_ && q_.empty() && !eof_ && !abort_;
+        if (stall)
+        {
+            budget_->RecordMiss();
+            budget_->BeginStall();
+        }
+
         notEmpty_.wait(lock, [this] { return abort_ || eof_ || !q_.empty(); });
+
+        if (stall)
+        {
+            budget_->EndStall();
+        }
+
         if (!q_.empty())
         {
             AVPacket* owned = q_.front();
             q_.pop();
+            const int64_t sz = owned->size;
             lock.unlock();
             notFull_.notify_one();
+            if (budget_)
+            {
+                budget_->RemoveBytes(sz);
+                if (!stall)
+                {
+                    budget_->RecordHit();
+                }
+            }
             av_packet_move_ref(out, owned);
             av_packet_free(&owned);
             return true;
@@ -100,6 +154,13 @@ public:
         }
         notEmpty_.notify_all();
         notFull_.notify_all();
+        // Release a demuxer parked in budget_->WaitForSpace(). Queues are always
+        // aborted as a group (seek / stop), so aborting the shared budget here is
+        // safe; the player Reset()s it before resuming reads.
+        if (budget_)
+        {
+            budget_->Abort();
+        }
     }
 
     // Drop all queued packets and reset eof/abort so the queue can be reused for
@@ -111,6 +172,10 @@ public:
         {
             AVPacket* p = q_.front();
             q_.pop();
+            if (budget_)
+            {
+                budget_->RemoveBytes(p->size);
+            }
             av_packet_free(&p);
         }
         eof_ = false;
@@ -129,6 +194,7 @@ private:
     std::condition_variable notFull_;
     std::queue<AVPacket*> q_;
     std::size_t maxPackets_;
+    ReadAheadCache* budget_ = nullptr; // shared byte budget + metrics; null ⇒ count bound only
     bool eof_ = false;
     bool abort_ = false;
 };

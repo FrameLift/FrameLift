@@ -72,6 +72,7 @@ add_executable(framelift_tests
         FFmpegFiltersTests.cpp
         MediaEventTests.cpp
         SettingsMappingTests.cpp
+        ReadAheadCacheTests.cpp
         ThemeUtilTests.cpp
         FontScanTests.cpp
         FFmpegClockTests.cpp
