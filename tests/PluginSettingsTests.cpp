@@ -75,6 +75,69 @@ TEST(PluginSettingsTest, BadNumericFallsBackToDefault)
     EXPECT_FLOAT_EQ(ps.GetFloat("count", -1.f), -1.f);
 }
 
+// ── Incorrect setting type handling (issue #2) ──────────────────────────────────
+// Values are stored as strings; the typed getters reinterpret them on read. A
+// value read as the "wrong" type must never crash — it either converts where it
+// can or falls back to the caller's default. These tests pin that behavior.
+
+TEST(PluginSettingsTest, GetIntOutOfRangeFallsBack)
+{
+    const TempFile f("[MyPlugin]\ncount=999999999999\n");
+    const PluginSettingsImpl ps("MyPlugin", f.str());
+
+    // std::stoi throws std::out_of_range → caught → returns caller's default.
+    EXPECT_EQ(ps.GetInt("count", -1), -1);
+}
+
+TEST(PluginSettingsTest, GetIntFromFloatStringTruncates)
+{
+    const TempFile f("[MyPlugin]\ncount=3.14\n");
+    const PluginSettingsImpl ps("MyPlugin", f.str());
+
+    // std::stoi parses the leading integer prefix and stops — no throw.
+    EXPECT_EQ(ps.GetInt("count"), 3);
+}
+
+TEST(PluginSettingsTest, GetBoolOnlyOneIsTrue)
+{
+    for (const char* token : {"true", "0", "2", "yes"})
+    {
+        const TempFile f(std::string("[MyPlugin]\nflag=") + token + "\n");
+        const PluginSettingsImpl ps("MyPlugin", f.str());
+        EXPECT_FALSE(ps.GetBool("flag", true)) << "token=" << token;
+    }
+
+    const TempFile one("[MyPlugin]\nflag=1\n");
+    const PluginSettingsImpl ps("MyPlugin", one.str());
+    EXPECT_TRUE(ps.GetBool("flag", false));
+}
+
+TEST(PluginSettingsTest, CrossTypeReadsAreSafe)
+{
+    const TempFile f;
+    PluginSettingsImpl ps("MyPlugin", f.str());
+
+    // An int stored, then read as a float.
+    ps.SetInt("n", 42);
+    EXPECT_FLOAT_EQ(ps.GetFloat("n"), 42.f);
+
+    // A bool serializes as "1"/"0", so reading it back as an int yields 1/0.
+    ps.SetBool("b", true);
+    EXPECT_EQ(ps.GetInt("b"), 1);
+    ps.SetBool("b", false);
+    EXPECT_EQ(ps.GetInt("b"), 0);
+}
+
+TEST(PluginSettingsTest, EmptyValueFallsBackToDefault)
+{
+    const TempFile f("[MyPlugin]\nx=\n");
+    const PluginSettingsImpl ps("MyPlugin", f.str());
+
+    EXPECT_TRUE(ps.WasLoaded());
+    EXPECT_EQ(ps.GetInt("x", -1), -1);             // std::stoi("") throws → default
+    EXPECT_FLOAT_EQ(ps.GetFloat("x", -1.f), -1.f); // std::stof("") throws → default
+}
+
 // Plugin keybinds live in their own [<Plugin>.keybinds] section, so writing them
 // must leave the host-owned, commented [keybinds] section untouched.
 TEST(PluginSettingsTest, PluginKeybindSectionLeavesHostKeybindsIntact)

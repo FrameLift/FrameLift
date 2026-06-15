@@ -141,6 +141,76 @@ TEST(SettingsTest, MalformedNumericValueIsIgnored)
     EXPECT_FLOAT_EQ(s.panelWidth, 320.f);
 }
 
+// ── Incorrect setting type handling (issue #2) ──────────────────────────────────
+// Settings are stringly-typed; Load() parses each typed field and swallows any
+// parse exception so a wrong-typed value never crashes and never corrupts a field
+// — it simply keeps its compiled-in default. These tests pin that behavior.
+
+TEST(SettingsTest, IntFieldRejectsNonNumeric)
+{
+    const TempFile f("[cache]\nreadAheadSizeMB=abc\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    // std::stoi throws std::invalid_argument → caught → field keeps its default.
+    EXPECT_EQ(s.readAheadSizeMB, 64);
+}
+
+TEST(SettingsTest, IntFieldOutOfRangeKeepsDefault)
+{
+    const TempFile f("[cache]\nreadAheadSizeMB=999999999999\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    // std::stoi throws std::out_of_range → caught → field keeps its default.
+    EXPECT_EQ(s.readAheadSizeMB, 64);
+}
+
+TEST(SettingsTest, IntFieldFromFloatStringTruncates)
+{
+    const TempFile f("[cache]\nreadAheadSizeMB=3.14\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    // std::stoi parses the leading integer prefix ("3") and stops — no crash,
+    // consistent: a float written to an int field truncates rather than throwing.
+    EXPECT_EQ(s.readAheadSizeMB, 3);
+}
+
+TEST(SettingsTest, BoolFieldOnlyOneIsTrue)
+{
+    // Bool fields parse via (v == "1"); every other token is false, none throw.
+    const Settings def;
+    EXPECT_TRUE(def.hwdec); // default is true, so "not 1" must flip it to false
+
+    for (const char* token : {"true", "2", "yes"})
+    {
+        const TempFile f(std::string("[playback]\nhwdec=") + token + "\n");
+        Settings s;
+        s.Load(f.str());
+        EXPECT_FALSE(s.hwdec) << "token=" << token;
+    }
+
+    const TempFile one("[playback]\nhwdec=1\n");
+    Settings s;
+    s.Load(one.str());
+    EXPECT_TRUE(s.hwdec);
+}
+
+TEST(SettingsTest, EmptyValueKeepsDefault)
+{
+    const TempFile f("[ui]\npanelWidth=\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    // std::stof("") throws → caught → field keeps its default.
+    EXPECT_FLOAT_EQ(s.panelWidth, 320.f);
+}
+
 TEST(SettingsTest, ParsesEnabledPluginsList)
 {
     const TempFile f("[plugins]\nenabled=Playlist;History;Updater\n");
