@@ -36,6 +36,7 @@ public:
     [[nodiscard]] const char* Name() const override { return "Vulkan"; }
 
     [[nodiscard]] std::unique_ptr<IVideoRenderer> CreateVideoRenderer() override;
+    [[nodiscard]] uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) override;
 
     [[nodiscard]] void* GetProcAddr(const char* name) const override; // not meaningful for Vulkan
     bool BeginFrame() override;
@@ -100,6 +101,16 @@ private:
     std::vector<VkFence> imagesInFlight_;     // per swapchain image (non-owning copies)
 
     VkDescriptorPool imguiDescriptorPool_ = VK_NULL_HANDLE;
+
+    // ImGui-usable textures (plugin icons via CreateUiTexture), freed on shutdown.
+    struct UiTexture
+    {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation alloc = nullptr;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
+    std::vector<UiTexture> uiTextures_;
 
     uint32_t currentFrame_ = 0;
     uint32_t imageIndex_ = 0;

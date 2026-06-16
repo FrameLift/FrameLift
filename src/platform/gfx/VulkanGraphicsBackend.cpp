@@ -21,6 +21,8 @@
 
 #include <framelift/Log.h>
 
+#include <cstring>
+
 namespace
 {
 #ifndef NDEBUG
@@ -42,6 +44,48 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
         Log::Warn("Vulkan: {}", data->pMessage);
     }
     return VK_FALSE;
+}
+
+// Records the staging->image copy for a freshly-created (UNDEFINED) image, leaving it
+// in SHADER_READ_ONLY_OPTIMAL. Used by CreateUiTexture via ImmediateSubmit.
+struct UiCopyJob
+{
+    VkBuffer staging;
+    VkImage image;
+    uint32_t w, h;
+};
+
+void RecordUiCopy(VkCommandBuffer cmd, void* ud)
+{
+    const UiCopyJob& j = *static_cast<UiCopyJob*>(ud);
+
+    VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = j.image;
+    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toDst);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {j.w, j.h, 1};
+    vkCmdCopyBufferToImage(cmd, j.staging, j.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.image = j.image;
+    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toRead);
 }
 } // namespace
 
@@ -363,6 +407,71 @@ std::unique_ptr<IVideoRenderer> VulkanGraphicsBackend::CreateVideoRenderer()
     return std::make_unique<VulkanVideoRenderer>(this);
 }
 
+uintptr_t VulkanGraphicsBackend::CreateUiTexture(const unsigned char* rgba, int w, int h)
+{
+    if (!rgba || w <= 0 || h <= 0)
+    {
+        return 0;
+    }
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+
+    // Sampled RGBA image.
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ici.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo iaci{};
+    iaci.usage = VMA_MEMORY_USAGE_AUTO;
+    UiTexture t{};
+    if (vmaCreateImage(allocator_, &ici, &iaci, &t.image, &t.alloc, nullptr) != VK_SUCCESS)
+    {
+        return 0;
+    }
+
+    // Host-visible staging buffer.
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo baci{};
+    baci.usage = VMA_MEMORY_USAGE_AUTO;
+    baci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VmaAllocation stagingAlloc = nullptr;
+    VmaAllocationInfo sInfo{};
+    if (vmaCreateBuffer(allocator_, &bci, &baci, &staging, &stagingAlloc, &sInfo) != VK_SUCCESS)
+    {
+        vmaDestroyImage(allocator_, t.image, t.alloc);
+        return 0;
+    }
+    std::memcpy(sInfo.pMappedData, rgba, static_cast<size_t>(bytes));
+
+    UiCopyJob job{staging, t.image, static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+    ImmediateSubmit(RecordUiCopy, &job);
+    vmaDestroyBuffer(allocator_, staging, stagingAlloc);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = t.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device_, &vci, nullptr, &t.view) != VK_SUCCESS)
+    {
+        vmaDestroyImage(allocator_, t.image, t.alloc);
+        return 0;
+    }
+
+    // Register with the ImGui Vulkan backend (uses its internal sampler).
+    t.set = ImGui_ImplVulkan_AddTexture(t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    uiTextures_.push_back(t);
+    return reinterpret_cast<uintptr_t>(t.set);
+}
+
 void* VulkanGraphicsBackend::GetProcAddr(const char* /*name*/) const
 {
     return nullptr; // Vulkan entry points are resolved by volk, not a GL-style loader.
@@ -505,21 +614,33 @@ void VulkanGraphicsBackend::ImGuiInitBackends()
     ImGui_ImplSDL3_InitForVulkan(window_);
 
     ImGui_ImplVulkan_InitInfo info{};
+    info.ApiVersion = VK_API_VERSION_1_1;
     info.Instance = instance_;
     info.PhysicalDevice = physicalDevice_;
     info.Device = device_;
     info.QueueFamily = graphicsQueueFamily_;
     info.Queue = graphicsQueue_;
     info.DescriptorPool = imguiDescriptorPool_;
-    info.RenderPass = renderPass_;
     info.MinImageCount = minImageCount_;
     info.ImageCount = static_cast<uint32_t>(swapchainImages_.size());
-    info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    // Since imgui 2025/09/26 the render pass / MSAA live on the per-pipeline info.
+    info.PipelineInfoMain.RenderPass = renderPass_;
+    info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ImGui_ImplVulkan_Init(&info);
 }
 
 void VulkanGraphicsBackend::ImGuiShutdownBackends()
 {
+    // Free plugin UI textures while the device + ImGui Vulkan backend are still alive.
+    vkDeviceWaitIdle(device_);
+    for (const UiTexture& t : uiTextures_)
+    {
+        ImGui_ImplVulkan_RemoveTexture(t.set);
+        vkDestroyImageView(device_, t.view, nullptr);
+        vmaDestroyImage(allocator_, t.image, t.alloc);
+    }
+    uiTextures_.clear();
+
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
 }

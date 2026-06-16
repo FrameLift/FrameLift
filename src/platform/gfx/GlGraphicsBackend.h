@@ -17,6 +17,7 @@ public:
     [[nodiscard]] const char* Name() const override { return "OpenGL"; }
 
     [[nodiscard]] std::unique_ptr<IVideoRenderer> CreateVideoRenderer() override;
+    [[nodiscard]] uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) override;
 
     [[nodiscard]] void* GetProcAddr(const char* name) const override;
     bool BeginFrame() override;

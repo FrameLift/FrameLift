@@ -3,6 +3,7 @@
 #include "IconData.h"
 #include "SettingsMapping.h"
 #include "platform/gfx/GraphicsApi.h"
+#include "platform/gfx/IGraphicsBackend.h"
 #include "platform/watch/DirWatcher.h"
 #include "platform/ffmpeg/FFmpegPlayer.h"
 #include "platform/window/SdlAppWindow.h"
@@ -59,6 +60,9 @@ App::App(const char* title, const int width, const int height, const int cliArgc
     settings_.Load(settingsPath);
 
     appWindow_ = std::make_unique<SdlAppWindow>(title, width, height, GraphicsApiFromString(settings_.backend));
+
+    // Let the UI context create plugin-icon textures through the active backend.
+    uiCtx_.SetGraphicsBackend(static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()));
 
     if (!prefDir.empty())
     {
