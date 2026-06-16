@@ -17,6 +17,57 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+# ── Vulkan stack (second graphics backend — OpenGL→Vulkan migration, #17) ───────
+# Resolved via FetchContent rather than vcpkg so the SAME setup works identically on
+# the Windows MinGW cross-build and the native-Linux build (vcpkg only runs on
+# Windows here). volk, VMA and vk-bootstrap are single-source / header-only and
+# compile in-tree, exactly like imgui/spdlog above. Crucially, volk loads the Vulkan
+# loader dynamically at runtime (volkInitialize), so there is NO link-time dependency
+# on libvulkan — sidestepping the brittle MinGW loader-import path. The runtime loader
+# (vulkan-1.dll / libvulkan.so.1) only needs to be present at run time, which it is
+# wherever a GPU driver is installed.
+#
+# Tags are a coherent ~1.3.x set; bump together if a tag ever 404s.
+
+# Vulkan-Headers — the API headers + the Vulkan::Headers interface target that volk,
+# VMA and vk-bootstrap consume. Declared first so the others detect and reuse it.
+FetchContent_Declare(
+        vulkan_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG v1.3.296
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(vulkan_headers)
+
+# volk — Vulkan meta-loader. Builds the `volk` static lib (the global entry-point
+# pointers, linked once into the exe) and the `volk_headers` interface (include-only,
+# linked into imgui so imgui_impl_vulkan can call through the same pointers).
+FetchContent_Declare(
+        volk
+        GIT_REPOSITORY https://github.com/zeux/volk.git
+        GIT_TAG 1.3.296
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(volk)
+
+# VMA — header-only GPU allocator. A single host TU defines VMA_IMPLEMENTATION.
+FetchContent_Declare(
+        vma
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG v3.1.0
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(vma)
+
+# vk-bootstrap — instance/physical-device/device/swapchain selection boilerplate.
+FetchContent_Declare(
+        vk_bootstrap
+        GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
+        GIT_TAG v1.3.295
+        GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(vk_bootstrap)
+
 # ── Dear ImGui ────────────────────────────────────────────────────────────────
 # The docking-branch tag is a superset of the like-versioned release: it adds
 # multi-viewport (ImGuiConfigFlags_ViewportsEnable + UpdatePlatformWindows/
@@ -39,12 +90,21 @@ add_library(imgui STATIC
         "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
+        "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
 )
 target_include_directories(imgui PUBLIC
         "${imgui_SOURCE_DIR}"
         "${imgui_SOURCE_DIR}/backends"
 )
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
+
+# Route imgui_impl_vulkan through volk (no Vulkan prototypes linked): with
+# IMGUI_IMPL_VULKAN_USE_VOLK the backend includes volk.h and calls the dynamically
+# loaded entry points. PUBLIC so the host's Vulkan backend TU sees the same flag when
+# it includes imgui_impl_vulkan.h. Only volk_headers here (include-only) — the single
+# compiled `volk` definition is linked into the FrameLift exe.
+target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+target_link_libraries(imgui PUBLIC volk_headers)
 
 # ── stb (header-only) ─────────────────────────────────────────────────────────
 FetchContent_Declare(

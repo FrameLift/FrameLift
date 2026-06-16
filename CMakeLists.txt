@@ -97,6 +97,12 @@ target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk SDL3::SDL3 OpenGL::GL
         imgui spdlog::spdlog nlohmann_json::nlohmann_json)
 
+# Vulkan graphics backend (OpenGL→Vulkan migration, #17). volk is the meta-loader
+# (compiled here exactly once — imgui only takes volk_headers); VMA + vk-bootstrap
+# are header/single-source. No link-time libvulkan: volk loads it at runtime.
+target_link_libraries(FrameLift PRIVATE
+        volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
+
 # The FFmpeg + libass playback backend (the only backend; App.cpp constructs
 # FFmpegPlayer unconditionally).
 target_link_libraries(FrameLift PRIVATE ffmpeg libass)
