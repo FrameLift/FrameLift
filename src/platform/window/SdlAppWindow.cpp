@@ -3,8 +3,6 @@
 #include <cstddef>
 
 #include "imgui.h"
-#include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl3.h"
 
 #include "stb_image.h"
 
@@ -24,27 +22,21 @@ SdlAppWindow::SdlAppWindow(const char* title, const int width, const int height)
         Fatal(SDL_GetError());
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    // Phase 1 of the OpenGL→Vulkan migration: only OpenGL is implemented. Backend
+    // selection from the [graphics] backend setting lands with the Vulkan backend
+    // (the window is created before settings are loaded today).
+    backend_ = CreateGraphicsBackend(GraphicsApi::OpenGL);
+    const uint64_t extraFlags = backend_->PreWindowCreate();
 
     // Created hidden: the window is shown on the first SwapBuffers() so it never
     // appears as an unpainted (black) framebuffer while plugins/ImGui/fonts load.
-    window_ =
-        SDL_CreateWindow(title, width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+    window_ = SDL_CreateWindow(title, width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | extraFlags);
     if (!window_)
     {
         Fatal(SDL_GetError());
     }
 
-    glContext_ = SDL_GL_CreateContext(window_);
-    if (!glContext_)
-    {
-        Fatal(SDL_GetError());
-    }
-
-    SDL_GL_MakeCurrent(window_, glContext_);
-    SDL_GL_SetSwapInterval(0);
+    backend_->OnWindowCreated(window_);
 
     renderUpdateEventType_ = SDL_RegisterEvents(1);
     playerWakeupEventType_ = SDL_RegisterEvents(1);
@@ -52,10 +44,10 @@ SdlAppWindow::SdlAppWindow(const char* title, const int width, const int height)
 
 SdlAppWindow::~SdlAppWindow()
 {
-    if (glContext_)
+    // Destroy the API context while the window still exists, then the window.
+    if (backend_)
     {
-        SDL_GL_DestroyContext(glContext_);
-        glContext_ = nullptr;
+        backend_->Shutdown();
     }
     if (window_)
     {
@@ -151,26 +143,17 @@ Rect SdlAppWindow::GetDisplayUsableBounds() const noexcept
 
 void* SdlAppWindow::GetGLProcAddr(const char* name) const noexcept
 {
-    return reinterpret_cast<void*>(SDL_GL_GetProcAddress(name));
+    return backend_->GetProcAddr(name);
 }
 
 void SdlAppWindow::SwapBuffers() noexcept
 {
-    SDL_GL_SwapWindow(window_);
-
-    // Reveal the window only once a complete, painted frame is in the back buffer,
-    // so the user never sees the black startup framebuffer (see ctor: SDL_WINDOW_HIDDEN).
-    if (!shown_)
-    {
-        shown_ = true;
-        SDL_ShowWindow(window_);
-    }
+    backend_->SwapBuffers();
 }
 
 void SdlAppWindow::SetVSync(const bool enabled) noexcept
 {
-    // 1 = sync presentation to the display refresh (tear-free); 0 = present immediately.
-    SDL_GL_SetSwapInterval(enabled ? 1 : 0);
+    backend_->SetVSync(enabled);
 }
 
 bool SdlAppWindow::IsRenderable() const noexcept
@@ -304,47 +287,32 @@ void SdlAppWindow::ImGuiInit() noexcept
     style.WindowBorderSize = 1.f;
     style.FrameRounding = 3.f;
 
-    ImGui_ImplSDL3_InitForOpenGL(window_, glContext_);
-    ImGui_ImplOpenGL3_Init("#version 330 core");
+    // The platform + renderer (imgui_impl_*) backends are owned by the graphics backend.
+    backend_->ImGuiInitBackends();
 }
 
 void SdlAppWindow::ImGuiShutdown() noexcept
 {
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
+    backend_->ImGuiShutdownBackends();
     ImGui::DestroyContext();
 }
 
 void SdlAppWindow::UIBeginFrame() noexcept
 {
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+    backend_->ImGuiNewFrame();
     ImGui::NewFrame();
 }
 
 void SdlAppWindow::UIEndFrame() noexcept
 {
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    // Render any popped-out panels into their own OS windows, then restore the
-    // main window's GL context so the caller's SwapBuffers() targets it.
-    const ImGuiIO& io = ImGui::GetIO();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        SDL_Window* backupWin = SDL_GL_GetCurrentWindow();
-        SDL_GLContext backupCtx = SDL_GL_GetCurrentContext();
-        ImGui::UpdatePlatformWindows();
-        ImGui::RenderPlatformWindowsDefault();
-        SDL_GL_MakeCurrent(backupWin, backupCtx);
-    }
+    backend_->ImGuiRenderDrawData();
 }
 
 void SdlAppWindow::ImGuiProcessEvent(const AppEvent& event) noexcept
 {
     static_assert(sizeof(SDL_Event) <= sizeof(event.nativeStorage), "nativeStorage is too small for SDL_Event");
-    const auto* sdlEvent = reinterpret_cast<const SDL_Event*>(event.nativeStorage);
-    ImGui_ImplSDL3_ProcessEvent(sdlEvent);
+    backend_->ImGuiProcessEvent(event.nativeStorage);
 }
 
 // ── Event translation ─────────────────────────────────────────────────────────

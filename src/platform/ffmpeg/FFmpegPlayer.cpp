@@ -1933,7 +1933,8 @@ void FFmpegPlayer::InitRender(void* (*getProcAddr)(const char*, void*), void* ud
     }
     glClearColor_ = reinterpret_cast<PFNGLClearColor>(getProcAddr("glClearColor", ud));
     glClear_ = reinterpret_cast<PFNGLClear>(getProcAddr("glClear", ud));
-    rendererReady_ = renderer_.Init(getProcAddr, ud);
+    renderer_ = CreateVideoRenderer();
+    rendererReady_ = renderer_->Init(getProcAddr, ud);
     if (!rendererReady_)
     {
         Log::Error("FFmpegPlayer: video renderer init failed; showing black");
@@ -1973,7 +1974,7 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
     {
         if (haveNew)
         {
-            renderer_.Upload(displayPixels_.data(), dispW, dispH);
+            renderer_->Upload(displayPixels_.data(), dispW, dispH);
         }
 
         // Render the libass subtitle overlay at the on-screen video size so it stays
@@ -1989,7 +1990,7 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
                 subtitles_->RenderOverlay(vp.w, vp.h, videoW, videoH, timeMs, overlayScratch_);
             if (res == FFmpegSubtitles::RenderResult::Updated)
             {
-                renderer_.UploadOverlay(overlayScratch_.data(), vp.w, vp.h);
+                renderer_->UploadOverlay(overlayScratch_.data(), vp.w, vp.h);
                 overlayActive_ = true;
             }
             else if (res == FFmpegSubtitles::RenderResult::Unchanged)
@@ -1998,7 +1999,7 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
             }
         }
 
-        renderer_.Draw(w, h, overlayActive_);
+        renderer_->Draw(w, h, overlayActive_);
     }
     else if (glClearColor_ && glClear_)
     {

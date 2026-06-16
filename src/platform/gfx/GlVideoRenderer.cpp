@@ -1,6 +1,6 @@
-#include "FFmpegVideoRenderer.h"
+#include "GlVideoRenderer.h"
 
-#include "FFmpegLetterbox.h"
+#include "../ffmpeg/FFmpegLetterbox.h"
 
 #include <framelift/Log.h>
 
@@ -106,14 +106,14 @@ bool Resolve(T& fn, void* (*getProc)(const char*, void*), void* ud, const char* 
     fn = reinterpret_cast<T>(getProc(name, ud));
     if (!fn)
     {
-        Log::Error("FFmpegVideoRenderer: missing GL entry point {}", name);
+        Log::Error("GlVideoRenderer: missing GL entry point {}", name);
         return false;
     }
     return true;
 }
 } // namespace
 
-struct FFmpegVideoRenderer::Impl
+struct GlVideoRenderer::Impl
 {
     // GL entry points.
     PFNViewport Viewport = nullptr;
@@ -170,7 +170,7 @@ struct FFmpegVideoRenderer::Impl
     bool BuildProgram();
 };
 
-bool FFmpegVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void*), void* ud)
+bool GlVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void*), void* ud)
 {
     bool ok = true;
     ok &= Resolve(Viewport, getProc, ud, "glViewport");
@@ -209,7 +209,7 @@ bool FFmpegVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void
     return ok;
 }
 
-GLuint FFmpegVideoRenderer::Impl::CompileStage(GLenum type, const char* src)
+GLuint GlVideoRenderer::Impl::CompileStage(GLenum type, const char* src)
 {
     const GLuint shader = CreateShader(type);
     ShaderSource(shader, 1, &src, nullptr);
@@ -221,14 +221,14 @@ GLuint FFmpegVideoRenderer::Impl::CompileStage(GLenum type, const char* src)
     {
         GLchar log[1024] = {};
         GetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        Log::Error("FFmpegVideoRenderer: shader compile failed: {}", log);
+        Log::Error("GlVideoRenderer: shader compile failed: {}", log);
         DeleteShader(shader);
         return 0;
     }
     return shader;
 }
 
-bool FFmpegVideoRenderer::Impl::BuildProgram()
+bool GlVideoRenderer::Impl::BuildProgram()
 {
     const GLuint vs = CompileStage(GL_VERTEX_SHADER, kVertexSrc);
     const GLuint fs = CompileStage(GL_FRAGMENT_SHADER, kFragmentSrc);
@@ -258,7 +258,7 @@ bool FFmpegVideoRenderer::Impl::BuildProgram()
     {
         GLchar log[1024] = {};
         GetProgramInfoLog(program, sizeof(log), nullptr, log);
-        Log::Error("FFmpegVideoRenderer: program link failed: {}", log);
+        Log::Error("GlVideoRenderer: program link failed: {}", log);
         DeleteProgram(program);
         program = 0;
         return false;
@@ -270,9 +270,9 @@ bool FFmpegVideoRenderer::Impl::BuildProgram()
 
 // ── Public surface ────────────────────────────────────────────────────────────
 
-FFmpegVideoRenderer::FFmpegVideoRenderer() = default;
+GlVideoRenderer::GlVideoRenderer() = default;
 
-FFmpegVideoRenderer::~FFmpegVideoRenderer()
+GlVideoRenderer::~GlVideoRenderer()
 {
     if (!impl_)
     {
@@ -299,7 +299,7 @@ FFmpegVideoRenderer::~FFmpegVideoRenderer()
     }
 }
 
-bool FFmpegVideoRenderer::Init(void* (*getProcAddr)(const char*, void*), void* ud)
+bool GlVideoRenderer::Init(void* (*getProcAddr)(const char*, void*), void* ud)
 {
     if (!getProcAddr)
     {
@@ -335,7 +335,7 @@ bool FFmpegVideoRenderer::Init(void* (*getProcAddr)(const char*, void*), void* u
     return true;
 }
 
-void FFmpegVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
+void GlVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
 {
     if (!impl_ || !rgba || w <= 0 || h <= 0)
     {
@@ -359,7 +359,7 @@ void FFmpegVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
     impl_->hasFrame = true;
 }
 
-void FFmpegVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
+void GlVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
 {
     if (!impl_ || !rgba || w <= 0 || h <= 0)
     {
@@ -382,7 +382,7 @@ void FFmpegVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
     impl_->hasOverlay = true;
 }
 
-void FFmpegVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
+void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
 {
     if (!impl_ || fbW <= 0 || fbH <= 0)
     {
@@ -427,4 +427,11 @@ void FFmpegVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
     impl_->BindTexture(GL_TEXTURE_2D, 0);
     impl_->UseProgram(0);
     impl_->Viewport(0, 0, fbW, fbH);
+}
+
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+std::unique_ptr<IVideoRenderer> CreateVideoRenderer()
+{
+    return std::make_unique<GlVideoRenderer>();
 }

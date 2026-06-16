@@ -79,6 +79,7 @@ add_executable(framelift_tests
         FFmpegClockTests.cpp
         FFmpegHwDecodeTests.cpp
         FFmpegLetterboxTests.cpp
+        GraphicsApiTests.cpp
         FFmpegSubtitleBlendTests.cpp
         FFmpegTrackLabelTests.cpp
         "${FRAMELIFT_ROOT}/src/Settings.cpp"

@@ -2,10 +2,17 @@
 
 #include <SDL3/SDL.h>
 #include <framelift/platform/IAppWindow.h>
+#include <memory>
 #include <string>
 
-// Concrete IAppWindow backed by SDL3 + OpenGL3 + Dear ImGui.
-// THE ONLY file in the project that may #include <SDL3/SDL.h> or imgui_impl_*.h.
+#include "../gfx/IGraphicsBackend.h"
+
+// Concrete IAppWindow backed by SDL3 + Dear ImGui. Owns the SDL window and event
+// loop and delegates the rendering surface (GL/Vulkan context, present, vsync, and
+// the imgui_impl_* lifecycle) to an IGraphicsBackend.
+//
+// This file and the gfx backends (e.g. GlGraphicsBackend) are the only files that
+// may #include <SDL3/SDL.h> or imgui_impl_*.h.
 class SdlAppWindow final : public IAppWindow
 {
 public:
@@ -51,8 +58,7 @@ private:
     [[nodiscard]] static Mod TranslateMods(SDL_Keymod m);
 
     SDL_Window* window_ = nullptr;
-    SDL_GLContext glContext_ = nullptr;
-    bool shown_ = false; // window is created hidden, then shown on the first SwapBuffers()
+    std::unique_ptr<IGraphicsBackend> backend_;
     std::string iniPath_;
     uint32_t renderUpdateEventType_ = 0;
     uint32_t playerWakeupEventType_ = 0;

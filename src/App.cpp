@@ -2,11 +2,13 @@
 #include "Cli.h"
 #include "IconData.h"
 #include "SettingsMapping.h"
+#include "platform/gfx/GraphicsApi.h"
 #include "platform/watch/DirWatcher.h"
 #include "platform/ffmpeg/FFmpegPlayer.h"
 #include "platform/window/SdlAppWindow.h"
 #include "ui/Theme.h"
 #include <framelift/ContextHelpers.h>
+#include <framelift/Log.h>
 #include <framelift/Events.h>
 #include <framelift/services/IHistory.h>
 #include <framelift/ui/ContextMenuHelpers.h>
@@ -61,6 +63,15 @@ App::App(const char* title, const int width, const int height, const int cliArgc
 
     // App owns the Settings instance; load it before any plugin sees it.
     settings_.Load(settingsPath);
+
+    // Phase 1 of the OpenGL→Vulkan migration: only OpenGL is implemented. Surface a
+    // clear message if the user selected Vulkan so the fallback isn't surprising.
+    // Honoring the selection (the window is created before settings load) arrives
+    // with the Vulkan backend in Phase 2.
+    if (GraphicsApiFromString(settings_.backend) == GraphicsApi::Vulkan)
+    {
+        Log::Warn("graphics.backend=vulkan requested but the Vulkan backend is not yet available; using OpenGL.");
+    }
 
     InitImGui();
 

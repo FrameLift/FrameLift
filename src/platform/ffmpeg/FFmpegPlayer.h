@@ -3,8 +3,8 @@
 #include <framelift/platform/IMediaPlayer.h>
 
 #include "../../ReadAheadCache.h"
+#include "../gfx/IVideoRenderer.h"
 #include "FFmpegSubtitles.h"
-#include "FFmpegVideoRenderer.h"
 
 #include <array>
 #include <atomic>
@@ -224,7 +224,7 @@ private:
     PFNGLClearColor glClearColor_ = nullptr;
     PFNGLClear glClear_ = nullptr;
 
-    FFmpegVideoRenderer renderer_;
+    std::unique_ptr<IVideoRenderer> renderer_;
     bool rendererReady_ = false;
 
     std::thread decodeThread_;
