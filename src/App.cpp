@@ -43,36 +43,31 @@ PluginRegistry& App::Registry()
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
 App::App(const char* title, const int width, const int height, const int cliArgc, const char* const* cliArgv)
-    : cliArgc_(cliArgc), cliArgv_(cliArgv), appWindow_(std::make_unique<SdlAppWindow>(title, width, height)),
-      player_(std::make_unique<FFmpegPlayer>()), dirWatcher_(CreateDirWatcher())
+    : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>()),
+      dirWatcher_(CreateDirWatcher())
 {
-    (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
-
-    InitRender();
-
     // ── Phase 1: Platform init ────────────────────────────────────────────────
+    // Resolve the pref dir and load settings BEFORE creating the window: the graphics
+    // backend — and thus the SDL window flag (SDL_WINDOW_OPENGL vs SDL_WINDOW_VULKAN) —
+    // is fixed at window-creation time, so graphics.backend must be known up front.
     char prefBuf[512] = {};
-    (void)appWindow_->GetPrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
+    (void)SdlAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
     const std::string prefDir = prefBuf;
     const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
+
+    // App owns the Settings instance; load it before any plugin sees it.
+    settings_.Load(settingsPath);
+
+    appWindow_ = std::make_unique<SdlAppWindow>(title, width, height, GraphicsApiFromString(settings_.backend));
+
     if (!prefDir.empty())
     {
         const std::string iniPath = prefDir + "imgui.ini";
         appWindow_->SetImGuiIniPath(iniPath.c_str());
     }
+    (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
 
-    // App owns the Settings instance; load it before any plugin sees it.
-    settings_.Load(settingsPath);
-
-    // Phase 1 of the OpenGL→Vulkan migration: only OpenGL is implemented. Surface a
-    // clear message if the user selected Vulkan so the fallback isn't surprising.
-    // Honoring the selection (the window is created before settings load) arrives
-    // with the Vulkan backend in Phase 2.
-    if (GraphicsApiFromString(settings_.backend) == GraphicsApi::Vulkan)
-    {
-        Log::Warn("graphics.backend=vulkan requested but the Vulkan backend is not yet available; using OpenGL.");
-    }
-
+    InitRender();
     InitImGui();
 
     // Apply the persisted theme before the first frame (GL context is current,

@@ -1,6 +1,7 @@
 #include "GlGraphicsBackend.h"
 
 #include "GlVideoRenderer.h"
+#include "VulkanGraphicsBackend.h"
 #include "util.h"
 
 #include <SDL3/SDL.h>
@@ -138,8 +139,7 @@ std::unique_ptr<IGraphicsBackend> CreateGraphicsBackend(GraphicsApi api)
 {
     if (api == GraphicsApi::Vulkan)
     {
-        // The Vulkan backend is not implemented yet (OpenGL→Vulkan migration, #17).
-        SDL_Log("FrameLift: Vulkan graphics backend not yet available; using OpenGL.");
+        return std::make_unique<VulkanGraphicsBackend>();
     }
     return std::make_unique<GlGraphicsBackend>();
 }
