@@ -84,6 +84,7 @@ private:
 
     void RenderSidebar(UIContext& ctx);
     void RenderPageGeneral(UIContext& ctx);
+    void RenderPageGraphics(UIContext& ctx);
     void RenderPagePlayback(UIContext& ctx);
     void RenderPageCache(UIContext& ctx);
     void RenderPageUI(UIContext& ctx);
@@ -120,7 +121,7 @@ private:
     int activePageIndex_ = -1; // index into EnumerateSettingsPages(), -1 = resolve on Open
 
     // Built-in pages, registered through the host settings pipeline in OnInstall.
-    std::array<CorePage, 10> corePages_{};
+    std::array<CorePage, 11> corePages_{};
 
     std::string openSettingsKey_ = "Ctrl+Comma";
 

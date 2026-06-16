@@ -217,6 +217,20 @@ void DebugOverlay::OnRender(UIContext& ctx)
 
         row("HwDec: ", hwDec_.c_str());
 
+        // Active graphics backend (OpenGL / Vulkan) — reflects any fallback, not just
+        // the requested setting. Constant for the session, so query lazily once.
+        if (gfxBackend_.empty())
+        {
+            if (auto* win = ctx_ ? ctx_->GetService<IAppWindow>() : nullptr)
+            {
+                gfxBackend_ = win->GetGraphicsBackendName();
+            }
+        }
+        if (!gfxBackend_.empty())
+        {
+            row("Graphics backend: ", gfxBackend_.c_str());
+        }
+
         std::snprintf(
             buf, sizeof(buf), "Used: %" PRId64 " KB  (hits %" PRId64 " / miss %" PRId64 ")", cacheUsed_, cacheHits_,
             cacheMisses_

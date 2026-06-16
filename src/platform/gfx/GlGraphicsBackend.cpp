@@ -1,5 +1,6 @@
 #include "GlGraphicsBackend.h"
 
+#include "GlVideoRenderer.h"
 #include "util.h"
 
 #include <SDL3/SDL.h>
@@ -7,6 +8,19 @@
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
+
+#ifdef _WIN32
+// <GL/gl.h> needs the WINGDIAPI/APIENTRY macros from windows.h on MSVC/MinGW.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+#include <GL/gl.h>
+// GL_CLAMP_TO_EDGE is GL 1.2; the Windows <GL/gl.h> only declares 1.1.
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 
 uint64_t GlGraphicsBackend::PreWindowCreate()
 {
@@ -29,6 +43,9 @@ void GlGraphicsBackend::OnWindowCreated(SDL_Window* window)
 
     SDL_GL_MakeCurrent(window_, ctx);
     SDL_GL_SetSwapInterval(0);
+
+    glClearColor_ = reinterpret_cast<decltype(glClearColor_)>(SDL_GL_GetProcAddress("glClearColor"));
+    glClear_ = reinterpret_cast<decltype(glClear_)>(SDL_GL_GetProcAddress("glClear"));
 }
 
 void GlGraphicsBackend::Shutdown()
@@ -40,9 +57,45 @@ void GlGraphicsBackend::Shutdown()
     }
 }
 
+std::unique_ptr<IVideoRenderer> GlGraphicsBackend::CreateVideoRenderer()
+{
+    return std::make_unique<GlVideoRenderer>();
+}
+
+uintptr_t GlGraphicsBackend::CreateUiTexture(const unsigned char* rgba, int w, int h)
+{
+    if (!rgba || w <= 0 || h <= 0)
+    {
+        return 0;
+    }
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return static_cast<uintptr_t>(id);
+}
+
 void* GlGraphicsBackend::GetProcAddr(const char* name) const
 {
     return reinterpret_cast<void*>(SDL_GL_GetProcAddress(name));
+}
+
+bool GlGraphicsBackend::BeginFrame()
+{
+    // The GL context is already current; clear the default framebuffer to black so
+    // the frame starts clean even if the video renderer has no frame or failed init.
+    // (The video renderer also clears + draws letterboxed; this guarantees black.)
+    if (glClearColor_ && glClear_)
+    {
+        glClearColor_(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear_(GL_COLOR_BUFFER_BIT);
+    }
+    return true;
 }
 
 void GlGraphicsBackend::SwapBuffers()
@@ -103,16 +156,4 @@ void GlGraphicsBackend::ImGuiRenderDrawData()
 void GlGraphicsBackend::ImGuiProcessEvent(const void* sdlEvent)
 {
     ImGui_ImplSDL3_ProcessEvent(static_cast<const SDL_Event*>(sdlEvent));
-}
-
-// ── Factory ───────────────────────────────────────────────────────────────────
-
-std::unique_ptr<IGraphicsBackend> CreateGraphicsBackend(GraphicsApi api)
-{
-    if (api == GraphicsApi::Vulkan)
-    {
-        // The Vulkan backend is not implemented yet (OpenGL→Vulkan migration, #17).
-        SDL_Log("FrameLift: Vulkan graphics backend not yet available; using OpenGL.");
-    }
-    return std::make_unique<GlGraphicsBackend>();
 }

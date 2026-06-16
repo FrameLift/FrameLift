@@ -3,6 +3,7 @@
 #include "IconData.h"
 #include "SettingsMapping.h"
 #include "platform/gfx/GraphicsApi.h"
+#include "platform/gfx/IGraphicsBackend.h"
 #include "platform/watch/DirWatcher.h"
 #include "platform/ffmpeg/FFmpegPlayer.h"
 #include "platform/window/SdlAppWindow.h"
@@ -43,36 +44,34 @@ PluginRegistry& App::Registry()
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
 App::App(const char* title, const int width, const int height, const int cliArgc, const char* const* cliArgv)
-    : cliArgc_(cliArgc), cliArgv_(cliArgv), appWindow_(std::make_unique<SdlAppWindow>(title, width, height)),
-      player_(std::make_unique<FFmpegPlayer>()), dirWatcher_(CreateDirWatcher())
+    : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>()),
+      dirWatcher_(CreateDirWatcher())
 {
-    (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
-
-    InitRender();
-
     // ── Phase 1: Platform init ────────────────────────────────────────────────
+    // Resolve the pref dir and load settings BEFORE creating the window: the graphics
+    // backend — and thus the SDL window flag (SDL_WINDOW_OPENGL vs SDL_WINDOW_VULKAN) —
+    // is fixed at window-creation time, so graphics.backend must be known up front.
     char prefBuf[512] = {};
-    (void)appWindow_->GetPrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
+    (void)SdlAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
     const std::string prefDir = prefBuf;
     const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
+
+    // App owns the Settings instance; load it before any plugin sees it.
+    settings_.Load(settingsPath);
+
+    appWindow_ = std::make_unique<SdlAppWindow>(title, width, height, GraphicsApiFromString(settings_.backend));
+
+    // Let the UI context create plugin-icon textures through the active backend.
+    uiCtx_.SetGraphicsBackend(static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()));
+
     if (!prefDir.empty())
     {
         const std::string iniPath = prefDir + "imgui.ini";
         appWindow_->SetImGuiIniPath(iniPath.c_str());
     }
+    (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
 
-    // App owns the Settings instance; load it before any plugin sees it.
-    settings_.Load(settingsPath);
-
-    // Phase 1 of the OpenGL→Vulkan migration: only OpenGL is implemented. Surface a
-    // clear message if the user selected Vulkan so the fallback isn't surprising.
-    // Honoring the selection (the window is created before settings load) arrives
-    // with the Vulkan backend in Phase 2.
-    if (GraphicsApiFromString(settings_.backend) == GraphicsApi::Vulkan)
-    {
-        Log::Warn("graphics.backend=vulkan requested but the Vulkan backend is not yet available; using OpenGL.");
-    }
-
+    InitRender();
     InitImGui();
 
     // Apply the persisted theme before the first frame (GL context is current,
@@ -373,13 +372,9 @@ void App::BuildRenderables()
 
 void App::InitRender() const
 {
-    player_->InitRender(
-        [](const char* name, void* ud) -> void*
-        {
-            return static_cast<IAppWindow*>(ud)->GetGLProcAddr(name);
-        },
-        appWindow_.get()
-    );
+    // Hand the player the active graphics backend (opaque IGraphicsBackend*); it
+    // builds its matching video renderer from it (GL or Vulkan).
+    player_->InitRender(appWindow_->GetGraphicsBackend());
 
     player_->SetRenderUpdateCallback(
         [](void* ud)
@@ -421,6 +416,13 @@ void App::Render()
 
     int w = 0, h = 0;
     appWindow_->GetSize(w, h);
+
+    // Acquire the frame's render target. The backend may decline (e.g. the Vulkan
+    // swapchain is being recreated) — skip rendering and presenting this iteration.
+    if (!appWindow_->BeginFrame())
+    {
+        return;
+    }
 
     player_->RenderFrame(w, h);
 

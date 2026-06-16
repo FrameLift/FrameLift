@@ -98,7 +98,7 @@ public:
     [[nodiscard]] MediaEvent PollEvent() noexcept override;
     void SetWakeupCallback(void (*cb)(void*), void* ud) noexcept override;
 
-    void InitRender(void* (*getProcAddr)(const char*, void*), void* ud) noexcept override;
+    void InitRender(void* graphicsBackend) noexcept override;
     void SetRenderUpdateCallback(void (*cb)(void*), void* ud) noexcept override;
     [[nodiscard]] bool HasNewFrame() noexcept override;
     void RenderFrame(int w, int h) noexcept override;
@@ -215,14 +215,6 @@ private:
 
     Callback wakeupCb_; // invoked when a MediaEvent is queued (host then PollEvent())
     Callback renderCb_; // invoked when a new video frame is ready (host then RenderFrame())
-
-    // GL clear entry points, resolved through the host's getProcAddr. Used to paint
-    // black if the video renderer fails to initialise.
-    using PFNGLClearColor = void (*)(float, float, float, float);
-    using PFNGLClear = void (*)(unsigned int);
-    static constexpr unsigned int GL_COLOR_BUFFER_BIT_ = 0x00004000;
-    PFNGLClearColor glClearColor_ = nullptr;
-    PFNGLClear glClear_ = nullptr;
 
     std::unique_ptr<IVideoRenderer> renderer_;
     bool rendererReady_ = false;

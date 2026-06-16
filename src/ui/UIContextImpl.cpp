@@ -1,22 +1,11 @@
 // ReSharper disable CppMemberFunctionMayBeStatic
 #include "UIContextImpl.h"
 #include "imgui.h"
+#include "platform/gfx/IGraphicsBackend.h"
 #include <framelift/Hotkeys.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
-#ifdef _WIN32
-// <GL/gl.h> needs the WINGDIAPI/APIENTRY macros from windows.h on MSVC/MinGW.
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
-#include <GL/gl.h>
-#ifndef GL_CLAMP_TO_EDGE
-#define GL_CLAMP_TO_EDGE 0x812F
-#endif
 
 // ── Internal conversion helpers ───────────────────────────────────────────────
 namespace
@@ -520,24 +509,12 @@ DrawList& UIContextImpl::GetForegroundDrawList() noexcept
 }
 
 // ── Texture loading ───────────────────────────────────────────────────────────
-
-static uintptr_t UploadTexture(const unsigned char* pixels, int w, int h)
-{
-    GLuint id = 0;
-    glGenTextures(1, &id);
-    glBindTexture(GL_TEXTURE_2D, id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    return static_cast<uintptr_t>(id);
-}
+// Pixel upload is delegated to the active graphics backend so the returned ImGui
+// texture handle is backend-correct (GL texture name vs Vulkan descriptor set).
 
 uintptr_t UIContextImpl::LoadTexture(const char* path) noexcept
 {
-    if (!path)
+    if (!path || !backend_)
     {
         return 0;
     }
@@ -552,7 +529,7 @@ uintptr_t UIContextImpl::LoadTexture(const char* path) noexcept
     {
         return 0;
     }
-    const uintptr_t handle = UploadTexture(pixels, w, h);
+    const uintptr_t handle = backend_->CreateUiTexture(pixels, w, h);
     stbi_image_free(pixels);
     textureCache_[path] = handle;
     return handle;
@@ -560,7 +537,7 @@ uintptr_t UIContextImpl::LoadTexture(const char* path) noexcept
 
 uintptr_t UIContextImpl::LoadTextureFromMemory(const unsigned char* data, int size) noexcept
 {
-    if (!data || size <= 0)
+    if (!data || size <= 0 || !backend_)
     {
         return 0;
     }
@@ -570,7 +547,7 @@ uintptr_t UIContextImpl::LoadTextureFromMemory(const unsigned char* data, int si
     {
         return 0;
     }
-    const uintptr_t handle = UploadTexture(pixels, w, h);
+    const uintptr_t handle = backend_->CreateUiTexture(pixels, w, h);
     stbi_image_free(pixels);
     return handle;
 }

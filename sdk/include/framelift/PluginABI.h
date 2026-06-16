@@ -19,7 +19,10 @@
 //   PATCH — bump on internal, ABI-neutral fixes. Carried and logged but NOT
 //           gated; reserved as metadata for the future plugin repository to
 //           detect and push patched builds.
-#define FRAMELIFT_PLUGIN_ABI_MAJOR 1
+// MAJOR 2: the host↔player/window rendering hand-off was generalized for the Vulkan
+// backend — IMediaPlayer::InitRender now takes an opaque graphics-backend handle (was
+// a GL proc loader), IAppWindow drops GetGLProcAddr and gains BeginFrame/GetGraphicsBackend.
+#define FRAMELIFT_PLUGIN_ABI_MAJOR 2
 #define FRAMELIFT_PLUGIN_ABI_MINOR 0
 #define FRAMELIFT_PLUGIN_ABI_PATCH 0
 

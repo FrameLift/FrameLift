@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "GraphicsApi.h"
+#include "IVideoRenderer.h"
 
 struct SDL_Window;
 
@@ -33,8 +34,27 @@ public:
     // Destroy the API context/device. Called before the SDL_Window is destroyed.
     virtual void Shutdown() = 0;
 
+    // Human-readable name of the active API ("OpenGL" / "Vulkan"), for diagnostics.
+    [[nodiscard]] virtual const char* Name() const = 0;
+
+    // Create the video renderer paired with this backend (GlVideoRenderer for the GL
+    // backend, VulkanVideoRenderer for Vulkan). The player owns the returned renderer
+    // and calls IVideoRenderer::Init(this) on it.
+    [[nodiscard]] virtual std::unique_ptr<IVideoRenderer> CreateVideoRenderer() = 0;
+
+    // Upload a tightly packed RGBA8 image and return an ImGui-usable texture handle
+    // (ImTextureID value): a GL texture name for the GL backend, a VkDescriptorSet for
+    // Vulkan. Used by UIContextImpl for plugin icons (UIContext::LoadTexture*). The
+    // backend owns the resource and frees it on shutdown. Returns 0 on failure.
+    [[nodiscard]] virtual uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) = 0;
+
     // ── Presentation ──────────────────────────────────────────────────────────
     [[nodiscard]] virtual void* GetProcAddr(const char* name) const = 0;
+    // Begin a frame: acquire/clear the render target. Returns false if the frame
+    // should be skipped (e.g. the Vulkan swapchain is mid-recreation). GL always
+    // succeeds. Both the video renderer and the ImGui pass then record into the frame
+    // before SwapBuffers() presents it.
+    virtual bool BeginFrame() = 0;
     virtual void SwapBuffers() = 0;
     virtual void SetVSync(bool enabled) = 0;
 

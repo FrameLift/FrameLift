@@ -12,7 +12,7 @@
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
-SdlAppWindow::SdlAppWindow(const char* title, const int width, const int height)
+SdlAppWindow::SdlAppWindow(const char* title, const int width, const int height, const GraphicsApi api)
 {
     // Hint must be set before SDL_Init
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
@@ -22,10 +22,9 @@ SdlAppWindow::SdlAppWindow(const char* title, const int width, const int height)
         Fatal(SDL_GetError());
     }
 
-    // Phase 1 of the OpenGL→Vulkan migration: only OpenGL is implemented. Backend
-    // selection from the [graphics] backend setting lands with the Vulkan backend
-    // (the window is created before settings are loaded today).
-    backend_ = CreateGraphicsBackend(GraphicsApi::OpenGL);
+    // The backend (chosen from [graphics] backend) sets the API-specific SDL window
+    // flag — SDL_WINDOW_OPENGL or SDL_WINDOW_VULKAN — which can't change afterwards.
+    backend_ = CreateGraphicsBackend(api);
     const uint64_t extraFlags = backend_->PreWindowCreate();
 
     // Created hidden: the window is shown on the first SwapBuffers() so it never
@@ -139,11 +138,21 @@ Rect SdlAppWindow::GetDisplayUsableBounds() const noexcept
     return {r.x, r.y, r.w, r.h};
 }
 
-// ── OpenGL ────────────────────────────────────────────────────────────────────
+// ── Graphics backend / presentation ─────────────────────────────────────────────
 
-void* SdlAppWindow::GetGLProcAddr(const char* name) const noexcept
+void* SdlAppWindow::GetGraphicsBackend() const noexcept
 {
-    return backend_->GetProcAddr(name);
+    return backend_.get();
+}
+
+const char* SdlAppWindow::GetGraphicsBackendName() const noexcept
+{
+    return backend_ ? backend_->Name() : "none";
+}
+
+bool SdlAppWindow::BeginFrame() noexcept
+{
+    return backend_->BeginFrame();
 }
 
 void SdlAppWindow::SwapBuffers() noexcept
@@ -220,8 +229,15 @@ void SdlAppWindow::PushQuitEvent() noexcept
 
 // ── Platform ──────────────────────────────────────────────────────────────────
 
-int SdlAppWindow::GetPrefPath(const char* org, const char* app, char* buf, int cap) const noexcept
+int SdlAppWindow::ResolvePrefPath(const char* org, const char* app, char* buf, int cap) noexcept
 {
+    // Runs before the window (and its SDL_Init) exists, so the host can read settings
+    // and pick the graphics backend up front. Ensure the video subsystem is up so
+    // SDL_GetPrefPath returns the real per-user dir; SDL_Init is refcounted and the
+    // destructor's SDL_Quit tears everything down regardless.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    SDL_InitSubSystem(SDL_INIT_VIDEO);
+
     char* raw = SDL_GetPrefPath(org, app);
     if (!raw)
     {
@@ -240,6 +256,11 @@ int SdlAppWindow::GetPrefPath(const char* org, const char* app, char* buf, int c
     }
     SDL_free(raw);
     return len;
+}
+
+int SdlAppWindow::GetPrefPath(const char* org, const char* app, char* buf, int cap) const noexcept
+{
+    return ResolvePrefPath(org, app, buf, cap);
 }
 
 int SdlAppWindow::GetBasePath(char* buf, int cap) const noexcept

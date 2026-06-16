@@ -49,6 +49,7 @@ private:
     std::string filePath_;
     std::string title_;
     std::string hwDec_ = "N/A";
+    std::string gfxBackend_; // active graphics backend name, queried once (session-constant)
     double timePos_ = 0.0;
     double duration_ = 0.0;
     bool isPaused_ = false;

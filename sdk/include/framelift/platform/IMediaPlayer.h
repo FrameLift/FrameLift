@@ -215,9 +215,11 @@ public:
     // cb/ud must remain valid for the player's lifetime.
     virtual void SetWakeupCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
 
-    // ── Rendering (OpenGL) ────────────────────────────────────────────────────
-    // getProcAddr(name, ud): resolves a GL function pointer; ud is user data.
-    virtual void InitRender(void* (*getProcAddr)(const char* name, void* ud), void* ud) noexcept = 0;
+    // ── Rendering ─────────────────────────────────────────────────────────────
+    // graphicsBackend: opaque handle to the host's active graphics backend (a
+    // host-internal IGraphicsBackend*). The player builds its video renderer from it,
+    // so the same call works for the OpenGL and Vulkan backends.
+    virtual void InitRender(void* graphicsBackend) noexcept = 0;
     virtual void SetRenderUpdateCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
     [[nodiscard]] virtual bool HasNewFrame() noexcept = 0;
     virtual void RenderFrame(int w, int h) noexcept = 0;

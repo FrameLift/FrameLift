@@ -147,7 +147,7 @@ public:
     {
     }
 
-    void InitRender(void* (*)(const char*, void*), void*) noexcept override
+    void InitRender(void*) noexcept override
     {
     }
 

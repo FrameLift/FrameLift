@@ -9,6 +9,8 @@
 #include "FFmpegPacketQueue.h"
 #include "FFmpegTrackLabel.h"
 
+#include "../gfx/IGraphicsBackend.h"
+
 #include <framelift/Log.h>
 
 #include <algorithm>
@@ -1925,16 +1927,15 @@ void FFmpegPlayer::SetWakeupCallback(void (*cb)(void*), void* ud) noexcept
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-void FFmpegPlayer::InitRender(void* (*getProcAddr)(const char*, void*), void* ud) noexcept
+void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
 {
-    if (!getProcAddr)
+    auto* backend = static_cast<IGraphicsBackend*>(graphicsBackend);
+    if (!backend)
     {
         return;
     }
-    glClearColor_ = reinterpret_cast<PFNGLClearColor>(getProcAddr("glClearColor", ud));
-    glClear_ = reinterpret_cast<PFNGLClear>(getProcAddr("glClear", ud));
-    renderer_ = CreateVideoRenderer();
-    rendererReady_ = renderer_->Init(getProcAddr, ud);
+    renderer_ = backend->CreateVideoRenderer();
+    rendererReady_ = renderer_->Init(backend);
     if (!rendererReady_)
     {
         Log::Error("FFmpegPlayer: video renderer init failed; showing black");
@@ -2001,9 +2002,6 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
 
         renderer_->Draw(w, h, overlayActive_);
     }
-    else if (glClearColor_ && glClear_)
-    {
-        glClearColor_(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear_(GL_COLOR_BUFFER_BIT_);
-    }
+    // When the renderer failed to initialise there is nothing to draw; the graphics
+    // backend's BeginFrame() has already cleared the target to black.
 }

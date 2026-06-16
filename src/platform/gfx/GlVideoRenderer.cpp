@@ -1,6 +1,7 @@
 #include "GlVideoRenderer.h"
 
 #include "../ffmpeg/FFmpegLetterbox.h"
+#include "IGraphicsBackend.h"
 
 #include <framelift/Log.h>
 
@@ -299,15 +300,21 @@ GlVideoRenderer::~GlVideoRenderer()
     }
 }
 
-bool GlVideoRenderer::Init(void* (*getProcAddr)(const char*, void*), void* ud)
+bool GlVideoRenderer::Init(IGraphicsBackend* backend)
 {
-    if (!getProcAddr)
+    if (!backend)
     {
         return false;
     }
 
+    // Adapter so the internal loader keeps its (name, ud) shape: resolve every GL
+    // entry point through the backend's proc loader.
+    const auto getProcAddr = [](const char* name, void* ud) -> void* {
+        return static_cast<IGraphicsBackend*>(ud)->GetProcAddr(name);
+    };
+
     auto impl = std::make_unique<Impl>();
-    if (!impl->LoadFunctions(getProcAddr, ud))
+    if (!impl->LoadFunctions(getProcAddr, backend))
     {
         return false;
     }
@@ -427,11 +434,4 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
     impl_->BindTexture(GL_TEXTURE_2D, 0);
     impl_->UseProgram(0);
     impl_->Viewport(0, 0, fbW, fbH);
-}
-
-// ── Factory ───────────────────────────────────────────────────────────────────
-
-std::unique_ptr<IVideoRenderer> CreateVideoRenderer()
-{
-    return std::make_unique<GlVideoRenderer>();
 }

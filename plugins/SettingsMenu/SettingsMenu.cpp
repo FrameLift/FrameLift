@@ -124,6 +124,7 @@ void SettingsMenu::RegisterCorePages(IPluginContext& ctx)
 {
     corePages_ = {{
         {this, &SettingsMenu::RenderPageGeneral, "General", "general"},
+        {this, &SettingsMenu::RenderPageGraphics, "Graphics", "graphics"},
         {this, &SettingsMenu::RenderPagePlayback, "Playback", "playback"},
         {this, &SettingsMenu::RenderPageCache, "Cache", "cache"},
         {this, &SettingsMenu::RenderPageUI, "UI", "ui"},
@@ -443,6 +444,26 @@ void SettingsMenu::RenderPageGeneral(UIContext& ctx)
         ctx, "Max display ratio", "Maximum fraction of the display the window may occupy (0.3 – 1.0).",
         settings_.maxDisplayRatio, 0.3f, 1.0f
     );
+}
+
+void SettingsMenu::RenderPageGraphics(UIContext& ctx)
+{
+    Widgets::SectionHeader(ctx, "Renderer");
+
+    // backend stores "vulkan" or "gl"; map to/from the combo index.
+    const bool isVulkan = settings_.backend == "vulkan" || settings_.backend == "vk" || settings_.backend == "Vulkan";
+    const char* const items[] = {"Vulkan", "OpenGL"};
+    int idx = isVulkan ? 0 : 1;
+    if (Widgets::Combo(
+            ctx, "Backend",
+            "Graphics API used for video + UI rendering. Vulkan is the default; it falls back to "
+            "OpenGL automatically if no Vulkan device is available. Takes effect after a restart.",
+            items, 2, idx
+        ))
+    {
+        settings_.backend = idx == 0 ? "vulkan" : "gl";
+        dirty_ = true;
+    }
 }
 
 void SettingsMenu::RenderPagePlayback(UIContext& ctx)

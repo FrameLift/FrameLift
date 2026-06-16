@@ -16,8 +16,13 @@
 class SdlAppWindow final : public IAppWindow
 {
 public:
-    SdlAppWindow(const char* title, int width, int height);
+    SdlAppWindow(const char* title, int width, int height, GraphicsApi api = GraphicsApi::OpenGL);
     ~SdlAppWindow() override;
+
+    // Resolve the user pref dir before the window exists (ensures SDL is initialized),
+    // so the host can load settings and choose the graphics backend up front. Same
+    // buf/cap contract as GetPrefPath; pass buf=nullptr to query the length.
+    static int ResolvePrefPath(const char* org, const char* app, char* buf, int cap) noexcept;
 
     void GetSize(int& w, int& h) const noexcept override;
     void SetSize(int w, int h) noexcept override;
@@ -29,7 +34,9 @@ public:
     bool SetWindowIconFromMemory(const unsigned char* data, int size) noexcept override;
     void SetTitle(const char* title) noexcept override;
 
-    [[nodiscard]] void* GetGLProcAddr(const char* name) const noexcept override;
+    [[nodiscard]] void* GetGraphicsBackend() const noexcept override;
+    [[nodiscard]] const char* GetGraphicsBackendName() const noexcept override;
+    bool BeginFrame() noexcept override;
     void SwapBuffers() noexcept override;
     void SetVSync(bool enabled) noexcept override;
     [[nodiscard]] bool IsRenderable() const noexcept override;

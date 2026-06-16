@@ -30,7 +30,9 @@ runs:
           libswresample-dev \
           libavfilter-dev \
           libass-dev \
-          libgl1-mesa-dev
+          libgl1-mesa-dev \
+          libvulkan-dev \
+          glslang-tools
     - name: Install CMake (Kitware)
       shell: bash
       run: |

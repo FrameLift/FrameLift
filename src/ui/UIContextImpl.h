@@ -7,6 +7,7 @@
 struct ImDrawList;
 struct ImVec2;
 class Hotkeys;
+class IGraphicsBackend;
 
 // Concrete draw-list wrapper backed by an ImDrawList*.
 // Three instances are held per UIContextImpl (window, background, foreground).
@@ -141,8 +142,17 @@ public:
         keys_ = keys;
     }
 
+    // The active graphics backend, used to create ImGui textures for plugin icons in a
+    // backend-correct way (GL texture vs Vulkan descriptor). Set by App after the window
+    // (and its backend) exist.
+    void SetGraphicsBackend(IGraphicsBackend* backend) noexcept
+    {
+        backend_ = backend;
+    }
+
 private:
     const Hotkeys* keys_ = nullptr;
+    IGraphicsBackend* backend_ = nullptr;
     DrawListImpl windowDL_, backgroundDL_, foregroundDL_;
     std::unordered_map<std::string, uintptr_t> textureCache_;
     // Main viewport (OS window) screen position, cached each BeginFrame. With

@@ -22,7 +22,7 @@
     X(cache,    readAheadEnabled,   bool,        true,  "Enable the memory-bounded demuxer read-ahead cache.") \
     X(cache,    readAheadSizeMB,    int,           64,  "Read-ahead demuxer cache size in MB (total across audio/video/subtitle).") \
     /* ── Graphics ─────────────────────────────────────────────────────────── */ \
-    X(graphics, backend,            std::string, "gl",  "Video rendering backend: gl (vulkan planned).") \
+    X(graphics, backend,            std::string, "vulkan",  "Video rendering backend: vulkan or gl (falls back to gl if Vulkan is unavailable). Takes effect on restart.") \
     /* ── UI ───────────────────────────────────────────────────────────────── */ \
     X(ui,       panelWidth,         float,     320.f,   "Width in pixels of the side panels (playlist, etc.).") \
     X(ui,       slideSpeed,         float,      18.f,   "Panel slide-in/out animation speed.") \

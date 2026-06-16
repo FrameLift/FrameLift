@@ -97,7 +97,8 @@ jobs:
             flex \
             autoconf \
             automake \
-            libtool-bin
+            libtool-bin \
+            glslang-tools
           curl -fL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh" \
             -o /tmp/cmake-install.sh
           chmod +x /tmp/cmake-install.sh
@@ -130,6 +131,7 @@ jobs:
             -DVCPKG_HOST_TRIPLET=x64-linux \
             -DVCPKG_APPLOCAL_DEPS=OFF \
             -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
             -DCMAKE_BUILD_TYPE=Release \
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_ENABLE_UPDATER=ON \

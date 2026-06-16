@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 4.2.0)
 
 set(FRAMELIFT_VERSION "0.0.0" CACHE STRING "Numeric version passed to CMake project() — must be X.Y.Z")
-project(FrameLift VERSION ${FRAMELIFT_VERSION} LANGUAGES CXX)
+project(FrameLift VERSION ${FRAMELIFT_VERSION} LANGUAGES C CXX)
 
 # The auto-update plugin links winhttp, so it's Windows-only. Forced OFF (and
 # hidden) on every other platform — e.g. the native-Linux test/CI builds.
@@ -33,6 +33,9 @@ find_package(OpenGL REQUIRED)
 
 # ── Host third-party dependencies (imgui/spdlog/stb/json — NOT in the SDK) ────
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
+
+# ── Shader → SPIR-V build step (glslang, fetched in-tree) ─────────────────────
+include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftShaders.cmake")
 
 # ── Release-build optimizations (FrameLift_apply_release_opts) ─────────────────────
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftOptimize.cmake")
@@ -96,6 +99,19 @@ target_include_directories(FrameLift PRIVATE "${CMAKE_SOURCE_DIR}/src" "${stb_SO
 target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk SDL3::SDL3 OpenGL::GL
         imgui spdlog::spdlog nlohmann_json::nlohmann_json)
+
+# Vulkan graphics backend (OpenGL→Vulkan migration, #17). volk is the meta-loader
+# (compiled here exactly once — imgui only takes volk_headers); VMA + vk-bootstrap
+# are header/single-source. No link-time libvulkan: volk loads it at runtime.
+target_link_libraries(FrameLift PRIVATE
+        volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
+
+# Compile the video shaders to embedded SPIR-V headers and make the host depend on
+# them (the Vulkan renderer #includes the generated <name>.spv.h from this dir).
+framelift_compile_shader("${CMAKE_SOURCE_DIR}/src/platform/gfx/shaders/video.vert" kVideoVertSpv FL_VIDEO_VERT_SPV)
+framelift_compile_shader("${CMAKE_SOURCE_DIR}/src/platform/gfx/shaders/video.frag" kVideoFragSpv FL_VIDEO_FRAG_SPV)
+target_sources(FrameLift PRIVATE "${FL_VIDEO_VERT_SPV}" "${FL_VIDEO_FRAG_SPV}")
+target_include_directories(FrameLift PRIVATE "${FRAMELIFT_SHADER_GEN_DIR}")
 
 # The FFmpeg + libass playback backend (the only backend; App.cpp constructs
 # FFmpegPlayer unconditionally).
