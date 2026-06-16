@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 4.2.0)
 
 set(FRAMELIFT_VERSION "0.0.0" CACHE STRING "Numeric version passed to CMake project() — must be X.Y.Z")
-project(FrameLift VERSION ${FRAMELIFT_VERSION} LANGUAGES CXX)
+project(FrameLift VERSION ${FRAMELIFT_VERSION} LANGUAGES C CXX)
 
 # The auto-update plugin links winhttp, so it's Windows-only. Forced OFF (and
 # hidden) on every other platform — e.g. the native-Linux test/CI builds.
