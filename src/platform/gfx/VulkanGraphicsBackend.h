@@ -4,9 +4,11 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "IGraphicsBackend.h"
+#include "VulkanDeviceInfo.h"
 
 struct SDL_Window;
 
@@ -40,6 +42,7 @@ public:
     [[nodiscard]] uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) override;
 
     [[nodiscard]] void* GetProcAddr(const char* name) const override; // not meaningful for Vulkan
+    [[nodiscard]] bool GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noexcept override;
     bool BeginFrame() override;
     void SwapBuffers() override;
     void SetVSync(bool enabled) override;
@@ -52,11 +55,23 @@ public:
 
     // ── Accessors for the paired VulkanVideoRenderer ───────────────────────────
     [[nodiscard]] VkDevice Device() const { return device_; }
+    [[nodiscard]] VkPhysicalDevice PhysicalDevice() const { return physicalDevice_; }
     [[nodiscard]] VmaAllocator Allocator() const { return allocator_; }
     [[nodiscard]] VkRenderPass RenderPass() const { return renderPass_; }
     [[nodiscard]] VkExtent2D SwapchainExtent() const { return swapchainExtent_; }
     [[nodiscard]] VkCommandBuffer CurrentCommandBuffer() const { return currentCmd_; }
     [[nodiscard]] uint32_t CurrentFrameIndex() const { return currentFrame_; }
+    [[nodiscard]] VkQueue GraphicsQueue() const { return graphicsQueue_; }
+    [[nodiscard]] uint32_t GraphicsQueueFamily() const { return graphicsQueueFamily_; }
+    [[nodiscard]] bool SupportsVulkanVideoDecode() const { return supportsVulkanVideo_; }
+
+    // Register a decoded AVVkFrame's timeline semaphore with the current frame's queue
+    // submission (added in SwapBuffers). The renderer calls these from Draw() after
+    // recording the sample of a zero-copy Vulkan frame: wait until the decode signalled
+    // `waitValue`, and signal `signalValue` (= waitValue + 1) when sampling completes.
+    // Cleared each BeginFrame.
+    void AddFrameWait(VkSemaphore sem, uint64_t waitValue, VkPipelineStageFlags stage);
+    void AddFrameSignal(VkSemaphore sem, uint64_t signalValue);
 
     // Record one-shot transfer/setup work on a transient command buffer and block
     // until the GPU finishes. Used by the video renderer to upload frames (Phase 2;
@@ -64,6 +79,11 @@ public:
     bool ImmediateSubmit(void (*record)(VkCommandBuffer cmd, void* ud), void* ud);
 
 private:
+    // Find a VK_QUEUE_VIDEO_DECODE_BIT_KHR queue family on physicalDevice_ and record its
+    // index + codec caps + flags (and the graphics family's flags). Clears
+    // supportsVulkanVideo_ if no decode queue actually exists.
+    void DetectVideoDecodeQueue();
+
     bool CreateSwapchain();
     void DestroySwapchain();
     bool RecreateSwapchain();
@@ -84,6 +104,33 @@ private:
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     uint32_t graphicsQueueFamily_ = 0;
     VmaAllocator allocator_ = nullptr;
+
+    // ── Vulkan-video decode device state (Phase 3, #18) ────────────────────────
+    // Populated only when the physical device exposes a video-decode queue + the
+    // required extensions; otherwise supportsVulkanVideo_ stays false and the player
+    // falls back to the CPU-RGBA8 path. The recorded extension/feature lists are handed
+    // verbatim to FFmpeg via GetVulkanDeviceInfo so it WRAPS this device.
+    bool supportsVulkanVideo_ = false;
+    VkQueue videoDecodeQueue_ = VK_NULL_HANDLE;
+    int videoDecodeQueueFamily_ = -1;
+    uint32_t videoDecodeCaps_ = 0;       // VkVideoCodecOperationFlagBitsKHR of the decode family
+    uint32_t graphicsQueueFlags_ = 0;    // VkQueueFlagBits of the graphics family
+    uint32_t videoDecodeQueueFlags_ = 0; // VkQueueFlagBits of the decode family
+    std::vector<std::string> enabledDeviceExtNames_;
+    std::vector<const char*> enabledDeviceExtPtrs_; // points into enabledDeviceExtNames_
+    // Enabled feature chain (lifetime spans device usage; FFmpeg reads it at init).
+    VkPhysicalDeviceFeatures2 enabledFeatures2_{};
+    VkPhysicalDeviceVulkan11Features enabledF11_{};
+    VkPhysicalDeviceVulkan12Features enabledF12_{};
+    VkPhysicalDeviceVulkan13Features enabledF13_{};
+
+    // Per-submission timeline waits/signals for the zero-copy video frame sampled this
+    // frame (parallel arrays consumed by SwapBuffers, reset by BeginFrame).
+    std::vector<VkSemaphore> frameWaitSems_;
+    std::vector<uint64_t> frameWaitValues_;
+    std::vector<VkPipelineStageFlags> frameWaitStages_;
+    std::vector<VkSemaphore> frameSignalSems_;
+    std::vector<uint64_t> frameSignalValues_;
 
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat swapchainFormat_ = VK_FORMAT_UNDEFINED;

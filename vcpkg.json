@@ -17,7 +17,8 @@
         "swresample",
         "swscale",
         "dav1d",
-        "nvcodec"
+        "nvcodec",
+        "vulkan"
       ]
     },
     "libass"

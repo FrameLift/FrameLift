@@ -2,7 +2,9 @@
 
 #include <volk.h>
 
+#include <array>
 #include <cstdint>
+#include <unordered_map>
 
 #include "IVideoRenderer.h"
 #include "VulkanGraphicsBackend.h"
@@ -31,6 +33,7 @@ public:
 
     bool Init(IGraphicsBackend* backend) override;
     void Upload(const uint8_t* rgba, int w, int h) override;
+    void UploadVulkanFrame(void* avFrame, int displayW, int displayH) override;
     void UploadOverlay(const uint8_t* rgba, int w, int h) override;
     void Draw(int fbW, int fbH, bool drawOverlay = false) override;
 
@@ -49,14 +52,38 @@ private:
     };
 
     bool BuildPipeline();
+    // Shared blit-pipeline builder (fullscreen triangle, video.vert/.frag) against a
+    // given descriptor-set layout; used for both the RGBA and YCbCr paths.
+    bool CreateBlitPipeline(VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline);
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) const;
     bool EnsureTexture(Texture& t, int w, int h);
     void UploadTo(Texture& t, const uint8_t* rgba, int w, int h);
     bool EnsureStaging(VkDeviceSize bytes);
     void DestroyTexture(Texture& t);
 
+    // ── Zero-copy YCbCr sampling (#18) ─────────────────────────────────────────
+    // (Re)build the YCbCr conversion + immutable sampler + set layout + pipeline for a
+    // decoded VkFormat / colorspace / range; cheap no-op when unchanged.
+    bool EnsureYcbcr(int vkFormat, int colorSpace, int colorRange);
+    void DestroyYcbcr();
+    // Get (or create + cache, keyed by VkImage handle) the view + descriptor set for one
+    // pooled decode image. Views/sets live until the format changes or shutdown.
+    struct FrameTex
+    {
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
+    const FrameTex* EnsureFrameTexture(uint64_t image);
+    // Submit a standalone transition (decode→sample layout, queue-ownership acquire) for
+    // the frame image, chained to its timeline semaphore. Must run OUTSIDE the render
+    // pass, hence its own command buffer + submit (Draw runs inside the pass).
+    void SubmitFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily, uint64_t semaphore,
+                               uint64_t waitValue);
+    void DrawVulkanFrame();
+
     VulkanGraphicsBackend* backend_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VmaAllocator allocator_ = nullptr;
 
     VkSampler sampler_ = VK_NULL_HANDLE;
@@ -73,4 +100,30 @@ private:
     VmaAllocation stagingAlloc_ = nullptr;
     void* stagingMapped_ = nullptr;
     VkDeviceSize stagingSize_ = 0;
+
+    // ── Zero-copy YCbCr state (#18) ────────────────────────────────────────────
+    // The AVFrame* (void*) handed in by UploadVulkanFrame, sampled in Draw. Non-null ⇒
+    // use the YCbCr path for the video; the RGBA video_ texture is then unused.
+    void* vkFrame_ = nullptr;
+    int vkDisplayW_ = 0;
+    int vkDisplayH_ = 0;
+
+    // Conversion is rebuilt only when the format/colorspace/range changes.
+    int ycbcrFormat_ = 0;
+    int ycbcrColorSpace_ = -1;
+    int ycbcrColorRange_ = -1;
+    VkSamplerYcbcrConversion ycbcrConversion_ = VK_NULL_HANDLE;
+    VkSampler ycbcrSampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ycbcrSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout ycbcrPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline ycbcrPipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool ycbcrDescPool_ = VK_NULL_HANDLE;
+    // view + descriptor set per pooled decode image (bounded; the decoder reuses a small
+    // set of images). Cleared on format change / shutdown — never re-pointed in flight.
+    std::unordered_map<uint64_t, FrameTex> frameTextures_;
+
+    // Standalone transition command buffers (one per frame-in-flight), submitted before
+    // the main render submit to move the decode image into a sampleable layout.
+    VkCommandPool transitionPool_ = VK_NULL_HANDLE;
+    std::array<VkCommandBuffer, VulkanGraphicsBackend::kMaxFramesInFlight> transitionCmds_{};
 };

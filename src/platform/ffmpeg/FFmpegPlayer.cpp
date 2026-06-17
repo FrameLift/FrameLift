@@ -8,6 +8,7 @@
 #include "FFmpegLetterbox.h"
 #include "FFmpegPacketQueue.h"
 #include "FFmpegTrackLabel.h"
+#include "FFmpegVulkanDevice.h"
 
 #include "../gfx/IGraphicsBackend.h"
 
@@ -115,6 +116,23 @@ FFmpegPlayer::~FFmpegPlayer()
     if (decodeThread_.joinable())
     {
         decodeThread_.join();
+    }
+
+    // Zero-copy teardown (#18): destroy the renderer first so its image views over the
+    // displayed AVVkFrame are gone before we drop the frame refs and the wrapped device.
+    // (The graphics backend/device is owned by the window, destroyed after the player.)
+    renderer_.reset();
+    if (displayVkFrame_)
+    {
+        av_frame_free(&displayVkFrame_);
+    }
+    if (pendingVkFrame_)
+    {
+        av_frame_free(&pendingVkFrame_);
+    }
+    if (vkHwDevice_)
+    {
+        av_buffer_unref(&vkHwDevice_);
     }
 #if defined(_WIN32)
     if (videoWakeEvent_)
@@ -241,9 +259,19 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
             vDec->pkt_timebase = vStream->time_base;
             // Try hardware decode (issue #25); falls back cleanly to software on failure.
             // hwaccel surfaces are single-frame, so don't multi-thread the decoder then.
+            // Prefer zero-copy Vulkan when the render backend offers it (#18), else fall
+            // back to the readback backends (CUDA/D3D11VA/VAAPI), else software.
             if (hwdec_.load())
             {
-                hw.TryEnable(vCodec, vDec);
+                bool armed = false;
+                if (vulkanZeroCopyAvailable_ && vkHwDevice_)
+                {
+                    armed = hw.TryEnableVulkan(vCodec, vDec, vkHwDevice_);
+                }
+                if (!armed)
+                {
+                    hw.TryEnable(vCodec, vDec);
+                }
             }
             vDec->thread_count = hw.Active() ? 1 : 0; // 0 = auto-detect for software decode
             if (avcodec_open2(vDec, vCodec, nullptr) == 0 && vDec->width > 0 && vDec->height > 0)
@@ -781,10 +809,12 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     // the render thread. Returns true if interrupted (new load / shutdown / seek).
     const auto present = [&](AVFrame* decoded) -> bool
     {
-        // Hardware frames live in GPU memory — download to a software frame (carrying
-        // pts) before scaling. Software decode leaves f == decoded, unchanged.
+        // Zero-copy Vulkan frames stay on the GPU — no download, handed off as an AVVkFrame
+        // ref below. Other hardware frames live in GPU memory and are downloaded to a
+        // software frame (carrying pts) before swscale. Software decode leaves f unchanged.
+        const bool vkFrame = hw && hw->IsVulkan() && decoded->format == hw->HwPixelFormat();
         AVFrame* f = decoded;
-        if (hw && hw->Active() && decoded->format == hw->HwPixelFormat())
+        if (!vkFrame && hw && hw->Active() && decoded->format == hw->HwPixelFormat())
         {
             f = hw->MapToSoftware(decoded, swFrame);
             if (!f)
@@ -807,7 +837,10 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             dstH = f->height;
             displayWidth_ = dstW;
             displayHeight_ = dstH;
-            rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
+            if (!vkFrame)
+            {
+                rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
+            }
             sentReconfig = true;
             QueueEvent(MakeLifecycle(MediaEventType::VideoReconfig));
         }
@@ -893,26 +926,50 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             }
         }
 
-        sws = sws_getCachedContext(sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), dstW, dstH,
-                                   AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (!sws)
+        if (vkFrame)
         {
-            return false;
+            // Zero-copy: hand a ref'd AVVkFrame to the render thread (no swscale, no copy).
+            AVFrame* clone = av_frame_alloc();
+            if (clone && av_frame_ref(clone, f) == 0)
+            {
+                std::lock_guard fl(frameMutex_);
+                if (pendingVkFrame_) // drop a still-unconsumed pending frame
+                {
+                    av_frame_free(&pendingVkFrame_);
+                }
+                pendingVkFrame_ = clone;
+                pendingW_ = dstW;
+                pendingH_ = dstH;
+                pendingValid_ = true;
+                pendingIsVulkan_ = true;
+            }
+            else if (clone)
+            {
+                av_frame_free(&clone);
+            }
         }
-        if (rgba.size() != static_cast<size_t>(dstW) * dstH * 4)
+        else
         {
-            rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
-        }
-        uint8_t* dst[4] = {rgba.data(), nullptr, nullptr, nullptr};
-        int dstStride[4] = {dstW * 4, 0, 0, 0};
-        sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
+            sws = sws_getCachedContext(sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), dstW, dstH,
+                                       AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+            if (!sws)
+            {
+                return false;
+            }
+            if (rgba.size() != static_cast<size_t>(dstW) * dstH * 4)
+            {
+                rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
+            }
+            uint8_t* dst[4] = {rgba.data(), nullptr, nullptr, nullptr};
+            int dstStride[4] = {dstW * 4, 0, 0, 0};
+            sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
 
-        {
             std::lock_guard fl(frameMutex_);
             std::swap(rgba, pendingPixels_);
             pendingW_ = dstW;
             pendingH_ = dstH;
             pendingValid_ = true;
+            pendingIsVulkan_ = false;
         }
         newFramePending_ = true;
         RequestRender();
@@ -1940,6 +1997,18 @@ void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
     {
         Log::Error("FFmpegPlayer: video renderer init failed; showing black");
     }
+
+    // If the active backend is Vulkan and exposes a video-decode device, wrap it for
+    // FFmpeg so we can decode straight onto the render device (#18). Non-fatal on
+    // failure: vulkanZeroCopyAvailable_ stays false and PlayFile uses the readback /
+    // CPU-RGBA8 paths.
+    VulkanDeviceInfo vkInfo;
+    if (backend->GetVulkanDeviceInfo(vkInfo) && vkInfo.supportsVideoDecode)
+    {
+        vkHwDevice_ = CreateVulkanHwDevice(vkInfo);
+        vulkanZeroCopyAvailable_ = vkHwDevice_ != nullptr;
+        Log::Info("FFmpegPlayer: Vulkan zero-copy decode {}", vulkanZeroCopyAvailable_ ? "available" : "unavailable");
+    }
 }
 
 void FFmpegPlayer::SetRenderUpdateCallback(void (*cb)(void*), void* ud) noexcept
@@ -1956,24 +2025,61 @@ bool FFmpegPlayer::HasNewFrame() noexcept
 void FFmpegPlayer::RenderFrame(int w, int h) noexcept
 {
     bool haveNew = false;
+    bool haveNewVk = false;
     int dispW = 0;
     int dispH = 0;
     {
         std::lock_guard fl(frameMutex_);
         if (pendingValid_)
         {
-            std::swap(displayPixels_, pendingPixels_);
+            if (pendingIsVulkan_)
+            {
+                // Adopt the pending AVVkFrame; release the previously displayed one. The
+                // timeline semaphore (signalled by the renderer's sample submit) keeps
+                // FFmpeg from reusing the image until our GPU read completes, so dropping
+                // our ref here is safe even if a submit is still in flight.
+                if (displayVkFrame_)
+                {
+                    av_frame_free(&displayVkFrame_);
+                }
+                displayVkFrame_ = pendingVkFrame_;
+                pendingVkFrame_ = nullptr;
+                haveNewVk = true;
+            }
+            else
+            {
+                std::swap(displayPixels_, pendingPixels_);
+                haveNew = true;
+            }
             dispW = pendingW_;
             dispH = pendingH_;
             pendingValid_ = false;
-            haveNew = true;
         }
     }
     newFramePending_ = false;
 
     if (rendererReady_)
     {
-        if (haveNew)
+        if (haveNewVk)
+        {
+            displayIsVulkan_ = true;
+        }
+        else if (haveNew)
+        {
+            displayIsVulkan_ = false;
+            // Switched from the Vulkan path back to RGBA (e.g. a new software-decoded
+            // file): drop the held AVVkFrame so its pool/device can be released.
+            if (displayVkFrame_)
+            {
+                av_frame_free(&displayVkFrame_);
+            }
+        }
+
+        if (displayIsVulkan_ && displayVkFrame_)
+        {
+            renderer_->UploadVulkanFrame(displayVkFrame_, dispW, dispH);
+        }
+        else if (haveNew)
         {
             renderer_->Upload(displayPixels_.data(), dispW, dispH);
         }
