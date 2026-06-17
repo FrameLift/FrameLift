@@ -27,6 +27,20 @@ inline ReadAheadCacheOptions ReadAheadOptsFromSettings(const Settings& s)
     return {s.readAheadEnabled, mb * 1024 * 1024};
 }
 
+inline AudioPreferences AudioPrefsFromSettings(const Settings& s)
+{
+    AudioPreferences prefs;
+    std::strncpy(prefs.preferredLang, s.defaultAudioLanguage.c_str(), sizeof(prefs.preferredLang) - 1);
+    std::strncpy(prefs.outputDevice, s.outputDevice.c_str(), sizeof(prefs.outputDevice) - 1);
+    prefs.defaultVolume = std::clamp(s.defaultVolume, 0, 100);
+    prefs.syncOffsetMs = s.syncOffsetMs;
+    prefs.channelMode = static_cast<AudioChannelMode>(std::clamp(s.channelMode, 0, 3));
+    prefs.duckingEnabled = s.duckingEnabled;
+    prefs.duckingLevel = std::clamp(s.duckingLevel, 0, 100);
+    prefs.duckingTrigger = AudioDuckingTrigger::Notifications;
+    return prefs;
+}
+
 inline SubtitleStyle SubtitleStyleFromSettings(const Settings& s)
 {
     // Pack a "#RRGGBB" colour + an inverted-alpha transparency byte into the ASS

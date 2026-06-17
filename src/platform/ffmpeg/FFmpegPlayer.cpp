@@ -666,7 +666,8 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         {
             return;
         }
-        audioOut_->Feed(f, ptsSec);
+        const double audioOffsetSec = static_cast<double>(audioSyncOffsetMs_.load()) / 1000.0;
+        audioOut_->Feed(f, ptsSec + audioOffsetSec);
 
         // For audio-only files there is no video worker to drive TimePos.
         if (!hasVideo_)
@@ -1145,23 +1146,24 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
 
     // User track-selection preferences (guarded by tracksMutex_, held here).
     const std::string prefLang = subtitleStyle_.preferredLang;
+    const std::string audioPrefLang = audioPrefs_.preferredLang;
     const bool preferForced = subtitleStyle_.preferForced;
+    int64_t langAudio = -1;     // first audio stream matching the preferred language
     int64_t langSub = -1;       // first sub matching the preferred language
     int64_t forcedSub = -1;     // first forced sub
     int64_t forcedLangSub = -1; // first forced sub matching the preferred language
 
     // Case-insensitive language match tolerant of 2- vs 3-letter codes ("en"~"eng").
-    const auto langMatches = [&](const char* tag) -> bool
+    const auto langMatches = [](const std::string& wanted, const char* tag) -> bool
     {
-        if (prefLang.empty() || !tag)
+        if (wanted.empty() || !tag)
         {
             return false;
         }
-        const size_t n = std::min(prefLang.size(), std::strlen(tag));
+        const size_t n = std::min(wanted.size(), std::strlen(tag));
         for (size_t i = 0; i < n; ++i)
         {
-            if (std::tolower(static_cast<unsigned char>(tag[i])) !=
-                std::tolower(static_cast<unsigned char>(prefLang[i])))
+            if (std::tolower(static_cast<unsigned char>(tag[i])) != std::tolower(static_cast<unsigned char>(wanted[i])))
             {
                 return false;
             }
@@ -1191,10 +1193,16 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
         char label[256];
         MakeTrackLabel(label, titleTag ? titleTag->value : nullptr, langTag ? langTag->value : nullptr, ord, nullptr);
         e.label = label;
+        e.language = langTag ? langTag->value : "";
 
         if (type == AVMEDIA_TYPE_AUDIO && static_cast<int>(i) == defaultAudioStream)
         {
             defaultAudio = e.id;
+        }
+        if (type == AVMEDIA_TYPE_AUDIO && langAudio < 0 &&
+            langMatches(audioPrefLang, langTag ? langTag->value : nullptr))
+        {
+            langAudio = e.id;
         }
         if (type == AVMEDIA_TYPE_SUBTITLE)
         {
@@ -1207,7 +1215,7 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
                 defaultSub = e.id;
             }
             const bool forced = (st->disposition & AV_DISPOSITION_FORCED) != 0;
-            const bool langOk = langMatches(langTag ? langTag->value : nullptr);
+            const bool langOk = langMatches(prefLang, langTag ? langTag->value : nullptr);
             if (langOk && langSub < 0)
             {
                 langSub = e.id;
@@ -1257,7 +1265,7 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
         tracks_.push_back(std::move(e));
     }
 
-    selectedAudioId_ = defaultAudio;
+    selectedAudioId_ = langAudio >= 0 ? langAudio : defaultAudio;
 
     // Selection precedence: forced (matching language first) when preferForced, then a
     // preferred-language match, then the file's DEFAULT-flagged sub, then any sub.
@@ -1720,6 +1728,38 @@ void FFmpegPlayer::SetSubtitleStyle(const SubtitleStyle& style) noexcept
 
 // ── Subtitle / audio tracks ───────────────────────────────────────────────────
 
+void FFmpegPlayer::SetAudioPreferences(const AudioPreferences& prefs) noexcept
+{
+    AudioPreferences old;
+    {
+        std::lock_guard lock(tracksMutex_);
+        old = audioPrefs_;
+        audioPrefs_ = prefs; // preferred language is read by BuildTrackList on the decode thread
+    }
+
+    audioSyncOffsetMs_ = prefs.syncOffsetMs;
+    const bool outputChanged = std::strcmp(old.outputDevice, prefs.outputDevice) != 0 ||
+                               old.channelMode != prefs.channelMode;
+    volume_ = std::clamp(prefs.defaultVolume, 0, 100);
+    audioOut_->SetPreferences(prefs);
+    audioOut_->SetVolume(volume_);
+    EmitDouble(PlayerProperty::Volume, static_cast<double>(volume_));
+
+    if (outputChanged && audioOut_->HasDevice() && !idle_.load())
+    {
+        const double target = ClampSeekTarget(GetMasterClock(), duration_.load());
+        RequestSeek(target);
+        audioQ_->Abort();
+        videoQ_->Abort();
+        subQ_->Abort();
+    }
+}
+
+void FFmpegPlayer::SetAudioDucked(bool ducked) noexcept
+{
+    audioOut_->SetDucked(ducked);
+}
+
 void FFmpegPlayer::ToggleSubtitles() noexcept
 {
     subtitlesEnabled_ = !subtitlesEnabled_;
@@ -2054,6 +2094,11 @@ void FFmpegPlayer::SetWakeupCallback(void (*cb)(void*), void* ud) noexcept
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
+
+void FFmpegPlayer::EnumerateAudioOutputDevices(void (*visit)(const AudioOutputDevice*, void*), void* ud) const noexcept
+{
+    audioOut_->EnumerateDevices(visit, ud);
+}
 
 void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
 {

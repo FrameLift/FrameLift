@@ -71,6 +71,10 @@ public:
     {
     }
 
+    void SetAudioPreferences(const AudioPreferences&) noexcept override
+    {
+    }
+
     // ── Tracks ─────────────────────────────────────────────────────────────────
     void EnumerateSubtitleTracks(void (*)(const SubtitleTrack*, void*), void*) const noexcept override
     {
@@ -148,6 +152,10 @@ public:
     }
 
     void SetWakeupCallback(void (*)(void*), void*) noexcept override
+    {
+    }
+
+    void EnumerateAudioOutputDevices(void (*)(const AudioOutputDevice*, void*), void*) const noexcept override
     {
     }
 

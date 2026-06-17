@@ -19,6 +19,8 @@
 #include <vector>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <ranges>
 
@@ -94,13 +96,25 @@ App::App(const char* title, const int width, const int height, const int cliArgc
     pluginCtx_->RegisterService<IFileDialog>(&fileDialogService_);
 
     // Playback options update when settings change.
+    runtimeAudioPrefs_ = AudioPrefsFromSettings(settings_);
     player_->SetPlaybackOptions(PlaybackOptsFromSettings(settings_));
     player_->SetReadAheadCache(ReadAheadOptsFromSettings(settings_));
     player_->SetSubtitleStyle(SubtitleStyleFromSettings(settings_));
+    player_->SetAudioPreferences(runtimeAudioPrefs_);
+    player_->SetAudioNormalize(
+        settings_.normalizeEnabled, settings_.normalizeEnabled ? ParamsFromSettings(settings_) : AudioNormalizeParams{}
+    );
     appWindow_->SetVSync(settings_.videoSync);
 
     // Track idle state for TogglePauseAction (see DrainMediaEvents).
     player_->ObserveProperty(PlayerProperty::IdleActive);
+    framelift::Subscribe<NotificationEvent>(
+        *pluginCtx_,
+        [this](const NotificationEvent&)
+        {
+            PulseAudioDucking();
+        }
+    );
     framelift::RegisterSettingsChangeCallback(
         *pluginCtx_,
         [this]()
@@ -109,11 +123,12 @@ App::App(const char* title, const int width, const int height, const int cliArgc
             player_->SetPlaybackOptions(PlaybackOptsFromSettings(s));
             player_->SetReadAheadCache(ReadAheadOptsFromSettings(s));
             player_->SetSubtitleStyle(SubtitleStyleFromSettings(s));
+            runtimeAudioPrefs_ = AudioPrefsFromSettings(s);
+            player_->SetAudioPreferences(runtimeAudioPrefs_);
             appWindow_->SetVSync(s.videoSync);
-            if (player_->IsNormalizeEnabled())
-            {
-                player_->SetAudioNormalize(true, ParamsFromSettings(s));
-            }
+            player_->SetAudioNormalize(
+                s.normalizeEnabled, s.normalizeEnabled ? ParamsFromSettings(s) : AudioNormalizeParams{}
+            );
 
             // This callback fires mid-frame (during SettingsMenu's
             // Save inside Render), so only flag what changed; the
@@ -258,6 +273,62 @@ void App::BuildContextMenu()
                 const bool on = !player_->IsNormalizeEnabled();
                 player_->SetAudioNormalize(on, on ? ParamsFromSettings(settings_) : AudioNormalizeParams{});
                 pluginCtx_->Publish<NotificationEvent>({on ? "Normalize: On" : "Normalize: Off"});
+            }
+            ctx.Separator();
+
+            if (ctx.BeginMenu("Output device"))
+            {
+                struct DeviceCtx
+                {
+                    UIContext* ctx;
+                    IMediaPlayer* player;
+                    AudioPreferences* prefs;
+                    bool empty = true;
+                };
+                DeviceCtx dc{&ctx, player_.get(), &runtimeAudioPrefs_};
+                player_->EnumerateAudioOutputDevices(
+                    [](const AudioOutputDevice* d, void* ud)
+                    {
+                        auto* state = static_cast<DeviceCtx*>(ud);
+                        state->empty = false;
+                        const char* label = d->isDefault ? "System default" : d->name;
+                        if (state->ctx->MenuItem(label, d->selected))
+                        {
+                            std::strncpy(state->prefs->outputDevice, d->name, sizeof(state->prefs->outputDevice) - 1);
+                            state->prefs->outputDevice[sizeof(state->prefs->outputDevice) - 1] = '\0';
+                            state->player->SetAudioPreferences(*state->prefs);
+                        }
+                    },
+                    &dc
+                );
+                if (dc.empty)
+                {
+                    ctx.TextDisabled("No output devices");
+                }
+                ctx.EndMenu();
+            }
+
+            if (ctx.BeginMenu("Sync offset"))
+            {
+                char current[64];
+                std::snprintf(current, sizeof(current), "Current: %+d ms", runtimeAudioPrefs_.syncOffsetMs);
+                ctx.TextDisabled(current);
+                if (ctx.MenuItem("-50 ms"))
+                {
+                    runtimeAudioPrefs_.syncOffsetMs -= 50;
+                    player_->SetAudioPreferences(runtimeAudioPrefs_);
+                }
+                if (ctx.MenuItem("+50 ms"))
+                {
+                    runtimeAudioPrefs_.syncOffsetMs += 50;
+                    player_->SetAudioPreferences(runtimeAudioPrefs_);
+                }
+                if (ctx.MenuItem("Reset"))
+                {
+                    runtimeAudioPrefs_.syncOffsetMs = 0;
+                    player_->SetAudioPreferences(runtimeAudioPrefs_);
+                }
+                ctx.EndMenu();
             }
             ctx.Separator();
 
@@ -531,11 +602,45 @@ void App::DrainEvents(const int timeoutMs)
 
 void App::RenderFrame()
 {
+    RefreshAudioDucking();
     Render();
     if (pendingResize_)
     {
         pendingResize_ = false;
         ResizeToVideo();
+    }
+}
+
+void App::PulseAudioDucking()
+{
+    if (!settings_.duckingEnabled)
+    {
+        return;
+    }
+    audioDuckUntil_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(800);
+    if (!audioDucked_)
+    {
+        audioDucked_ = true;
+        if (auto* ffmpeg = dynamic_cast<FFmpegPlayer*>(player_.get()))
+        {
+            ffmpeg->SetAudioDucked(true);
+        }
+    }
+}
+
+void App::RefreshAudioDucking()
+{
+    if (!audioDucked_)
+    {
+        return;
+    }
+    if (!settings_.duckingEnabled || std::chrono::steady_clock::now() >= audioDuckUntil_)
+    {
+        audioDucked_ = false;
+        if (auto* ffmpeg = dynamic_cast<FFmpegPlayer*>(player_.get()))
+        {
+            ffmpeg->SetAudioDucked(false);
+        }
     }
 }
 
@@ -787,6 +892,7 @@ int App::Run()
         // events (100 ms) to idle instead of busy-looping.
         const int timeoutMs = !renderable ? 100 : (settings_.videoSync ? 0 : 4);
         DrainEvents(timeoutMs);
+        RefreshAudioDucking();
         if (running_ && appWindow_->IsRenderable())
         {
             RenderFrame();

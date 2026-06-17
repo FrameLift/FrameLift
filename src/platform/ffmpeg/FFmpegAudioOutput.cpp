@@ -1,5 +1,6 @@
 #include "FFmpegAudioOutput.h"
 
+#include "FFmpegAudioOptions.h"
 #include "FFmpegClock.h"
 
 #include <framelift/Log.h>
@@ -14,6 +15,7 @@ extern "C"
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cstring>
 
 FFmpegAudioOutput::FFmpegAudioOutput()
 {
@@ -38,7 +40,7 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     std::lock_guard lock(mutex_);
 
     dstRate_ = srcRate;
-    dstChannels_ = 2;
+    dstChannels_ = DesiredChannelsLocked();
     bytesPerSec_ = dstRate_ * dstChannels_ * static_cast<int>(sizeof(float));
 
     AVChannelLayout dstLayout;
@@ -67,7 +69,54 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     spec.format = SDL_AUDIO_F32;
     spec.channels = dstChannels_;
     spec.freq = dstRate_;
-    stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+
+    SDL_AudioDeviceID deviceId = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    if (!preferredDevice_.empty())
+    {
+        int count = 0;
+        SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
+        for (int i = 0; devices && i < count; ++i)
+        {
+            const char* name = SDL_GetAudioDeviceName(devices[i]);
+            if (name && preferredDevice_ == name)
+            {
+                deviceId = devices[i];
+                break;
+            }
+        }
+        SDL_free(devices);
+    }
+
+    stream_ = SDL_OpenAudioDeviceStream(deviceId, &spec, nullptr, nullptr);
+    if (!stream_ && dstChannels_ == 6)
+    {
+        Log::Warn("FFmpegAudioOutput: surround output failed, falling back to stereo: {}", SDL_GetError());
+        swr_free(&swr_);
+        dstChannels_ = 2;
+        bytesPerSec_ = dstRate_ * dstChannels_ * static_cast<int>(sizeof(float));
+        av_channel_layout_default(&dstLayout, dstChannels_);
+        SwrContext* fallbackSwr = nullptr;
+        const int fallbackRet = swr_alloc_set_opts2(
+            &fallbackSwr, &dstLayout, AV_SAMPLE_FMT_FLT, dstRate_, &srcLayout, srcFmt, srcRate, 0, nullptr
+        );
+        av_channel_layout_uninit(&dstLayout);
+        if (fallbackRet < 0 || !fallbackSwr || swr_init(fallbackSwr) < 0)
+        {
+            Log::Error("FFmpegAudioOutput: stereo fallback resampler failed");
+            swr_free(&fallbackSwr);
+            bytesPerSec_ = 0;
+            return false;
+        }
+        swr_ = fallbackSwr;
+        spec.channels = dstChannels_;
+        stream_ = SDL_OpenAudioDeviceStream(deviceId, &spec, nullptr, nullptr);
+    }
+    if (!stream_ && deviceId != SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK)
+    {
+        Log::Warn("FFmpegAudioOutput: preferred device '{}' failed, falling back to system default: {}",
+                  preferredDevice_, SDL_GetError());
+        stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    }
     if (!stream_)
     {
         Log::Error("FFmpegAudioOutput: SDL_OpenAudioDeviceStream failed: {}", SDL_GetError());
@@ -79,7 +128,7 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     lastQueuedPts_ = 0.0;
     ApplyGainLocked();
     SDL_ResumeAudioStreamDevice(stream_);
-    Log::Info("FFmpegAudioOutput: opened {} Hz stereo F32", dstRate_);
+    Log::Info("FFmpegAudioOutput: opened {} Hz {}ch F32", dstRate_, dstChannels_);
     return true;
 }
 
@@ -174,13 +223,75 @@ void FFmpegAudioOutput::SetMute(bool muted)
     ApplyGainLocked();
 }
 
+void FFmpegAudioOutput::SetPreferences(const AudioPreferences& prefs)
+{
+    std::lock_guard lock(mutex_);
+    preferredDevice_ = prefs.outputDevice;
+    channelMode_ = prefs.channelMode;
+    duckingEnabled_ = prefs.duckingEnabled;
+    duckingLevel_ = std::clamp(prefs.duckingLevel, 0, 100);
+    ApplyGainLocked();
+}
+
+void FFmpegAudioOutput::SetDucked(bool ducked)
+{
+    std::lock_guard lock(mutex_);
+    ducked_ = ducked;
+    ApplyGainLocked();
+}
+
+void FFmpegAudioOutput::EnumerateDevices(void (*visit)(const AudioOutputDevice* device, void* ud), void* ud) const
+{
+    if (!visit)
+    {
+        return;
+    }
+
+    std::string selected;
+    {
+        std::lock_guard lock(mutex_);
+        selected = preferredDevice_;
+    }
+
+    AudioOutputDevice def{};
+    def.isDefault = true;
+    def.selected = selected.empty();
+    visit(&def, ud);
+
+    int count = 0;
+    SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
+    for (int i = 0; devices && i < count; ++i)
+    {
+        const char* name = SDL_GetAudioDeviceName(devices[i]);
+        if (!name || name[0] == '\0')
+        {
+            continue;
+        }
+        AudioOutputDevice out{};
+        std::strncpy(out.name, name, sizeof(out.name) - 1);
+        out.selected = selected == name;
+        visit(&out, ud);
+    }
+    SDL_free(devices);
+}
+
+int FFmpegAudioOutput::DesiredChannelsLocked() const
+{
+    return AudioOutputChannelsForMode(channelMode_);
+}
+
 void FFmpegAudioOutput::ApplyGainLocked()
 {
     if (!stream_)
     {
         return;
     }
-    SDL_SetAudioStreamGain(stream_, muted_ ? 0.0f : static_cast<float>(volume_) / 100.0f);
+    float gain = muted_ ? 0.0f : static_cast<float>(volume_) / 100.0f;
+    if (!muted_ && duckingEnabled_ && ducked_)
+    {
+        gain *= static_cast<float>(duckingLevel_) / 100.0f;
+    }
+    SDL_SetAudioStreamGain(stream_, gain);
 }
 
 void FFmpegAudioOutput::Flush()

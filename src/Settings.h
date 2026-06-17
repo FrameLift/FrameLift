@@ -46,6 +46,14 @@
     X(files,    videoExtensions,    std::string, "mp4;mkv;avi;mov;wmv;flv;webm;m4v;mpg;mpeg", "Semicolon-separated list of video file extensions.") \
     X(files,    imageExtensions,    std::string, "png;jpg;jpeg;gif;bmp;webp",                 "Semicolon-separated list of image file extensions.") \
     /* ── Audio ────────────────────────────────────────────────────────────── */ \
+    X(audio,    defaultAudioLanguage,std::string, "",    "Preferred audio language to auto-select (ISO 639 code, e.g. eng).") \
+    X(audio,    outputDevice,       std::string, "",    "Preferred audio output device name; empty uses the system default.") \
+    X(audio,    defaultVolume,      int,          100,   "Default playback volume (0-100).") \
+    X(audio,    syncOffsetMs,       int,            0,   "Audio sync offset in milliseconds; positive delays audio relative to video.") \
+    X(audio,    channelMode,        int,            0,   "Audio channel mode: 0 auto, 1 mono, 2 stereo, 3 surround.") \
+    X(audio,    duckingEnabled,     bool,        false,  "Reduce playback volume while app-owned transient audio is active.") \
+    X(audio,    duckingLevel,       int,           50,   "Playback gain while ducked, as percent of current volume.") \
+    X(audio,    normalizeEnabled,   bool,        false,  "Enable dynamic audio normalization by default.") \
     X(audio,    dynaudnormFrameLen, int,          100,  "Dynamic audio normalization: filter frame length in milliseconds.") \
     X(audio,    dynaudnormGaussSize,int,            5,  "Dynamic audio normalization: Gaussian filter window size (odd number).") \
     X(audio,    dynaudnormPeak,     float,        0.95f,"Dynamic audio normalization: target peak magnitude (0.0-1.0).") \

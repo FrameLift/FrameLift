@@ -10,6 +10,7 @@
 #include "Version.h"
 #include <ThemeUtil.h>
 #include <framelift/core.h>
+#include <framelift/platform/IMediaPlayer.h>
 #include <framelift/ui.h>
 
 // ReSharper disable once CppUnusedIncludeDirective
@@ -754,7 +755,105 @@ void SettingsMenu::RenderPageFiles(UIContext& ctx)
 
 void SettingsMenu::RenderPageAudio(UIContext& ctx)
 {
+    Widgets::SectionHeader(ctx, "Track selection");
+    dirty_ |= Widgets::InputText(
+        ctx, "Preferred language",
+        "Auto-select an audio track in this language when loading a file (ISO 639 code, e.g. eng). "
+        "Empty = use the file default.",
+        settings_.defaultAudioLanguage
+    );
+
+    Widgets::SectionHeader(ctx, "Output");
+    std::vector<std::string> deviceNames;
+    std::vector<const char*> deviceItems;
+    int deviceIdx = 0;
+    deviceNames.emplace_back("System default");
+    if (settings_.outputDevice.empty())
+    {
+        deviceIdx = 0;
+    }
+    if (auto* player = ctx_ ? ctx_->GetService<IMediaPlayer>() : nullptr)
+    {
+        struct Devices
+        {
+            std::vector<std::string>* names;
+            std::string* selected;
+            int* selectedIdx;
+        };
+        Devices devices{&deviceNames, &settings_.outputDevice, &deviceIdx};
+        player->EnumerateAudioOutputDevices(
+            [](const AudioOutputDevice* d, void* ud)
+            {
+                auto& state = *static_cast<Devices*>(ud);
+                if (!d || d->isDefault || d->name[0] == '\0')
+                {
+                    return;
+                }
+                state.names->emplace_back(d->name);
+                if (*state.selected == d->name)
+                {
+                    *state.selectedIdx = static_cast<int>(state.names->size()) - 1;
+                }
+            },
+            &devices
+        );
+    }
+    std::string staleDevice;
+    if (deviceIdx == 0 && !settings_.outputDevice.empty())
+    {
+        staleDevice = settings_.outputDevice + " (missing)";
+        deviceNames.push_back(staleDevice);
+        deviceIdx = static_cast<int>(deviceNames.size()) - 1;
+    }
+    deviceItems.reserve(deviceNames.size());
+    for (const auto& name : deviceNames)
+    {
+        deviceItems.push_back(name.c_str());
+    }
+    if (Widgets::Combo(
+            ctx, "Output device", "Preferred playback device. Missing devices fall back to system default.",
+            deviceItems.data(), static_cast<int>(deviceItems.size()), deviceIdx
+        ))
+    {
+        settings_.outputDevice = deviceIdx == 0 ? "" : deviceNames[deviceIdx];
+        const std::string suffix = " (missing)";
+        if (settings_.outputDevice.ends_with(suffix))
+        {
+            settings_.outputDevice.erase(settings_.outputDevice.size() - suffix.size());
+        }
+        dirty_ = true;
+    }
+    dirty_ |= Widgets::SliderInt(ctx, "Default volume", "Playback volume applied on startup and Save.",
+                                 settings_.defaultVolume, 0, 100);
+
+    Widgets::SectionHeader(ctx, "Sync");
+    dirty_ |= Widgets::SliderInt(
+        ctx, "Audio offset", "Audio sync offset in ms. Positive values delay audio relative to video.",
+        settings_.syncOffsetMs, -1000, 1000
+    );
+
+    Widgets::SectionHeader(ctx, "Channels");
+    const char* const channelItems[] = {"Auto", "Mono", "Stereo", "Surround"};
+    int channelIdx = std::clamp(settings_.channelMode, 0, 3);
+    if (Widgets::Combo(ctx, "Channel mode", "Output channel layout preference.", channelItems, 4, channelIdx))
+    {
+        settings_.channelMode = channelIdx;
+        dirty_ = true;
+    }
+
+    Widgets::SectionHeader(ctx, "Ducking");
+    dirty_ |= Widgets::Checkbox(
+        ctx, "Enable ducking", "Temporarily reduce playback volume while app notifications are active.",
+        settings_.duckingEnabled
+    );
+    dirty_ |= Widgets::SliderInt(ctx, "Ducking level", "Playback gain while ducked, as percent of current volume.",
+                                 settings_.duckingLevel, 0, 100);
+
     Widgets::SectionHeader(ctx, "Audio normalization");
+    dirty_ |= Widgets::Checkbox(
+        ctx, "Enable normalization", "Apply dynamic audio normalization by default when playback starts.",
+        settings_.normalizeEnabled
+    );
     dirty_ |= Widgets::SliderInt(
         ctx, "Frame length",
         "dynaudnorm f: analysis frame length in ms. "

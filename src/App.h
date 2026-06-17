@@ -14,6 +14,7 @@
 #include <framelift/platform/IAppWindow.h>
 #include <framelift/platform/IDirWatcher.h>
 #include <framelift/platform/IMediaPlayer.h>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -55,6 +56,8 @@ private:
     void LoadPlugins();
     void BuildContextMenu();
     void BuildRenderables();
+    void PulseAudioDucking();
+    void RefreshAudioDucking();
 
     // Process command line, forwarded from main(). main()'s argv stays valid for
     // the program lifetime, so storing the pointer is safe. Broadcast verbatim as
@@ -71,6 +74,9 @@ private:
     // Mirrors the player's idle state (true = no file loaded); tracked in
     // DrainMediaEvents() so TogglePauseAction can decide without asking plugins.
     bool playerIdle_ = true;
+    bool audioDucked_ = false;
+    std::chrono::steady_clock::time_point audioDuckUntil_{};
+    AudioPreferences runtimeAudioPrefs_{};
 
     // Theme application is deferred: the settings-change callback fires mid-frame
     // (during SettingsMenu's Save inside Render), so it only sets these flags and
