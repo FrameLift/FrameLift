@@ -148,6 +148,44 @@ struct ReadAheadCacheOptions
     int64_t maxBytes = 64 << 20; // memory budget in bytes (default 64 MiB)
 };
 
+// Subtitle edge (border) style.
+enum class SubtitleEdgeStyle : int
+{
+    None = 0,      // no outline or shadow
+    Outline = 1,   // outline around the glyphs
+    DropShadow = 2, // outline + drop shadow
+    OpaqueBox = 3, // text drawn over an opaque box (BackColour)
+};
+
+// User-configurable subtitle appearance + track-selection behavior. Pushed into the
+// player on settings change; the player forwards styling to libass (the override is
+// applied to the active track on top of its embedded style — mpv's "ass-override"
+// model) and uses the behavior fields to pick the initial subtitle track.
+//
+// Colours are packed as ASS 0xRRGGBBAA where the AA byte is *transparency*
+// (0x00 = fully opaque, 0xFF = fully transparent), matching libass' convention.
+struct SubtitleStyle
+{
+    bool overrideEnabled = false; // master switch — when false the file's own style is used verbatim
+
+    // ── Appearance ───────────────────────────────────────────────────────────
+    float fontScale = 1.0f;       // global font-size multiplier (1.0 = file default)
+    char fontFamily[128] = {};    // override font family; empty = keep the file's font
+    uint32_t textColor = 0x00000000u;    // primary fill colour (0xRRGGBBAA)
+    uint32_t outlineColor = 0x00000000u; // outline/border colour
+    uint32_t backColor = 0x00000080u;    // shadow / opaque-box colour (alpha = transparency)
+    SubtitleEdgeStyle edgeStyle = SubtitleEdgeStyle::Outline;
+    float outlineWidth = 2.0f;    // outline thickness in pixels
+    float shadowDepth = 0.0f;     // drop-shadow offset in pixels
+    int alignment = 0;            // numpad 1-9 (\an); 0 = keep the file's alignment
+    float lineSpacing = 0.0f;     // extra space between lines, pixels
+    float letterSpacing = 0.0f;   // extra space between glyphs, pixels
+
+    // ── Track-selection behavior ─────────────────────────────────────────────
+    char preferredLang[8] = {};   // ISO 639 language to auto-select; empty = no preference
+    bool preferForced = false;    // prefer a "forced" subtitle track when present
+};
+
 // Pure interface for a media playback backend.
 // All backend-specific headers (FFmpeg, libass, etc.) are kept behind this boundary.
 class IMediaPlayer
@@ -229,4 +267,10 @@ public:
     // LoadFile(). Appended at the end of the interface to keep the vtable layout
     // of earlier slots stable (host-provided surface; MINOR ABI addition).
     virtual void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept = 0;
+
+    // ── Subtitle styling / behavior ────────────────────────────────────────────
+    // Apply user subtitle appearance + selection preferences. Styling takes effect
+    // on the next rendered frame; the behavior fields apply on the next LoadFile().
+    // Appended at the end (host-provided surface; MINOR ABI addition).
+    virtual void SetSubtitleStyle(const SubtitleStyle& style) noexcept = 0;
 };

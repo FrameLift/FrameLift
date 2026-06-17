@@ -1,5 +1,7 @@
 #pragma once
 
+#include <framelift/platform/IMediaPlayer.h> // SubtitleStyle
+
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -66,6 +68,13 @@ public:
     // Discard the current track entirely (subtitles disabled / switching away).
     void ClearTrack();
 
+    // Apply user subtitle appearance to the renderer. When style.overrideEnabled is
+    // false, any previously installed override is cleared and the file's own style is
+    // used. Forces the next RenderOverlay to re-rasterize so the change is visible
+    // without a seek. (Only the appearance fields are consumed here; track-selection
+    // fields are handled by the player.)
+    void ApplyStyle(const SubtitleStyle& style);
+
     // Render subtitles for timeMs (playback time in ms) into outRgba — a tightly
     // packed RGBA8 image of size vpW*vpH (top row first, straight alpha) matching
     // the on-screen video rectangle. storageW/H are the native video size, used as
@@ -78,8 +87,14 @@ private:
     // the current track. Used by LoadExternalFile. Caller holds mutex_.
     bool PreloadFromFormatLocked(AVFormatContext* fmt);
 
+    // Re-install the current style override on the renderer. Caller holds mutex_.
+    void ApplyStyleLocked();
+
     mutable std::mutex mutex_;
     ass_library* lib_ = nullptr;
     ass_renderer* renderer_ = nullptr;
     ass_track* track_ = nullptr;
+
+    SubtitleStyle style_{};         // current user override (overrideEnabled gates it)
+    bool forceNextUpdate_ = false;  // make the next RenderOverlay re-rasterize once
 };

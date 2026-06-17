@@ -1,4 +1,5 @@
 #include "SettingsMenu.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
@@ -126,6 +127,7 @@ void SettingsMenu::RegisterCorePages(IPluginContext& ctx)
         {this, &SettingsMenu::RenderPageGeneral, "General", "general"},
         {this, &SettingsMenu::RenderPageGraphics, "Graphics", "graphics"},
         {this, &SettingsMenu::RenderPagePlayback, "Playback", "playback"},
+        {this, &SettingsMenu::RenderPageSubtitles, "Subtitles", "subtitles"},
         {this, &SettingsMenu::RenderPageCache, "Cache", "cache"},
         {this, &SettingsMenu::RenderPageUI, "UI", "ui"},
         {this, &SettingsMenu::RenderPageTheme, "Theme", "theme"},
@@ -496,6 +498,116 @@ void SettingsMenu::RenderPagePlayback(UIContext& ctx)
         ctx, "External audio files", "Automatically load external audio files found in the same directory.",
         settings_.audioFileAutoLoad
     );
+}
+
+void SettingsMenu::RenderPageSubtitles(UIContext& ctx)
+{
+    // Local helper: a "#RRGGBB" string field edited through the RGB color picker.
+    const auto colorRow = [&](const char* label, const char* desc, std::string& field)
+    {
+        float rgb[3];
+        if (!ThemeUtil::ParseHexColor(field.c_str(), rgb))
+        {
+            rgb[0] = rgb[1] = rgb[2] = 0.f;
+        }
+        if (Widgets::ColorEdit(ctx, label, desc, rgb))
+        {
+            char hex[8];
+            ThemeUtil::FormatHexColor(rgb, hex);
+            field = hex;
+            dirty_ = true;
+        }
+    };
+
+    Widgets::SectionHeader(ctx, "Appearance");
+    dirty_ |= Widgets::Checkbox(
+        ctx, "Override subtitle styling",
+        "Apply the options below on top of each file's own subtitle style. "
+        "When off, subtitles render exactly as authored.",
+        settings_.overrideStyle
+    );
+
+    EnsureFontsQueried();
+    // Font family combo (index 0 = keep the file's font). fontNames_[0] is the UI
+    // default label; reuse the rest as candidate family names for libass.
+    int familyIdx = 0;
+    for (std::size_t i = 1; i < fontNames_.size(); ++i)
+    {
+        if (fontNames_[i] == settings_.fontFamily)
+        {
+            familyIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    std::vector<const char*> families;
+    families.reserve(fontNames_.size());
+    families.push_back("Default (file's font)");
+    for (std::size_t i = 1; i < fontNames_.size(); ++i)
+    {
+        families.push_back(fontNames_[i].c_str());
+    }
+    if (Widgets::Combo(
+            ctx, "Font", "Font family for subtitles. Default keeps the font chosen by the file.",
+            families.data(), static_cast<int>(families.size()), familyIdx
+        ))
+    {
+        settings_.fontFamily = familyIdx == 0 ? "" : fontNames_[familyIdx];
+        dirty_ = true;
+    }
+
+    dirty_ |= Widgets::SliderFloat(
+        ctx, "Font size", "Multiplier applied to the file's subtitle size.", settings_.fontScale, 0.5f, 3.0f
+    );
+
+    colorRow("Text color", "Primary fill color of the subtitle glyphs.", settings_.textColor);
+    colorRow("Outline color", "Color of the outline / border around glyphs.", settings_.outlineColor);
+
+    Widgets::SectionHeader(ctx, "Edges & background");
+    const char* const edgeItems[] = {"None", "Outline", "Drop shadow", "Opaque box"};
+    int edgeIdx = std::clamp(settings_.edgeStyle, 0, 3);
+    if (Widgets::Combo(ctx, "Edge style", "How glyphs are separated from the video.", edgeItems, 4, edgeIdx))
+    {
+        settings_.edgeStyle = edgeIdx;
+        dirty_ = true;
+    }
+    dirty_ |= Widgets::SliderFloat(ctx, "Outline width", "Outline / box border thickness in pixels.",
+                                   settings_.outlineWidth, 0.f, 6.f);
+    dirty_ |= Widgets::SliderFloat(ctx, "Shadow depth", "Drop-shadow / box offset in pixels.", settings_.shadowDepth,
+                                   0.f, 6.f);
+    colorRow("Background color", "Drop-shadow / opaque-box color.", settings_.backColor);
+    dirty_ |= Widgets::SliderFloat(ctx, "Background opacity", "Opacity of the shadow / box (0 = transparent).",
+                                   settings_.backOpacity, 0.f, 1.f);
+
+    Widgets::SectionHeader(ctx, "Layout");
+    // Alignment combo maps the numpad value (1-9) plus a "file default" (0) entry.
+    const char* const alignItems[] = {"File default", "Bottom left", "Bottom center", "Bottom right",
+                                       "Middle left",  "Middle center", "Middle right",
+                                       "Top left",     "Top center",    "Top right"};
+    int alignIdx = (settings_.alignment >= 1 && settings_.alignment <= 9) ? settings_.alignment : 0;
+    if (Widgets::Combo(ctx, "Alignment", "On-screen position of the subtitles.", alignItems, 10, alignIdx))
+    {
+        settings_.alignment = alignIdx; // 0 = file default, 1-9 = \an position
+        dirty_ = true;
+    }
+    dirty_ |= Widgets::SliderFloat(ctx, "Line spacing", "Extra space between lines, pixels.", settings_.lineSpacing,
+                                   0.f, 30.f);
+    dirty_ |= Widgets::SliderFloat(ctx, "Letter spacing", "Extra space between glyphs, pixels.",
+                                   settings_.letterSpacing, 0.f, 20.f);
+
+    Widgets::SectionHeader(ctx, "Track selection");
+    dirty_ |= Widgets::InputText(
+        ctx, "Preferred language",
+        "Auto-select a subtitle track in this language when loading a file (ISO 639 code, e.g. eng). "
+        "Empty = no preference.",
+        settings_.defaultLanguage
+    );
+    dirty_ |= Widgets::Checkbox(
+        ctx, "Prefer forced subtitles", "When a file has a forced subtitle track, select it on load.",
+        settings_.preferForced
+    );
+
+    ctx.Dummy({0.f, 6.f});
+    ctx.TextDisabled("Style changes apply when you press Save; track selection applies to the next file opened.");
 }
 
 void SettingsMenu::RenderPageCache(UIContext& ctx)

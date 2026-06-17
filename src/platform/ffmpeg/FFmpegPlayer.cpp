@@ -1143,6 +1143,32 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
     int audioOrd = 0;
     int subOrd = 0;
 
+    // User track-selection preferences (guarded by tracksMutex_, held here).
+    const std::string prefLang = subtitleStyle_.preferredLang;
+    const bool preferForced = subtitleStyle_.preferForced;
+    int64_t langSub = -1;       // first sub matching the preferred language
+    int64_t forcedSub = -1;     // first forced sub
+    int64_t forcedLangSub = -1; // first forced sub matching the preferred language
+
+    // Case-insensitive language match tolerant of 2- vs 3-letter codes ("en"~"eng").
+    const auto langMatches = [&](const char* tag) -> bool
+    {
+        if (prefLang.empty() || !tag)
+        {
+            return false;
+        }
+        const size_t n = std::min(prefLang.size(), std::strlen(tag));
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(tag[i])) !=
+                std::tolower(static_cast<unsigned char>(prefLang[i])))
+            {
+                return false;
+            }
+        }
+        return n > 0;
+    };
+
     // Embedded audio + subtitle streams, in container order.
     for (unsigned i = 0; i < mainFmt->nb_streams; ++i)
     {
@@ -1179,6 +1205,20 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
             if ((st->disposition & AV_DISPOSITION_DEFAULT) != 0 && defaultSub < 0)
             {
                 defaultSub = e.id;
+            }
+            const bool forced = (st->disposition & AV_DISPOSITION_FORCED) != 0;
+            const bool langOk = langMatches(langTag ? langTag->value : nullptr);
+            if (langOk && langSub < 0)
+            {
+                langSub = e.id;
+            }
+            if (forced && forcedSub < 0)
+            {
+                forcedSub = e.id;
+            }
+            if (forced && langOk && forcedLangSub < 0)
+            {
+                forcedLangSub = e.id;
             }
         }
         tracks_.push_back(std::move(e));
@@ -1218,7 +1258,23 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
     }
 
     selectedAudioId_ = defaultAudio;
-    selectedSubId_ = defaultSub >= 0 ? defaultSub : defaultSubFallback;
+
+    // Selection precedence: forced (matching language first) when preferForced, then a
+    // preferred-language match, then the file's DEFAULT-flagged sub, then any sub.
+    int64_t chosenSub = -1;
+    if (preferForced)
+    {
+        chosenSub = forcedLangSub >= 0 ? forcedLangSub : forcedSub;
+    }
+    if (chosenSub < 0)
+    {
+        chosenSub = langSub;
+    }
+    if (chosenSub < 0)
+    {
+        chosenSub = defaultSub >= 0 ? defaultSub : defaultSubFallback;
+    }
+    selectedSubId_ = chosenSub;
     for (TrackEntry& t : tracks_)
     {
         t.selected = (t.kind == TrackKind::Audio && t.id == selectedAudioId_) ||
@@ -1645,6 +1701,21 @@ void FFmpegPlayer::SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept
 {
     // Takes effect immediately; the new byte budget governs the next WaitForSpace.
     cache_.Configure(opts.enabled, opts.maxBytes);
+}
+
+void FFmpegPlayer::SetSubtitleStyle(const SubtitleStyle& style) noexcept
+{
+    {
+        std::lock_guard lock(tracksMutex_);
+        subtitleStyle_ = style; // behavior fields read by BuildTrackList on the decode thread
+    }
+    // Styling is renderer-level libass state and persists across tracks; applying it
+    // here makes the change visible on the next rendered frame without a seek.
+    if (subtitles_)
+    {
+        subtitles_->ApplyStyle(style);
+    }
+    RequestRender();
 }
 
 // ── Subtitle / audio tracks ───────────────────────────────────────────────────

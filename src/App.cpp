@@ -96,6 +96,7 @@ App::App(const char* title, const int width, const int height, const int cliArgc
     // Playback options update when settings change.
     player_->SetPlaybackOptions(PlaybackOptsFromSettings(settings_));
     player_->SetReadAheadCache(ReadAheadOptsFromSettings(settings_));
+    player_->SetSubtitleStyle(SubtitleStyleFromSettings(settings_));
     appWindow_->SetVSync(settings_.videoSync);
 
     // Track idle state for TogglePauseAction (see DrainMediaEvents).
@@ -107,6 +108,7 @@ App::App(const char* title, const int width, const int height, const int cliArgc
             const Settings& s = pluginCtx_->GetSettingsDirect();
             player_->SetPlaybackOptions(PlaybackOptsFromSettings(s));
             player_->SetReadAheadCache(ReadAheadOptsFromSettings(s));
+            player_->SetSubtitleStyle(SubtitleStyleFromSettings(s));
             appWindow_->SetVSync(s.videoSync);
             if (player_->IsNormalizeEnabled())
             {

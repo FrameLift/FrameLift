@@ -62,6 +62,7 @@ public:
     void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept override;
     void SetPlaybackOptions(const PlaybackOptions& opts) noexcept override;
     void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept override;
+    void SetSubtitleStyle(const SubtitleStyle& style) noexcept override;
 
     void ToggleSubtitles() noexcept override;
     void CycleSubtitleTrack() noexcept override;
@@ -357,4 +358,9 @@ private:
     std::atomic<double> subtitleDelay_{0.0}; // seconds; positive delays subtitles
     std::vector<unsigned char> overlayScratch_; // render-thread-owned overlay pixels
     bool overlayActive_ = false;                // render-thread-owned: draw overlay this frame
+
+    // User subtitle preferences. Styling is forwarded to libass on change; the
+    // behavior fields (preferredLang/preferForced) drive BuildTrackList. Guarded by
+    // tracksMutex_ for the behavior fields read on the decode thread.
+    SubtitleStyle subtitleStyle_{};
 };
