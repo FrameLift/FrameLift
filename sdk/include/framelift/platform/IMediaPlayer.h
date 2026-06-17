@@ -112,6 +112,42 @@ struct AudioTrack
     bool selected = false; // true when this is the currently active track
 };
 
+// A playback output device reported by the platform backend.
+struct AudioOutputDevice
+{
+    char name[256] = {};   // stable user-facing SDL device name; empty means system default
+    bool isDefault = false; // true for the synthetic "System default" entry
+    bool selected = false;  // true when this is the active/preferred device
+};
+
+enum class AudioChannelMode : int
+{
+    Auto = 0,     // backend default, currently stereo fallback
+    Mono = 1,     // force mono output
+    Stereo = 2,   // force stereo output
+    Surround = 3, // prefer 5.1 output, fallback to stereo when unavailable
+};
+
+enum class AudioDuckingTrigger : int
+{
+    Notifications = 0, // app-owned transient notifications / UI sounds
+};
+
+// User-configurable audio behavior. Pushed into the player on settings change;
+// device/channel/default-volume take effect for the active stream by reopening
+// audio output when needed, while track language applies on the next LoadFile().
+struct AudioPreferences
+{
+    char preferredLang[8] = {};  // ISO 639 audio language to auto-select; empty = file/default
+    char outputDevice[256] = {}; // SDL playback device name; empty = system default
+    int defaultVolume = 100;     // 0-100
+    int syncOffsetMs = 0;        // positive delays audio relative to video
+    AudioChannelMode channelMode = AudioChannelMode::Auto;
+    bool duckingEnabled = false;
+    int duckingLevel = 50; // playback gain while ducked, percent of current volume
+    AudioDuckingTrigger duckingTrigger = AudioDuckingTrigger::Notifications;
+};
+
 // Decoded video dimensions in pixels.
 struct DisplaySize
 {
@@ -273,4 +309,16 @@ public:
     // on the next rendered frame; the behavior fields apply on the next LoadFile().
     // Appended at the end (host-provided surface; MINOR ABI addition).
     virtual void SetSubtitleStyle(const SubtitleStyle& style) noexcept = 0;
+
+    // ── Audio preferences ─────────────────────────────────────────────────────
+    // Platform playback devices. The first entry should be a synthetic default
+    // device with an empty name. The callback receives stack-local POD snapshots.
+    // Appended at the end (host-provided surface; MINOR ABI addition).
+    virtual void EnumerateAudioOutputDevices(
+        void (*visit)(const AudioOutputDevice* device, void* ud), void* ud
+    ) const noexcept = 0;
+
+    // Apply user audio output, track-selection and behavior preferences.
+    // Appended at the end (host-provided surface; MINOR ABI addition).
+    virtual void SetAudioPreferences(const AudioPreferences& prefs) noexcept = 0;
 };

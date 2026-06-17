@@ -8,7 +8,10 @@ extern "C"
 
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <vector>
+
+#include <framelift/platform/IMediaPlayer.h>
 
 struct AVFrame;
 struct SwrContext;
@@ -59,12 +62,16 @@ public:
     void SetPaused(bool paused);
     void SetVolume(int volume0to100); // applied as device gain unless muted
     void SetMute(bool muted);
+    void SetPreferences(const AudioPreferences& prefs);
+    void SetDucked(bool ducked);
+    void EnumerateDevices(void (*visit)(const AudioOutputDevice* device, void* ud), void* ud) const;
 
     void Flush(); // drop queued audio and reset the clock baseline (seek / restart)
     void Close();
 
 private:
     void ApplyGainLocked(); // push volume_/muted_ to the device (mutex_ held)
+    [[nodiscard]] int DesiredChannelsLocked() const;
 
     mutable std::mutex mutex_; // serialises all device + swr + clock access
     SDL_AudioStream* stream_ = nullptr;
@@ -78,4 +85,9 @@ private:
 
     int volume_ = 100; // 0–100, mirrors the player's canonical value
     bool muted_ = false;
+    std::string preferredDevice_;
+    AudioChannelMode channelMode_ = AudioChannelMode::Auto;
+    bool duckingEnabled_ = false;
+    int duckingLevel_ = 50;
+    bool ducked_ = false;
 };

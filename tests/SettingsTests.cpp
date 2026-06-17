@@ -106,6 +106,36 @@ TEST(SettingsTest, ReadAheadCacheLoadAndRoundTrip)
     EXPECT_EQ(s2.readAheadSizeMB, 256);
 }
 
+TEST(SettingsTest, AudioPreferencesLoadAndRoundTrip)
+{
+    const TempFile f("[audio]\ndefaultAudioLanguage=jpn\noutputDevice=Headphones\ndefaultVolume=72\nsyncOffsetMs=-125\n"
+                     "channelMode=2\nduckingEnabled=1\nduckingLevel=35\nnormalizeEnabled=1\n");
+
+    Settings s;
+    s.Load(f.str());
+    EXPECT_EQ(s.defaultAudioLanguage, "jpn");
+    EXPECT_EQ(s.outputDevice, "Headphones");
+    EXPECT_EQ(s.defaultVolume, 72);
+    EXPECT_EQ(s.syncOffsetMs, -125);
+    EXPECT_EQ(s.channelMode, 2);
+    EXPECT_TRUE(s.duckingEnabled);
+    EXPECT_EQ(s.duckingLevel, 35);
+    EXPECT_TRUE(s.normalizeEnabled);
+
+    const TempFile out;
+    s.Save(out.str());
+    Settings s2;
+    s2.Load(out.str());
+    EXPECT_EQ(s2.defaultAudioLanguage, "jpn");
+    EXPECT_EQ(s2.outputDevice, "Headphones");
+    EXPECT_EQ(s2.defaultVolume, 72);
+    EXPECT_EQ(s2.syncOffsetMs, -125);
+    EXPECT_EQ(s2.channelMode, 2);
+    EXPECT_TRUE(s2.duckingEnabled);
+    EXPECT_EQ(s2.duckingLevel, 35);
+    EXPECT_TRUE(s2.normalizeEnabled);
+}
+
 TEST(SettingsTest, MissingKeysKeepDefaults)
 {
     const TempFile f("[ui]\npanelWidth=400\n");

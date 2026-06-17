@@ -63,6 +63,8 @@ public:
     void SetPlaybackOptions(const PlaybackOptions& opts) noexcept override;
     void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept override;
     void SetSubtitleStyle(const SubtitleStyle& style) noexcept override;
+    void SetAudioPreferences(const AudioPreferences& prefs) noexcept override;
+    void SetAudioDucked(bool ducked) noexcept;
 
     void ToggleSubtitles() noexcept override;
     void CycleSubtitleTrack() noexcept override;
@@ -100,6 +102,7 @@ public:
 
     [[nodiscard]] MediaEvent PollEvent() noexcept override;
     void SetWakeupCallback(void (*cb)(void*), void* ud) noexcept override;
+    void EnumerateAudioOutputDevices(void (*visit)(const AudioOutputDevice*, void*), void* ud) const noexcept override;
 
     void InitRender(void* graphicsBackend) noexcept override;
     void SetRenderUpdateCallback(void (*cb)(void*), void* ud) noexcept override;
@@ -168,6 +171,7 @@ private:
         bool external = false;
         bool selected = false;
         std::string label;
+        std::string language;
     };
 
     // A fuzzy-matched sidecar file discovered next to the media (Phase 5 auto-load).
@@ -363,4 +367,6 @@ private:
     // behavior fields (preferredLang/preferForced) drive BuildTrackList. Guarded by
     // tracksMutex_ for the behavior fields read on the decode thread.
     SubtitleStyle subtitleStyle_{};
+    AudioPreferences audioPrefs_{};
+    std::atomic<int> audioSyncOffsetMs_{0};
 };

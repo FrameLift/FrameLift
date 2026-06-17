@@ -1,4 +1,5 @@
 #include "SettingsMapping.h"
+#include "platform/ffmpeg/FFmpegAudioOptions.h"
 
 #include <gtest/gtest.h>
 
@@ -21,6 +22,48 @@ TEST(SettingsMappingTest, AudioParamsTrackEditedSettings)
     const AudioNormalizeParams p = ParamsFromSettings(s);
     EXPECT_EQ(p.frameLen, 321);
     EXPECT_FLOAT_EQ(p.volume, 2.25f);
+}
+
+TEST(SettingsMappingTest, AudioPreferencesMapDefaults)
+{
+    const Settings s;
+    const AudioPreferences p = AudioPrefsFromSettings(s);
+    EXPECT_STREQ(p.preferredLang, "");
+    EXPECT_STREQ(p.outputDevice, "");
+    EXPECT_EQ(p.defaultVolume, 100);
+    EXPECT_EQ(p.syncOffsetMs, 0);
+    EXPECT_EQ(p.channelMode, AudioChannelMode::Auto);
+    EXPECT_FALSE(p.duckingEnabled);
+    EXPECT_EQ(p.duckingLevel, 50);
+}
+
+TEST(SettingsMappingTest, AudioPreferencesClampAndCopyFields)
+{
+    Settings s;
+    s.defaultAudioLanguage = "english-too-long";
+    s.outputDevice = "Headphones";
+    s.defaultVolume = 150;
+    s.syncOffsetMs = -125;
+    s.channelMode = 99;
+    s.duckingEnabled = true;
+    s.duckingLevel = -5;
+
+    const AudioPreferences p = AudioPrefsFromSettings(s);
+    EXPECT_STREQ(p.preferredLang, "english");
+    EXPECT_STREQ(p.outputDevice, "Headphones");
+    EXPECT_EQ(p.defaultVolume, 100);
+    EXPECT_EQ(p.syncOffsetMs, -125);
+    EXPECT_EQ(p.channelMode, AudioChannelMode::Surround);
+    EXPECT_TRUE(p.duckingEnabled);
+    EXPECT_EQ(p.duckingLevel, 0);
+}
+
+TEST(SettingsMappingTest, AudioChannelModeMapsToOutputChannels)
+{
+    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Auto), 2);
+    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Mono), 1);
+    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Stereo), 2);
+    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Surround), 6);
 }
 
 TEST(SettingsMappingTest, PlaybackOptionsMapBooleans)

@@ -40,6 +40,12 @@ TEST(PluginAbiTest, PatchDoesNotAffectDecision)
     EXPECT_TRUE(FrameLiftAbiCompatible(info.abiMajor, info.abiMinor, FRAMELIFT_PLUGIN_ABI_MAJOR, FRAMELIFT_PLUGIN_ABI_MINOR));
 }
 
+TEST(PluginAbiTest, AudioPreferencesAreMinorTwo)
+{
+    EXPECT_EQ(FRAMELIFT_PLUGIN_ABI_MAJOR, 2);
+    EXPECT_EQ(FRAMELIFT_PLUGIN_ABI_MINOR, 2);
+}
+
 TEST(PluginAbiTest, OptionalMetadataDefaultsToNull)
 {
     // Omitting publisher/description leaves them null (aggregate value-init).
