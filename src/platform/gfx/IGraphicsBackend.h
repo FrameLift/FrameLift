@@ -5,6 +5,7 @@
 
 #include "GraphicsApi.h"
 #include "IVideoRenderer.h"
+#include "VulkanDeviceInfo.h"
 
 struct SDL_Window;
 
@@ -47,6 +48,17 @@ public:
     // Vulkan. Used by UIContextImpl for plugin icons (UIContext::LoadTexture*). The
     // backend owns the resource and frees it on shutdown. Returns 0 on failure.
     [[nodiscard]] virtual uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) = 0;
+
+    // Fill `out` with the live Vulkan instance/device/queues so the FFmpeg Vulkan
+    // hwaccel can WRAP this device for zero-copy decode (Phase 3, #18). Returns false
+    // for non-Vulkan backends (the default) — the caller then uses the CPU-RGBA8 path.
+    // Stays Vulkan-type-free (VulkanDeviceInfo is a neutral POD) so the FFmpeg side can
+    // call it without pulling in volk.
+    [[nodiscard]] virtual bool GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noexcept
+    {
+        (void)out;
+        return false;
+    }
 
     // ── Presentation ──────────────────────────────────────────────────────────
     [[nodiscard]] virtual void* GetProcAddr(const char* name) const = 0;

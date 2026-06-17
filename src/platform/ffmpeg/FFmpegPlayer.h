@@ -23,6 +23,8 @@
 struct AVCodecContext;
 struct AVStream;
 struct AVFormatContext;
+struct AVFrame;
+struct AVBufferRef;
 
 class FFmpegAudioOutput;
 class FFmpegPacketQueue;
@@ -219,6 +221,13 @@ private:
     std::unique_ptr<IVideoRenderer> renderer_;
     bool rendererReady_ = false;
 
+    // Zero-copy Vulkan decode (#18). vkHwDevice_ is an AV_HWDEVICE_TYPE_VULKAN context
+    // WRAPPING the renderer's Vulkan device, built once in InitRender and reused per
+    // file; null on non-Vulkan backends / when video-decode is unsupported (then the
+    // CPU-RGBA8 path runs). vulkanZeroCopyAvailable_ gates per-file selection in PlayFile.
+    AVBufferRef* vkHwDevice_ = nullptr;
+    bool vulkanZeroCopyAvailable_ = false;
+
     std::thread decodeThread_;
     std::mutex mutex_; // guards the command/event state below + drives cv_
     std::condition_variable cv_;
@@ -264,6 +273,14 @@ private:
     int pendingH_ = 0;
     bool pendingValid_ = false;
     std::atomic<bool> newFramePending_{false};
+    // Zero-copy path: instead of the RGBA buffers, the decode thread hands a ref'd
+    // AVFrame (carrying an AVVkFrame) to the render thread. pendingVkFrame_ is guarded by
+    // frameMutex_; displayVkFrame_ is render-thread-owned. pendingIsVulkan_ distinguishes
+    // which pending channel is live (a file is one path or the other for its lifetime).
+    AVFrame* pendingVkFrame_ = nullptr;
+    AVFrame* displayVkFrame_ = nullptr;
+    bool pendingIsVulkan_ = false;
+    bool displayIsVulkan_ = false; // render-thread-owned: last frame handed to the renderer
 
     // Observable / queryable state.
     std::atomic<int64_t> displayWidth_{0};

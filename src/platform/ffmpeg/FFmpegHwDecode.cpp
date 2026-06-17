@@ -115,6 +115,48 @@ bool FFmpegHwDecode::TryEnable(const AVCodec* codec, AVCodecContext* dec)
     return false; // no backend available — caller decodes in software
 }
 
+bool FFmpegHwDecode::TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, AVBufferRef* vkDevice)
+{
+    if (!codec || !dec || !vkDevice)
+    {
+        return false;
+    }
+
+    // Does this codec advertise a Vulkan hw-device-ctx decode config?
+    AVPixelFormat pixFmt = AV_PIX_FMT_NONE;
+    for (int i = 0;; ++i)
+    {
+        const AVCodecHWConfig* cfg = avcodec_get_hw_config(codec, i);
+        if (!cfg)
+        {
+            break;
+        }
+        if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 &&
+            cfg->device_type == AV_HWDEVICE_TYPE_VULKAN)
+        {
+            pixFmt = cfg->pix_fmt; // AV_PIX_FMT_VULKAN
+            break;
+        }
+    }
+    if (pixFmt == AV_PIX_FMT_NONE)
+    {
+        return false; // codec can't be Vulkan-decoded — caller falls back
+    }
+
+    // Wrap the renderer's device (one ref kept here for cleanup, one for the decoder).
+    // FFmpeg auto-allocates the AVVkFrame pool (multiplane by default) when get_format
+    // returns AV_PIX_FMT_VULKAN.
+    device_ = av_buffer_ref(vkDevice);
+    hwPixFmt_ = pixFmt;
+    deviceName_ = "vulkan";
+    isVulkan_ = true;
+    dec->hw_device_ctx = av_buffer_ref(device_);
+    dec->opaque = this;
+    dec->get_format = GetFormatCb;
+    Log::Info("FFmpegHwDecode: zero-copy Vulkan video decode");
+    return true;
+}
+
 AVFrame* FFmpegHwDecode::MapToSoftware(AVFrame* src, AVFrame* dst)
 {
     if (!src || src->format != hwPixFmt_)

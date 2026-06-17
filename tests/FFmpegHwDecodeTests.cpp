@@ -48,6 +48,7 @@ TEST(FFmpegHwDecodeTests, BackendNamesMatchHwaccelStrings)
 {
     // Benchmark.cpp treats empty/"no"/"N/A" as software and shows "Hardware (<name>)"
     // otherwise — these names must be non-empty for every real backend.
+    EXPECT_STREQ(HwBackendName(HwBackend::Vulkan), "vulkan");
     EXPECT_STREQ(HwBackendName(HwBackend::Cuda), "cuda");
     EXPECT_STREQ(HwBackendName(HwBackend::D3D11VA), "d3d11va");
     EXPECT_STREQ(HwBackendName(HwBackend::DXVA2), "dxva2");

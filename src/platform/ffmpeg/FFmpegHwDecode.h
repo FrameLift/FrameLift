@@ -25,6 +25,7 @@ struct AVBufferRef;
 enum class HwBackend : int
 {
     None,
+    Vulkan,  // zero-copy decode onto the renderer's device — AV_HWDEVICE_TYPE_VULKAN (#18)
     Cuda,    // NVIDIA nvdec/cuvid — AV_HWDEVICE_TYPE_CUDA
     D3D11VA, // Windows, cross-vendor — AV_HWDEVICE_TYPE_D3D11VA
     DXVA2,   // Windows legacy fallback — AV_HWDEVICE_TYPE_DXVA2
@@ -48,6 +49,8 @@ inline const char* HwBackendName(HwBackend backend)
 {
     switch (backend)
     {
+    case HwBackend::Vulkan:
+        return "vulkan";
     case HwBackend::Cuda:
         return "cuda";
     case HwBackend::D3D11VA:
@@ -78,9 +81,24 @@ public:
     // caller decodes in software. Never throws / blocks.
     bool TryEnable(const AVCodec* codec, AVCodecContext* dec);
 
+    // Zero-copy variant (#18): arm `dec` for AV_HWDEVICE_TYPE_VULKAN, WRAPPING the
+    // renderer's already-created device (`vkDevice`, owned by the caller) so decoded
+    // AVVkFrames live on the render device and never read back. Returns false (leaving
+    // `dec` pristine) if the codec can't Vulkan-decode, so the caller tries the readback
+    // backends or software. Decoded frames keep ->format == AV_PIX_FMT_VULKAN and must
+    // NOT go through MapToSoftware.
+    bool TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, AVBufferRef* vkDevice);
+
     [[nodiscard]] bool Active() const
     {
         return device_ != nullptr;
+    }
+
+    // True when the active backend is the zero-copy Vulkan path (frames are AVVkFrames
+    // handed to the Vulkan renderer, not downloaded).
+    [[nodiscard]] bool IsVulkan() const
+    {
+        return isVulkan_;
     }
 
     // The negotiated hardware pixel format (AVPixelFormat as int), or AV_PIX_FMT_NONE.
@@ -105,4 +123,5 @@ private:
     AVBufferRef* device_ = nullptr;
     int hwPixFmt_ = -1; // AV_PIX_FMT_NONE
     const char* deviceName_ = "no";
+    bool isVulkan_ = false;
 };
