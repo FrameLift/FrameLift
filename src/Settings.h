@@ -18,6 +18,22 @@
     X(playback, videoSync,          bool,        true,  "Synchronize video timing to the display refresh.") \
     X(playback, subAutoLoad,        bool,        true,  "Auto-load subtitle files matching the opened media.") \
     X(playback, audioFileAutoLoad,  bool,        true,  "Auto-load external audio files matching the opened media.") \
+    /* ── Subtitles ────────────────────────────────────────────────────────── */ \
+    X(subtitles, overrideStyle,     bool,        false, "Override the subtitle file's own styling with the settings below.") \
+    X(subtitles, fontScale,         float,       1.0f,  "Subtitle font-size multiplier (1.0 = the file's default size).") \
+    X(subtitles, fontFamily,        std::string, "",    "Subtitle font family; empty keeps the file's font.") \
+    X(subtitles, textColor,         std::string, "#FFFFFF", "Subtitle text colour as #RRGGBB.") \
+    X(subtitles, outlineColor,      std::string, "#000000", "Subtitle outline colour as #RRGGBB.") \
+    X(subtitles, backColor,         std::string, "#000000", "Subtitle shadow / box background colour as #RRGGBB.") \
+    X(subtitles, backOpacity,       float,       0.5f,  "Opacity of the shadow / box background (0.0-1.0).") \
+    X(subtitles, edgeStyle,         int,         1,     "Edge style: 0 none, 1 outline, 2 drop shadow, 3 opaque box.") \
+    X(subtitles, outlineWidth,      float,       2.0f,  "Outline thickness in pixels.") \
+    X(subtitles, shadowDepth,       float,       0.0f,  "Drop-shadow offset in pixels.") \
+    X(subtitles, alignment,         int,         2,     "Numpad alignment 1-9 (\\an); 0 keeps the file's alignment.") \
+    X(subtitles, lineSpacing,       float,       0.0f,  "Extra space between subtitle lines, pixels.") \
+    X(subtitles, letterSpacing,     float,       0.0f,  "Extra space between glyphs, pixels.") \
+    X(subtitles, defaultLanguage,   std::string, "",    "Preferred subtitle language to auto-select (ISO 639 code, e.g. eng).") \
+    X(subtitles, preferForced,      bool,        false, "Prefer a forced subtitle track when one is available.") \
     /* ── Cache ────────────────────────────────────────────────────────────── */ \
     X(cache,    readAheadEnabled,   bool,        true,  "Enable the memory-bounded demuxer read-ahead cache.") \
     X(cache,    readAheadSizeMB,    int,           64,  "Read-ahead demuxer cache size in MB (total across audio/video/subtitle).") \

@@ -22,8 +22,9 @@
 // MAJOR 2: the host↔player/window rendering hand-off was generalized for the Vulkan
 // backend — IMediaPlayer::InitRender now takes an opaque graphics-backend handle (was
 // a GL proc loader), IAppWindow drops GetGLProcAddr and gains BeginFrame/GetGraphicsBackend.
+// MINOR 1: appended IMediaPlayer::SetSubtitleStyle (user-configurable subtitle settings).
 #define FRAMELIFT_PLUGIN_ABI_MAJOR 2
-#define FRAMELIFT_PLUGIN_ABI_MINOR 0
+#define FRAMELIFT_PLUGIN_ABI_MINOR 1
 #define FRAMELIFT_PLUGIN_ABI_PATCH 0
 
 // POD identity + ABI descriptor a plugin exports via framelift_plugin_info(). The

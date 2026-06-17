@@ -251,6 +251,84 @@ void FFmpegSubtitles::ClearTrack()
     }
 }
 
+void FFmpegSubtitles::ApplyStyle(const SubtitleStyle& style)
+{
+    std::lock_guard lock(mutex_);
+    style_ = style;
+    forceNextUpdate_ = true; // re-rasterize the current frame on the next render
+    ApplyStyleLocked();
+}
+
+void FFmpegSubtitles::ApplyStyleLocked()
+{
+    if (!renderer_)
+    {
+        return;
+    }
+
+    if (!style_.overrideEnabled)
+    {
+        // Use the file's embedded styling verbatim.
+        ass_set_selective_style_override_enabled(renderer_, 0);
+        ass_set_font_scale(renderer_, 1.0);
+        ass_set_line_spacing(renderer_, 0.0);
+        return;
+    }
+
+    // Override applies on top of the track's "Default" style (mpv's ass-override model).
+    ASS_Style ov{};
+    int bits = ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE;
+
+    if (style_.fontFamily[0] != '\0')
+    {
+        ov.FontName = const_cast<char*>(style_.fontFamily);
+        bits |= ASS_OVERRIDE_BIT_FONT_NAME;
+    }
+
+    ov.PrimaryColour = style_.textColor;
+    ov.OutlineColour = style_.outlineColor;
+    ov.BackColour = style_.backColor;
+    bits |= ASS_OVERRIDE_BIT_COLORS;
+
+    switch (style_.edgeStyle)
+    {
+    case SubtitleEdgeStyle::None:
+        ov.BorderStyle = 1;
+        ov.Outline = 0.0;
+        ov.Shadow = 0.0;
+        break;
+    case SubtitleEdgeStyle::Outline:
+        ov.BorderStyle = 1;
+        ov.Outline = style_.outlineWidth;
+        ov.Shadow = 0.0;
+        break;
+    case SubtitleEdgeStyle::DropShadow:
+        ov.BorderStyle = 1;
+        ov.Outline = style_.outlineWidth;
+        ov.Shadow = style_.shadowDepth;
+        break;
+    case SubtitleEdgeStyle::OpaqueBox:
+        ov.BorderStyle = 3;
+        ov.Outline = style_.outlineWidth;
+        ov.Shadow = style_.shadowDepth;
+        break;
+    }
+    bits |= ASS_OVERRIDE_BIT_BORDER;
+
+    if (style_.alignment >= 1 && style_.alignment <= 9)
+    {
+        ov.Alignment = style_.alignment;
+        bits |= ASS_OVERRIDE_BIT_ALIGNMENT;
+    }
+
+    ov.Spacing = style_.letterSpacing;
+
+    ass_set_selective_style_override(renderer_, &ov);
+    ass_set_selective_style_override_enabled(renderer_, bits);
+    ass_set_font_scale(renderer_, style_.fontScale > 0.f ? style_.fontScale : 1.0);
+    ass_set_line_spacing(renderer_, style_.lineSpacing);
+}
+
 FFmpegSubtitles::RenderResult FFmpegSubtitles::RenderOverlay(int vpW, int vpH, int storageW, int storageH,
                                                              long long timeMs, std::vector<unsigned char>& outRgba)
 {
@@ -272,7 +350,9 @@ FFmpegSubtitles::RenderResult FFmpegSubtitles::RenderOverlay(int vpW, int vpH, i
     {
         return RenderResult::None;
     }
-    if (changed == 0 && outRgba.size() == static_cast<size_t>(vpW) * vpH * 4)
+    const bool forced = forceNextUpdate_;
+    forceNextUpdate_ = false;
+    if (!forced && changed == 0 && outRgba.size() == static_cast<size_t>(vpW) * vpH * 4)
     {
         // Identical to the previous frame and our buffer still matches — let the
         // caller reuse the already-uploaded texture.

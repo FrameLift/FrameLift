@@ -67,6 +67,10 @@ public:
     {
     }
 
+    void SetSubtitleStyle(const SubtitleStyle&) noexcept override
+    {
+    }
+
     // ── Tracks ─────────────────────────────────────────────────────────────────
     void EnumerateSubtitleTracks(void (*)(const SubtitleTrack*, void*), void*) const noexcept override
     {
