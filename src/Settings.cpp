@@ -1,10 +1,13 @@
 ﻿#include "Settings.h"
 
+#include "platform/ffmpeg/VideoDecodeMode.h"
+
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -65,8 +68,13 @@ Field MakeField(const char* key, const char* desc, bool Settings::* m)
         {
             s.*m = (v == "1");
         },
-        [m](const Settings& s)
+        [key, m](const Settings& s)
         {
+            if (std::string_view(key) == "playback.hwdec")
+            {
+                const VideoDecodeMode mode = s.hwdec ? VideoDecodeModeFromString(s.hwdecMode) : VideoDecodeMode::Off;
+                return std::string(IsVideoDecodeModeEnabled(mode) ? "1" : "0");
+            }
             return std::string(s.*m ? "1" : "0");
         }
     };
@@ -81,8 +89,13 @@ Field MakeField(const char* key, const char* desc, std::string Settings::* m)
         {
             s.*m = v;
         },
-        [m](const Settings& s)
+        [key, m](const Settings& s)
         {
+            if (std::string_view(key) == "playback.hwdecMode")
+            {
+                const VideoDecodeMode mode = s.hwdec ? VideoDecodeModeFromString(s.*m) : VideoDecodeMode::Off;
+                return std::string(VideoDecodeModeName(mode));
+            }
             return s.*m;
         }
     };
@@ -162,6 +175,8 @@ void Settings::Load(const std::string& path)
     const auto& map = FieldMap();
     std::string section;
     std::string line;
+    bool sawPlaybackHwdecMode = false;
+    bool sawPlaybackHwdec = false;
     while (std::getline(file, line))
     {
         if (line.empty() || line.front() == '#')
@@ -188,6 +203,15 @@ void Settings::Load(const std::string& path)
         const std::string key = section + '.' + line.substr(0, eq);
         const std::string val = line.substr(eq + 1);
 
+        if (key == "playback.hwdecMode")
+        {
+            sawPlaybackHwdecMode = true;
+        }
+        else if (key == "playback.hwdec")
+        {
+            sawPlaybackHwdec = true;
+        }
+
         // Handle enabledPlugins separately — not in the X-macro field table.
         if (key == "plugins.enabled")
         {
@@ -208,6 +232,21 @@ void Settings::Load(const std::string& path)
         catch (...)
         {
         }
+    }
+
+    if (sawPlaybackHwdecMode)
+    {
+        hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(hwdecMode));
+        hwdec = IsVideoDecodeModeEnabled(VideoDecodeModeFromString(hwdecMode));
+    }
+    else if (sawPlaybackHwdec && !hwdec)
+    {
+        hwdecMode = VideoDecodeModeName(VideoDecodeMode::Off);
+    }
+    else
+    {
+        hwdecMode = VideoDecodeModeName(VideoDecodeMode::Auto);
+        hwdec = true;
     }
 }
 

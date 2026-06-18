@@ -5,6 +5,7 @@
 // is verified manually via the DebugOverlay/Benchmark plugins.
 
 #include "platform/ffmpeg/FFmpegHwDecode.h"
+#include "platform/ffmpeg/VideoDecodeMode.h"
 
 #include <gtest/gtest.h>
 
@@ -66,4 +67,39 @@ TEST(FFmpegHwDecodeTests, EveryPreferredBackendHasANonEmptyName)
     {
         EXPECT_STRNE(HwBackendName(b), "");
     }
+}
+
+TEST(FFmpegHwDecodeTests, VideoDecodeModeNamesRoundTrip)
+{
+    for (const VideoDecodeMode mode : {VideoDecodeMode::Off, VideoDecodeMode::Auto, VideoDecodeMode::VulkanZeroCopy,
+                                       VideoDecodeMode::Vulkan, VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda,
+                                       VideoDecodeMode::D3D11VA, VideoDecodeMode::DXVA2, VideoDecodeMode::VAAPI})
+    {
+        EXPECT_EQ(VideoDecodeModeFromString(VideoDecodeModeName(mode)), mode);
+    }
+}
+
+TEST(FFmpegHwDecodeTests, InvalidVideoDecodeModeDefaultsToAuto)
+{
+    EXPECT_EQ(VideoDecodeModeFromString("bogus"), VideoDecodeMode::Auto);
+}
+
+TEST(FFmpegHwDecodeTests, PlainDecodeModesMapToReadbackBackends)
+{
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::Vulkan), HwBackend::Vulkan);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::Cuda), HwBackend::Cuda);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::D3D11VA), HwBackend::D3D11VA);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::DXVA2), HwBackend::DXVA2);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::VAAPI), HwBackend::VAAPI);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::VulkanZeroCopy), HwBackend::None);
+    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::CudaZeroCopy), HwBackend::None);
+}
+
+TEST(FFmpegHwDecodeTests, AutoModePrefersGpuResidentModesBeforeReadback)
+{
+    const auto order = AutoVideoDecodePreference();
+    ASSERT_GE(order.size(), 4u);
+    EXPECT_EQ(order[0], VideoDecodeMode::VulkanZeroCopy);
+    EXPECT_EQ(order[1], VideoDecodeMode::CudaZeroCopy);
+    EXPECT_EQ(order[2], VideoDecodeMode::Cuda);
 }

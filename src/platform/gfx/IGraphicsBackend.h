@@ -38,6 +38,13 @@ public:
     // Human-readable name of the active API ("OpenGL" / "Vulkan"), for diagnostics.
     [[nodiscard]] virtual const char* Name() const = 0;
 
+    // True when the active graphics adapter is NVIDIA. Host-internal diagnostic/
+    // settings hint used to expose CUDA-only decode modes only when they can work.
+    [[nodiscard]] virtual bool HasNvidiaAdapter() const noexcept
+    {
+        return false;
+    }
+
     // Create the video renderer paired with this backend (GlVideoRenderer for the GL
     // backend, VulkanVideoRenderer for Vulkan). The player owns the returned renderer
     // and calls IVideoRenderer::Init(this) on it.

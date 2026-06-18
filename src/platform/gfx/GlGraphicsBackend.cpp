@@ -9,6 +9,8 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 
+#include <cstring>
+
 #ifdef _WIN32
 // <GL/gl.h> needs the WINGDIAPI/APIENTRY macros from windows.h on MSVC/MinGW.
 #ifndef WIN32_LEAN_AND_MEAN
@@ -46,6 +48,12 @@ void GlGraphicsBackend::OnWindowCreated(SDL_Window* window)
 
     glClearColor_ = reinterpret_cast<decltype(glClearColor_)>(SDL_GL_GetProcAddress("glClearColor"));
     glClear_ = reinterpret_cast<decltype(glClear_)>(SDL_GL_GetProcAddress("glClear"));
+
+    if (const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR)))
+    {
+        nvidiaAdapter_ = std::strstr(vendor, "NVIDIA") != nullptr || std::strstr(vendor, "Nvidia") != nullptr ||
+                         std::strstr(vendor, "nvidia") != nullptr;
+    }
 }
 
 void GlGraphicsBackend::Shutdown()

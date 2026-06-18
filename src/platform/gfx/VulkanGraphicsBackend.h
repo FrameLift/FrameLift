@@ -38,6 +38,7 @@ public:
     void OnWindowCreated(SDL_Window* window) override;
     void Shutdown() override;
     [[nodiscard]] const char* Name() const override { return "Vulkan"; }
+    [[nodiscard]] bool HasNvidiaAdapter() const noexcept override { return nvidiaAdapter_; }
 
     [[nodiscard]] std::unique_ptr<IVideoRenderer> CreateVideoRenderer() override;
     [[nodiscard]] uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) override;
@@ -114,6 +115,7 @@ private:
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
+    bool nvidiaAdapter_ = false;
     VkQueue graphicsQueue_ = VK_NULL_HANDLE;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     uint32_t presentQueueFamily_ = 0;

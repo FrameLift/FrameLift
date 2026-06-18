@@ -14,6 +14,7 @@
     X(general,  maxDisplayRatio,    float,       0.8f,  "Max fraction of the screen used when auto-sizing the window to the video (0.0-1.0).") \
     /* ── Playback ────────────────────────────────────────────────────────── */ \
     X(playback, hwdec,              bool,        true,  "Enable hardware video decoding.") \
+    X(playback, hwdecMode,          std::string, "auto",  "Video acceleration mode: off, auto, vulkan-zero-copy, vulkan, cuda-zero-copy, cuda, d3d11va, dxva2, or vaapi.") \
     X(playback, hrSeek,             bool,        true,  "Use precise (high-resolution) seeking.") \
     X(playback, videoSync,          bool,        true,  "Synchronize video timing to the display refresh.") \
     X(playback, subAutoLoad,        bool,        true,  "Auto-load subtitle files matching the opened media.") \

@@ -16,6 +16,8 @@ AVHWDeviceType ToDeviceType(HwBackend backend)
 {
     switch (backend)
     {
+    case HwBackend::Vulkan:
+        return AV_HWDEVICE_TYPE_VULKAN;
     case HwBackend::Cuda:
         return AV_HWDEVICE_TYPE_CUDA;
     case HwBackend::D3D11VA:
@@ -68,51 +70,63 @@ bool FFmpegHwDecode::TryEnable(const AVCodec* codec, AVCodecContext* dec)
 
     for (const HwBackend backend : PreferredHwBackends())
     {
-        const AVHWDeviceType type = ToDeviceType(backend);
-        if (type == AV_HWDEVICE_TYPE_NONE)
+        if (TryEnableBackend(codec, dec, backend))
         {
-            continue;
+            return true;
         }
-
-        // Does this codec advertise a hw-device-ctx config for this device type?
-        AVPixelFormat pixFmt = AV_PIX_FMT_NONE;
-        for (int i = 0;; ++i)
-        {
-            const AVCodecHWConfig* cfg = avcodec_get_hw_config(codec, i);
-            if (!cfg)
-            {
-                break;
-            }
-            if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 && cfg->device_type == type)
-            {
-                pixFmt = cfg->pix_fmt;
-                break;
-            }
-        }
-        if (pixFmt == AV_PIX_FMT_NONE)
-        {
-            continue; // codec can't use this backend
-        }
-
-        AVBufferRef* device = nullptr;
-        const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
-        if (err < 0 || !device)
-        {
-            // Device unavailable (no driver / no GPU) — try the next backend.
-            continue;
-        }
-
-        device_ = device;
-        hwPixFmt_ = pixFmt;
-        deviceName_ = HwBackendName(backend);
-        dec->hw_device_ctx = av_buffer_ref(device_);
-        dec->opaque = this;
-        dec->get_format = GetFormatCb;
-        Log::Info("FFmpegHwDecode: hardware decode via {}", deviceName_);
-        return true;
     }
 
     return false; // no backend available — caller decodes in software
+}
+
+bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend)
+{
+    if (!codec || !dec)
+    {
+        return false;
+    }
+
+    const AVHWDeviceType type = ToDeviceType(backend);
+    if (type == AV_HWDEVICE_TYPE_NONE)
+    {
+        return false;
+    }
+
+    // Does this codec advertise a hw-device-ctx config for this device type?
+    AVPixelFormat pixFmt = AV_PIX_FMT_NONE;
+    for (int i = 0;; ++i)
+    {
+        const AVCodecHWConfig* cfg = avcodec_get_hw_config(codec, i);
+        if (!cfg)
+        {
+            break;
+        }
+        if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 && cfg->device_type == type)
+        {
+            pixFmt = cfg->pix_fmt;
+            break;
+        }
+    }
+    if (pixFmt == AV_PIX_FMT_NONE)
+    {
+        return false; // codec can't use this backend
+    }
+
+    AVBufferRef* device = nullptr;
+    const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
+    if (err < 0 || !device)
+    {
+        return false; // device unavailable (no driver / no GPU)
+    }
+
+    device_ = device;
+    hwPixFmt_ = pixFmt;
+    deviceName_ = HwBackendName(backend);
+    dec->hw_device_ctx = av_buffer_ref(device_);
+    dec->opaque = this;
+    dec->get_format = GetFormatCb;
+    Log::Info("FFmpegHwDecode: hardware decode via {}", deviceName_);
+    return true;
 }
 
 bool FFmpegHwDecode::TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, AVBufferRef* vkDevice)
@@ -148,13 +162,24 @@ bool FFmpegHwDecode::TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, 
     // returns AV_PIX_FMT_VULKAN.
     device_ = av_buffer_ref(vkDevice);
     hwPixFmt_ = pixFmt;
-    deviceName_ = "vulkan";
-    isVulkan_ = true;
+    deviceName_ = "vulkan-zero-copy";
+    isVulkanZeroCopy_ = true;
     dec->hw_device_ctx = av_buffer_ref(device_);
     dec->opaque = this;
     dec->get_format = GetFormatCb;
     Log::Info("FFmpegHwDecode: zero-copy Vulkan video decode");
     return true;
+}
+
+bool FFmpegHwDecode::TryEnableCudaZeroCopy(const AVCodec* codec, AVCodecContext* dec, bool warn)
+{
+    (void)codec;
+    (void)dec;
+    if (warn)
+    {
+        Log::Warn("FFmpegHwDecode: CUDA zero-copy/no-readback renderer interop is not available in this build");
+    }
+    return false;
 }
 
 AVFrame* FFmpegHwDecode::MapToSoftware(AVFrame* src, AVFrame* dst)

@@ -14,6 +14,7 @@ TEST(SettingsTest, DefaultsAreSane)
     const Settings s;
     EXPECT_FLOAT_EQ(s.maxDisplayRatio, 0.8f);
     EXPECT_TRUE(s.hwdec);
+    EXPECT_EQ(s.hwdecMode, "auto");
     EXPECT_FLOAT_EQ(s.panelWidth, 320.f);
     EXPECT_EQ(s.dynaudnormFrameLen, 100);
     EXPECT_EQ(s.videoExtensions.rfind("mp4", 0), 0u); // starts with "mp4"
@@ -77,6 +78,7 @@ dynaudnormFrameLen=250
 
     EXPECT_FLOAT_EQ(s.maxDisplayRatio, 0.5f);
     EXPECT_FALSE(s.hwdec);
+    EXPECT_EQ(s.hwdecMode, "off");
     EXPECT_FLOAT_EQ(s.panelWidth, 500.f);
     EXPECT_EQ(s.videoExtensions, "avi;mov");
     EXPECT_EQ(s.dynaudnormFrameLen, 250);
@@ -230,6 +232,43 @@ TEST(SettingsTest, BoolFieldOnlyOneIsTrue)
     EXPECT_TRUE(s.hwdec);
 }
 
+TEST(SettingsTest, HwdecModeOverridesLegacyBool)
+{
+    const TempFile f("[playback]\nhwdec=0\nhwdecMode=cuda\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    EXPECT_TRUE(s.hwdec);
+    EXPECT_EQ(s.hwdecMode, "cuda");
+}
+
+TEST(SettingsTest, InvalidHwdecModeNormalizesToAuto)
+{
+    const TempFile f("[playback]\nhwdecMode=definitely-not-a-mode\n");
+
+    Settings s;
+    s.Load(f.str());
+
+    EXPECT_TRUE(s.hwdec);
+    EXPECT_EQ(s.hwdecMode, "auto");
+}
+
+TEST(SettingsTest, SaveSynchronizesLegacyHwdecFromMode)
+{
+    const TempFile f;
+    Settings s;
+    s.hwdec = true;
+    s.hwdecMode = "off";
+    s.Save(f.str());
+
+    Settings loaded;
+    loaded.Load(f.str());
+
+    EXPECT_FALSE(loaded.hwdec);
+    EXPECT_EQ(loaded.hwdecMode, "off");
+}
+
 TEST(SettingsTest, EmptyValueKeepsDefault)
 {
     const TempFile f("[ui]\npanelWidth=\n");
@@ -295,6 +334,7 @@ TEST(SettingsTest, SaveLoadRoundTrip)
     Settings s;
     s.maxDisplayRatio = 0.65f;
     s.hwdec = false;
+    s.hwdecMode = "off";
     s.panelWidth = 444.f;
     s.videoExtensions = "mkv;webm";
     s.dynaudnormFrameLen = 321;
@@ -307,6 +347,7 @@ TEST(SettingsTest, SaveLoadRoundTrip)
 
     EXPECT_FLOAT_EQ(loaded.maxDisplayRatio, 0.65f);
     EXPECT_FALSE(loaded.hwdec);
+    EXPECT_EQ(loaded.hwdecMode, "off");
     EXPECT_FLOAT_EQ(loaded.panelWidth, 444.f);
     EXPECT_EQ(loaded.videoExtensions, "mkv;webm");
     EXPECT_EQ(loaded.dynaudnormFrameLen, 321);

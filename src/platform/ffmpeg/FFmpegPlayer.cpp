@@ -257,22 +257,9 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         {
             avcodec_parameters_to_context(vDec, vStream->codecpar);
             vDec->pkt_timebase = vStream->time_base;
-            // Try hardware decode (issue #25); falls back cleanly to software on failure.
-            // hwaccel surfaces are single-frame, so don't multi-thread the decoder then.
-            // Prefer zero-copy Vulkan when the render backend offers it (#18), else fall
-            // back to the readback backends (CUDA/D3D11VA/VAAPI), else software.
-            if (hwdec_.load())
-            {
-                bool armed = false;
-                if (vulkanZeroCopyAvailable_ && vkHwDevice_)
-                {
-                    armed = hw.TryEnableVulkan(vCodec, vDec, vkHwDevice_);
-                }
-                if (!armed)
-                {
-                    hw.TryEnable(vCodec, vDec);
-                }
-            }
+            // Try the selected hardware decode mode; all modes fall back cleanly to
+            // software if the codec, device, or renderer interop path is unavailable.
+            (void)TryEnableHardwareDecode(vCodec, vDec, hw);
             vDec->thread_count = hw.Active() ? 1 : 0; // 0 = auto-detect for software decode
             if (avcodec_open2(vDec, vCodec, nullptr) == 0 && vDec->width > 0 && vDec->height > 0)
             {
@@ -813,7 +800,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         // Zero-copy Vulkan frames stay on the GPU — no download, handed off as an AVVkFrame
         // ref below. Other hardware frames live in GPU memory and are downloaded to a
         // software frame (carrying pts) before swscale. Software decode leaves f unchanged.
-        const bool vkFrame = hw && hw->IsVulkan() && decoded->format == hw->HwPixelFormat();
+        const bool vkFrame = hw && hw->IsVulkanZeroCopy() && decoded->format == hw->HwPixelFormat();
         AVFrame* f = decoded;
         if (!vkFrame && hw && hw->Active() && decoded->format == hw->HwPixelFormat())
         {
@@ -1703,6 +1690,63 @@ void FFmpegPlayer::SetPlaybackOptions(const PlaybackOptions& opts) noexcept
     hwdec_ = opts.hwdec;   // try hardware decode on the next load
     subAutoLoad_ = opts.subAutoLoad;
     audioFileAutoLoad_ = opts.audioFileAutoLoad;
+}
+
+void FFmpegPlayer::SetVideoDecodeMode(VideoDecodeMode mode) noexcept
+{
+    videoDecodeMode_ = mode;
+}
+
+bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext* dec, FFmpegHwDecode& hw)
+{
+    if (!hwdec_.load())
+    {
+        return false;
+    }
+
+    const auto tryMode = [&](VideoDecodeMode mode, bool warnUnavailable) -> bool
+    {
+        switch (mode)
+        {
+        case VideoDecodeMode::VulkanZeroCopy:
+            return vulkanZeroCopyAvailable_ && vkHwDevice_ && hw.TryEnableVulkan(codec, dec, vkHwDevice_);
+        case VideoDecodeMode::Vulkan:
+        case VideoDecodeMode::Cuda:
+        case VideoDecodeMode::D3D11VA:
+        case VideoDecodeMode::DXVA2:
+        case VideoDecodeMode::VAAPI:
+            return hw.TryEnableBackend(codec, dec, HwBackendFromVideoDecodeMode(mode));
+        case VideoDecodeMode::CudaZeroCopy:
+            return hw.TryEnableCudaZeroCopy(codec, dec, warnUnavailable);
+        case VideoDecodeMode::Off:
+        case VideoDecodeMode::Auto:
+            break;
+        }
+        return false;
+    };
+
+    const VideoDecodeMode mode = videoDecodeMode_.load();
+    if (mode == VideoDecodeMode::Off)
+    {
+        return false;
+    }
+    if (mode != VideoDecodeMode::Auto)
+    {
+        return tryMode(mode, true);
+    }
+
+    for (const VideoDecodeMode candidate : AutoVideoDecodePreference())
+    {
+        if (candidate == VideoDecodeMode::Off)
+        {
+            break;
+        }
+        if (tryMode(candidate, false))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void FFmpegPlayer::SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept

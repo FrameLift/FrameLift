@@ -12,8 +12,8 @@ struct AVBufferRef;
 // frames to system memory so the existing swscale → RGBA path is unchanged. One of
 // the few FFmpeg* files that may #include <libav*/...> (in the .cpp only).
 //
-// Decode-on-GPU + CPU readback: true zero-copy GL interop is deferred (the renderer
-// is a CPU-RGBA8 uploader); Vulkan video is the intended future path.
+// Decode-on-GPU + CPU readback is the default hardware path. Vulkan zero-copy can
+// instead wrap the renderer's device and hand AVVkFrames directly to the renderer.
 //
 // Lifetime: owned by FFmpegPlayer::PlayFile and passed by pointer into VideoWorker.
 // It must outlive the decoder it arms (the decoder frees through the device ctx), so
@@ -81,6 +81,10 @@ public:
     // caller decodes in software. Never throws / blocks.
     bool TryEnable(const AVCodec* codec, AVCodecContext* dec);
 
+    // Arm `dec` with exactly one hardware backend using the readback path. This is
+    // used by explicit user-selected modes such as "Vulkan" or "CUDA".
+    bool TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend);
+
     // Zero-copy variant (#18): arm `dec` for AV_HWDEVICE_TYPE_VULKAN, WRAPPING the
     // renderer's already-created device (`vkDevice`, owned by the caller) so decoded
     // AVVkFrames live on the render device and never read back. Returns false (leaving
@@ -89,6 +93,10 @@ public:
     // NOT go through MapToSoftware.
     bool TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, AVBufferRef* vkDevice);
 
+    // CUDA no-readback is a renderer interop path, not just a decoder flag. It is
+    // deliberately separate from TryEnableBackend(Cuda), which downloads to CPU.
+    bool TryEnableCudaZeroCopy(const AVCodec* codec, AVCodecContext* dec, bool warn);
+
     [[nodiscard]] bool Active() const
     {
         return device_ != nullptr;
@@ -96,9 +104,9 @@ public:
 
     // True when the active backend is the zero-copy Vulkan path (frames are AVVkFrames
     // handed to the Vulkan renderer, not downloaded).
-    [[nodiscard]] bool IsVulkan() const
+    [[nodiscard]] bool IsVulkanZeroCopy() const
     {
-        return isVulkan_;
+        return isVulkanZeroCopy_;
     }
 
     // The negotiated hardware pixel format (AVPixelFormat as int), or AV_PIX_FMT_NONE.
@@ -123,5 +131,5 @@ private:
     AVBufferRef* device_ = nullptr;
     int hwPixFmt_ = -1; // AV_PIX_FMT_NONE
     const char* deviceName_ = "no";
-    bool isVulkan_ = false;
+    bool isVulkanZeroCopy_ = false;
 };

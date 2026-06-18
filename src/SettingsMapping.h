@@ -2,6 +2,7 @@
 
 #include "Settings.h"
 #include "ThemeUtil.h"
+#include "platform/ffmpeg/VideoDecodeMode.h"
 #include <framelift/platform/IMediaPlayer.h>
 
 #include <algorithm>
@@ -18,7 +19,13 @@ inline AudioNormalizeParams ParamsFromSettings(const Settings& s)
 
 inline PlaybackOptions PlaybackOptsFromSettings(const Settings& s)
 {
-    return {s.hwdec, s.hrSeek, s.subAutoLoad, s.audioFileAutoLoad};
+    return {s.hwdec && IsVideoDecodeModeEnabled(VideoDecodeModeFromString(s.hwdecMode)), s.hrSeek, s.subAutoLoad,
+            s.audioFileAutoLoad};
+}
+
+inline VideoDecodeMode VideoDecodeModeFromSettings(const Settings& s)
+{
+    return s.hwdec ? VideoDecodeModeFromString(s.hwdecMode) : VideoDecodeMode::Off;
 }
 
 inline ReadAheadCacheOptions ReadAheadOptsFromSettings(const Settings& s)

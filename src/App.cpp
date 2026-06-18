@@ -98,6 +98,10 @@ App::App(const char* title, const int width, const int height, const int cliArgc
     // Playback options update when settings change.
     runtimeAudioPrefs_ = AudioPrefsFromSettings(settings_);
     player_->SetPlaybackOptions(PlaybackOptsFromSettings(settings_));
+    if (auto* ffmpeg = dynamic_cast<FFmpegPlayer*>(player_.get()))
+    {
+        ffmpeg->SetVideoDecodeMode(VideoDecodeModeFromSettings(settings_));
+    }
     player_->SetReadAheadCache(ReadAheadOptsFromSettings(settings_));
     player_->SetSubtitleStyle(SubtitleStyleFromSettings(settings_));
     player_->SetAudioPreferences(runtimeAudioPrefs_);
@@ -121,6 +125,10 @@ App::App(const char* title, const int width, const int height, const int cliArgc
         {
             const Settings& s = pluginCtx_->GetSettingsDirect();
             player_->SetPlaybackOptions(PlaybackOptsFromSettings(s));
+            if (auto* ffmpeg = dynamic_cast<FFmpegPlayer*>(player_.get()))
+            {
+                ffmpeg->SetVideoDecodeMode(VideoDecodeModeFromSettings(s));
+            }
             player_->SetReadAheadCache(ReadAheadOptsFromSettings(s));
             player_->SetSubtitleStyle(SubtitleStyleFromSettings(s));
             runtimeAudioPrefs_ = AudioPrefsFromSettings(s);

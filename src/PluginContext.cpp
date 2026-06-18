@@ -1,5 +1,6 @@
 #include "PluginContext.h"
 #include "Settings.h"
+#include "platform/ffmpeg/VideoDecodeMode.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -248,6 +249,10 @@ void PluginContext::CommitSettingBool(const char* key, bool value) noexcept
             }
         }
     );
+    if (std::strcmp(key, "playback.hwdec") == 0)
+    {
+        settings_->hwdecMode = VideoDecodeModeName(value ? VideoDecodeMode::Auto : VideoDecodeMode::Off);
+    }
 }
 
 void PluginContext::CommitSettingInt(const char* key, int value) noexcept
@@ -286,6 +291,11 @@ void PluginContext::CommitSettingString(const char* key, const char* value) noex
             }
         }
     );
+    if (std::strcmp(key, "playback.hwdecMode") == 0)
+    {
+        settings_->hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(settings_->hwdecMode));
+        settings_->hwdec = IsVideoDecodeModeEnabled(VideoDecodeModeFromString(settings_->hwdecMode));
+    }
 }
 
 void PluginContext::SaveSettings() noexcept

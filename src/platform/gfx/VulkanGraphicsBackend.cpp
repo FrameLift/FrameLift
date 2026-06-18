@@ -258,6 +258,9 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
     }
 
     physicalDevice_ = pick->phys.physical_device;
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    nvidiaAdapter_ = props.vendorID == 0x10DE;
     vkb::Device vkbDevice = pick->device;
     device_ = vkbDevice.device;
     volkLoadDevice(device_);

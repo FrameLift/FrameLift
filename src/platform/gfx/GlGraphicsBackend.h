@@ -15,6 +15,7 @@ public:
     void OnWindowCreated(SDL_Window* window) override;
     void Shutdown() override;
     [[nodiscard]] const char* Name() const override { return "OpenGL"; }
+    [[nodiscard]] bool HasNvidiaAdapter() const noexcept override { return nvidiaAdapter_; }
 
     [[nodiscard]] std::unique_ptr<IVideoRenderer> CreateVideoRenderer() override;
     [[nodiscard]] uintptr_t CreateUiTexture(const unsigned char* rgba, int w, int h) override;
@@ -35,6 +36,7 @@ private:
     SDL_Window* window_ = nullptr;
     void* glContext_ = nullptr; // SDL_GLContext (kept as void* to keep SDL out of this header)
     bool shown_ = false;        // window is created hidden, then shown on the first SwapBuffers()
+    bool nvidiaAdapter_ = false;
 
     // Resolved in OnWindowCreated; used by BeginFrame to clear the default framebuffer
     // to black each frame (covers the no-renderer fallback and the letterbox bars).

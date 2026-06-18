@@ -70,6 +70,7 @@ TEST(SettingsMappingTest, PlaybackOptionsMapBooleans)
 {
     Settings s;
     s.hwdec = false;
+    s.hwdecMode = "off";
     s.hrSeek = true;
     s.subAutoLoad = true;
     s.audioFileAutoLoad = false;
@@ -79,6 +80,27 @@ TEST(SettingsMappingTest, PlaybackOptionsMapBooleans)
     EXPECT_TRUE(o.hrSeek);
     EXPECT_TRUE(o.subAutoLoad);
     EXPECT_FALSE(o.audioFileAutoLoad);
+}
+
+TEST(SettingsMappingTest, PlaybackOptionsTreatHwdecModeOffAsDisabled)
+{
+    Settings s;
+    s.hwdec = true;
+    s.hwdecMode = "off";
+
+    const PlaybackOptions o = PlaybackOptsFromSettings(s);
+    EXPECT_FALSE(o.hwdec);
+    EXPECT_EQ(VideoDecodeModeFromSettings(s), VideoDecodeMode::Off);
+}
+
+TEST(SettingsMappingTest, VideoDecodeModeMapsFromSettings)
+{
+    Settings s;
+    s.hwdecMode = "vulkan-zero-copy";
+    EXPECT_EQ(VideoDecodeModeFromSettings(s), VideoDecodeMode::VulkanZeroCopy);
+
+    s.hwdec = false;
+    EXPECT_EQ(VideoDecodeModeFromSettings(s), VideoDecodeMode::Off);
 }
 
 TEST(SettingsMappingTest, ReadAheadDefaultsConvertMbToBytes)

@@ -4,12 +4,15 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <utility>
 
 #include "Version.h"
+#include <platform/gfx/IGraphicsBackend.h>
 #include <ThemeUtil.h>
 #include <framelift/core.h>
+#include <framelift/platform/IAppWindow.h>
 #include <framelift/platform/IMediaPlayer.h>
 #include <framelift/ui.h>
 
@@ -27,6 +30,43 @@ constexpr float BotH = 44.f;
 // most; the cap exists only because the ABI multiline widget takes a plain
 // char* (no resize callback crosses the boundary).
 constexpr int ConfigBufCap = 64 * 1024;
+
+struct DecodeModeItem
+{
+    const char* label;
+    const char* value;
+    bool requiresNvidia = false;
+};
+
+#if defined(_WIN32)
+constexpr DecodeModeItem kDecodeModes[] = {
+    {"Off", "off", false},
+    {"Auto", "auto", false},
+    {"Vulkan (zero-copy)", "vulkan-zero-copy", false},
+    {"Vulkan", "vulkan", false},
+    {"CUDA (zero-copy)", "cuda-zero-copy", true},
+    {"CUDA", "cuda", true},
+    {"D3D11VA", "d3d11va", false},
+    {"DXVA2", "dxva2", false},
+};
+#else
+constexpr DecodeModeItem kDecodeModes[] = {
+    {"Off", "off", false},
+    {"Auto", "auto", false},
+    {"Vulkan (zero-copy)", "vulkan-zero-copy", false},
+    {"Vulkan", "vulkan", false},
+    {"CUDA (zero-copy)", "cuda-zero-copy", true},
+    {"CUDA", "cuda", true},
+    {"VAAPI", "vaapi", false},
+};
+#endif
+
+bool HasNvidiaAdapter(const IPluginContext* ctx)
+{
+    auto* window = ctx ? ctx->GetService<IAppWindow>() : nullptr;
+    auto* backend = window ? static_cast<IGraphicsBackend*>(window->GetGraphicsBackend()) : nullptr;
+    return backend && backend->HasNvidiaAdapter();
+}
 } // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -472,12 +512,39 @@ void SettingsMenu::RenderPageGraphics(UIContext& ctx)
 void SettingsMenu::RenderPagePlayback(UIContext& ctx)
 {
     Widgets::SectionHeader(ctx, "Video");
-    dirty_ |= Widgets::Checkbox(
-        ctx, "Hardware decoding",
-        "Use GPU-accelerated decoding where available (auto-safe). "
-        "Disable if you see visual glitches or playback errors.",
-        settings_.hwdec
-    );
+    const bool hasNvidia = HasNvidiaAdapter(ctx_);
+    std::vector<const DecodeModeItem*> visibleModes;
+    visibleModes.reserve(std::size(kDecodeModes));
+    for (const auto& mode : kDecodeModes)
+    {
+        if (!mode.requiresNvidia || hasNvidia)
+        {
+            visibleModes.push_back(&mode);
+        }
+    }
+
+    std::vector<const char*> labels;
+    labels.reserve(visibleModes.size());
+    int decodeIdx = 1; // Auto
+    for (std::size_t i = 0; i < visibleModes.size(); ++i)
+    {
+        labels.push_back(visibleModes[i]->label);
+        if (settings_.hwdecMode == visibleModes[i]->value)
+        {
+            decodeIdx = static_cast<int>(i);
+        }
+    }
+    if (Widgets::Combo(
+            ctx, "Video acceleration",
+            "Hardware decode mode. Auto prefers GPU-resident paths, while explicit modes are useful for "
+            "driver troubleshooting and performance tracing.",
+            labels.data(), static_cast<int>(labels.size()), decodeIdx
+        ))
+    {
+        settings_.hwdecMode = visibleModes[static_cast<std::size_t>(decodeIdx)]->value;
+        settings_.hwdec = settings_.hwdecMode != "off";
+        dirty_ = true;
+    }
     dirty_ |= Widgets::Checkbox(
         ctx, "High-precision seeking",
         "Seek to the exact requested frame instead of the nearest keyframe. "

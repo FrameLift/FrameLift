@@ -5,6 +5,7 @@
 #include "../../ReadAheadCache.h"
 #include "../gfx/IVideoRenderer.h"
 #include "FFmpegSubtitles.h"
+#include "VideoDecodeMode.h"
 
 #include <array>
 #include <atomic>
@@ -61,6 +62,7 @@ public:
     void SetImageDisplayDuration(double seconds) noexcept override;
     void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept override;
     void SetPlaybackOptions(const PlaybackOptions& opts) noexcept override;
+    void SetVideoDecodeMode(VideoDecodeMode mode) noexcept;
     void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept override;
     void SetSubtitleStyle(const SubtitleStyle& style) noexcept override;
     void SetAudioPreferences(const AudioPreferences& prefs) noexcept override;
@@ -120,6 +122,7 @@ private:
     // hw is non-null when the decoder is armed for hardware decode (downloads frames
     // to system memory before swscale); null / inactive ⇒ unchanged software path.
     void VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, int dstH, FFmpegHwDecode* hw);
+    [[nodiscard]] bool TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext* dec, FFmpegHwDecode& hw);
     // Decodes packets from subQ_ and feeds them to libass (embedded subtitles only).
     void SubtitleWorker(AVCodecContext* dec, AVStream* stream);
     // Reads an external audio container on its own thread, pushing its audio stream
@@ -311,6 +314,7 @@ private:
     std::atomic<bool> seekRefresh_{false};
     std::atomic<bool> hrSeek_{true};                 // PlaybackOptions.hrSeek (exact vs keyframe)
     std::atomic<bool> hwdec_{true};                  // PlaybackOptions.hwdec (try hardware decode on load)
+    std::atomic<VideoDecodeMode> videoDecodeMode_{VideoDecodeMode::Auto};
     std::atomic<double> imageDisplayDuration_{0.0};  // <= 0 ⇒ hold a still image indefinitely
     std::string mediaTitle_;                         // metadata title (guarded by mutex_)
     std::string hwDecName_ = "no";                   // active hw decoder name / "no" (guarded by mutex_)
