@@ -6,14 +6,14 @@
 #include <iterator>
 #include <string>
 
-TEST(PluginConfigTest, AbsentIdDefaultsToEnabled)
+TEST(PackageConfigTest, AbsentIdDefaultsToEnabled)
 {
     const PackageConfig cfg; // nothing loaded
     EXPECT_TRUE(cfg.IsEnabled("framelift.anything"));
     EXPECT_TRUE(cfg.DisabledIds().empty());
 }
 
-TEST(PluginConfigTest, MissingFileLeavesEverythingEnabled)
+TEST(PackageConfigTest, MissingFileLeavesEverythingEnabled)
 {
     PackageConfig cfg;
     cfg.Load(UniqueTempPath().string()); // file does not exist
@@ -21,7 +21,7 @@ TEST(PluginConfigTest, MissingFileLeavesEverythingEnabled)
     EXPECT_TRUE(cfg.DisabledIds().empty());
 }
 
-TEST(PluginConfigTest, LoadParsesRowsAndDefaultsUnlisted)
+TEST(PackageConfigTest, LoadParsesRowsAndDefaultsUnlisted)
 {
     const TempFile f("# header\nframelift.overlay=disabled\nframelift.playlist=enabled\n");
 
@@ -37,7 +37,7 @@ TEST(PluginConfigTest, LoadParsesRowsAndDefaultsUnlisted)
     EXPECT_TRUE(disabled.contains("framelift.overlay"));
 }
 
-TEST(PluginConfigTest, SetAndSaveRoundTrip)
+TEST(PackageConfigTest, SetAndSaveRoundTrip)
 {
     const TempFile f;
     {
@@ -53,7 +53,7 @@ TEST(PluginConfigTest, SetAndSaveRoundTrip)
     EXPECT_TRUE(reloaded.IsEnabled("framelift.playlist"));
 }
 
-TEST(PluginConfigTest, EnsureKnownAddsAsEnabledWithoutOverriding)
+TEST(PackageConfigTest, EnsureKnownAddsAsEnabledWithoutOverriding)
 {
     PackageConfig cfg;
     cfg.Set("framelift.overlay", false);
@@ -63,7 +63,7 @@ TEST(PluginConfigTest, EnsureKnownAddsAsEnabledWithoutOverriding)
     EXPECT_TRUE(cfg.IsEnabled("framelift.history"));  // newly known ⇒ enabled
 }
 
-TEST(PluginConfigTest, SaveWritesSortedRowsWithHeader)
+TEST(PackageConfigTest, SaveWritesSortedRowsWithHeader)
 {
     const TempFile f;
     PackageConfig cfg;

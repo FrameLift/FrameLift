@@ -232,9 +232,11 @@ endif ()
 # The version is parsed from the SDK header — single source of truth.
 set(_FrameLift_abi_header "${CMAKE_SOURCE_DIR}/sdk/include/framelift/ModuleABI.h")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_FrameLift_abi_header}")
+# Same whitespace-tolerant regex as FrameLiftPackageMetadata.cmake's standalone-SDK
+# fallback, so either parse path accepts spaces or tabs after the macro name.
 file(STRINGS "${_FrameLift_abi_header}" _FrameLift_abi_line
-        REGEX "^#define FRAMELIFT_ABI_VERSION +[0-9]+")
-if (NOT _FrameLift_abi_line MATCHES "FRAMELIFT_ABI_VERSION +([0-9]+)")
+        REGEX "^#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+[0-9]+")
+if (NOT _FrameLift_abi_line MATCHES "FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
     message(FATAL_ERROR "Could not parse FRAMELIFT_ABI_VERSION from ${_FrameLift_abi_header}")
 endif ()
 set(FRAMELIFT_SDK_ABI_VERSION "${CMAKE_MATCH_1}")
@@ -259,7 +261,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/examples/"
         DESTINATION examples COMPONENT sdk)
 install(FILES
         "${CMAKE_SOURCE_DIR}/cmake/FrameLiftSdk.cmake"
-        "${CMAKE_SOURCE_DIR}/cmake/FrameLiftPluginMetadata.cmake"
+        "${CMAKE_SOURCE_DIR}/cmake/FrameLiftPackageMetadata.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfigVersion.cmake"
         DESTINATION cmake COMPONENT sdk)

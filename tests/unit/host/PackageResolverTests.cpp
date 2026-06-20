@@ -40,7 +40,7 @@ struct PackageFixture
 };
 } // namespace
 
-TEST(PluginResolverTest, AcceptsValidDependencyGraph)
+TEST(PackageResolverTest, AcceptsValidDependencyGraph)
 {
     static constexpr const char* const providerFeatures[] = {"history.service"};
     static constexpr const char* const consumerRequires[] = {"history.service"};
@@ -58,7 +58,7 @@ TEST(PluginResolverTest, AcceptsValidDependencyGraph)
     EXPECT_TRUE(decisions[1].accepted);
 }
 
-TEST(PluginResolverTest, RejectsMissingRequiredModule)
+TEST(PackageResolverTest, RejectsMissingRequiredModule)
 {
     static constexpr const char* const requiredModules[] = {"framelift.history.core"};
     PackageFixture consumer{
@@ -72,7 +72,7 @@ TEST(PluginResolverTest, RejectsMissingRequiredModule)
     EXPECT_NE(decisions[0].reason.find("framelift.history.core"), std::string::npos);
 }
 
-TEST(PluginResolverTest, RejectsMissingRequiredFeature)
+TEST(PackageResolverTest, RejectsMissingRequiredFeature)
 {
     static constexpr const char* const requiredFeatures[] = {"history.service"};
     PackageFixture consumer{
@@ -86,7 +86,7 @@ TEST(PluginResolverTest, RejectsMissingRequiredFeature)
     EXPECT_NE(decisions[0].reason.find("history.service"), std::string::npos);
 }
 
-TEST(PluginResolverTest, RejectsUnsupportedPlatform)
+TEST(PackageResolverTest, RejectsUnsupportedPlatform)
 {
     static constexpr const char* const platforms[] = {"windows"};
     PackageFixture updater{
@@ -100,7 +100,7 @@ TEST(PluginResolverTest, RejectsUnsupportedPlatform)
     EXPECT_NE(decisions[0].reason.find("platform"), std::string::npos);
 }
 
-TEST(PluginResolverTest, CascadesRejectedDependencies)
+TEST(PackageResolverTest, CascadesRejectedDependencies)
 {
     static constexpr const char* const windowsOnly[] = {"windows"};
     static constexpr const char* const requiresModule[] = {"framelift.provider.core"};
@@ -119,7 +119,7 @@ TEST(PluginResolverTest, CascadesRejectedDependencies)
     EXPECT_NE(decisions[1].reason.find("framelift.provider.core"), std::string::npos);
 }
 
-TEST(PluginResolverTest, OptionalFeaturesDoNotGateLoading)
+TEST(PackageResolverTest, OptionalFeaturesDoNotGateLoading)
 {
     static constexpr const char* const optional[] = {"missing.optional"};
     PackageFixture package{
@@ -132,7 +132,7 @@ TEST(PluginResolverTest, OptionalFeaturesDoNotGateLoading)
     EXPECT_TRUE(decisions[0].accepted);
 }
 
-TEST(PluginResolverTest, OrdersProviderBeforeOptionalConsumer)
+TEST(PackageResolverTest, OrdersProviderBeforeOptionalConsumer)
 {
     static constexpr const char* const provides[] = {"ui.context_menu"};
     static constexpr const char* const optional[] = {"ui.context_menu"};
@@ -150,7 +150,7 @@ TEST(PluginResolverTest, OrdersProviderBeforeOptionalConsumer)
     EXPECT_EQ(order[1], 0u); // consumer (input index 0)
 }
 
-TEST(PluginResolverTest, OrdersIndependentPackagesByPackageId)
+TEST(PackageResolverTest, OrdersIndependentPackagesByPackageId)
 {
     PackageFixture zzz{
         "framelift.zzz", "framelift.zzz.core", EmptyList(), EmptyList(), EmptyList(), EmptyList(), EmptyList()};

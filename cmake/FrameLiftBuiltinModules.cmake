@@ -1,9 +1,9 @@
 # JSON-authored built-in compile-time module declarations for the host build.
 #
 # Built-in modules reuse the same module metadata schema as plugin modules, but
-# CMake consumes the JSON directly instead of embedding it into a plugin DLL.
+# CMake consumes the JSON directly instead of embedding it into a package DLL.
 
-include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPluginMetadata.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPackageMetadata.cmake")
 
 function(_framelift_builtin_option_name out module_id)
     set(_prefix "FRAMELIFT_MODULE")

@@ -53,7 +53,7 @@ public:
     // list and re-enable packages that are currently disabled.
     static std::vector<AvailablePackage> DiscoverAvailable(const std::string& modulesDir);
 
-    // Calls framelift_destroy and FreeLibrary for every loaded plugin.
+    // Calls framelift_destroy and FreeLibrary for every loaded package.
     ~PackageLoader();
 
 private:

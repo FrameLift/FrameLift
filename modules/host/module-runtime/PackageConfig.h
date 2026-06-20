@@ -5,10 +5,10 @@
 #include <unordered_set>
 #include <vector>
 
-// User-editable plugin enablement manifest (pref-dir packages.ini), independent of
+// User-editable package enablement manifest (pref-dir packages.ini), independent of
 // the typed Settings. Opt-out semantics: every package present in Modules/ loads
 // unless the user explicitly disables it here, so dropping in a third-party DLL
-// works with no edit. One plugin per row:
+// works with no edit. One package per row:
 //
 //   framelift.overlay=disabled
 //   framelift.playlist=enabled
@@ -21,7 +21,7 @@ public:
     // (everything enabled).
     void Load(const std::string& path);
 
-    // Write every known state, one sorted row per plugin, with a comment header.
+    // Write every known state, one sorted row per package, with a comment header.
     void Save(const std::string& path) const;
 
     [[nodiscard]] bool IsEnabled(const std::string& id) const
@@ -39,7 +39,7 @@ public:
     }
 
     // Record any not-yet-known id as enabled so the saved file is a complete,
-    // hand-editable manifest of the current plugin set.
+    // hand-editable manifest of the current package set.
     void EnsureKnown(const std::vector<std::string>& ids)
     {
         for (const auto& id : ids)

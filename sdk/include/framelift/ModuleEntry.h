@@ -8,13 +8,13 @@
 #include <type_traits>
 
 #ifndef FRAMELIFT_MODULE_METADATA_HEADER
-#error "FRAMELIFT_MODULE_METADATA_HEADER must name the CMake-generated plugin metadata header"
+#error "FRAMELIFT_MODULE_METADATA_HEADER must name the CMake-generated package metadata header"
 #endif
 
 #include FRAMELIFT_MODULE_METADATA_HEADER
 
 #ifndef FRAMELIFT_MODULE_METADATA
-#error "Generated plugin metadata header must define FRAMELIFT_MODULE_METADATA"
+#error "Generated package metadata header must define FRAMELIFT_MODULE_METADATA"
 #endif
 
 // Place FRAMELIFT_MODULE_ENTRY at file scope in the module header, after the

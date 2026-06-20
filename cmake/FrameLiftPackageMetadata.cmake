@@ -1,4 +1,4 @@
-# JSON-authored plugin/module metadata -> embedded C++ metadata.
+# JSON-authored package/module metadata -> embedded C++ metadata.
 
 if (NOT DEFINED FRAMELIFT_SDK_ABI_VERSION)
     set(_framelift_abi_header_candidates
@@ -12,10 +12,10 @@ if (NOT DEFINED FRAMELIFT_SDK_ABI_VERSION)
         endif ()
     endforeach ()
     if ("${_framelift_abi_header}" STREQUAL "")
-        message(FATAL_ERROR "Unable to find ModuleABI.h for plugin metadata generation")
+        message(FATAL_ERROR "Unable to find ModuleABI.h for package metadata generation")
     endif ()
-    file(READ "${_framelift_abi_header}" _framelift_plugin_abi_h)
-    if (_framelift_plugin_abi_h MATCHES "#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
+    file(READ "${_framelift_abi_header}" _framelift_package_abi_h)
+    if (_framelift_package_abi_h MATCHES "#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
         set(FRAMELIFT_SDK_ABI_VERSION "${CMAKE_MATCH_1}")
     else ()
         message(FATAL_ERROR "Unable to parse FRAMELIFT_ABI_VERSION from ModuleABI.h")
@@ -230,10 +230,10 @@ function(_framelift_split_metadata_list out value)
     endif ()
 endfunction()
 
-function(framelift_generate_plugin_metadata target plugin_json out_header out_enabled out_package_id out_module_binary_name)
+function(framelift_generate_package_metadata target plugin_json out_header out_enabled out_package_id out_module_binary_name)
     get_filename_component(_plugin_json_abs "${plugin_json}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     if (NOT EXISTS "${_plugin_json_abs}")
-        message(FATAL_ERROR "${target}: plugin metadata file not found: ${_plugin_json_abs}")
+        message(FATAL_ERROR "${target}: package metadata file not found: ${_plugin_json_abs}")
     endif ()
 
     file(READ "${_plugin_json_abs}" _plugin_json)
@@ -252,7 +252,7 @@ function(framelift_generate_plugin_metadata target plugin_json out_header out_en
 
     _framelift_json_string_array(_module_files "${_plugin_json}" "${target}" modules)
     if (NOT _module_files)
-        message(FATAL_ERROR "${target}: plugin metadata must reference at least one module")
+        message(FATAL_ERROR "${target}: package metadata must reference at least one module")
     endif ()
 
     set(_module_paths)
@@ -297,6 +297,12 @@ function(framelift_generate_plugin_metadata target plugin_json out_header out_en
         _framelift_json_required_bool(_module_enabled "${_module_json}" "enabled" "${_module_path}")
         if (_module_enabled)
             _framelift_json_string_array(_platforms "${_module_json}" "${_module_path}" platforms)
+            foreach (_declared_platform IN LISTS _platforms)
+                if (NOT _declared_platform STREQUAL "windows" AND NOT _declared_platform STREQUAL "linux" AND
+                    NOT _declared_platform STREQUAL "macos")
+                    message(WARNING "${target}: module '${_module_id}' lists unknown platform '${_declared_platform}' (expected windows/linux/macos) - it will never match")
+                endif ()
+            endforeach ()
             if (_platforms AND NOT _current_platform IN_LIST _platforms)
                 message(STATUS "${target}: disabling package because module '${_module_id}' does not support platform '${_current_platform}'")
                 set(_package_enabled FALSE)
@@ -312,7 +318,7 @@ function(framelift_generate_plugin_metadata target plugin_json out_header out_en
         endif ()
     endforeach ()
 
-    set(_header "${CMAKE_CURRENT_BINARY_DIR}/${target}PluginMetadata.h")
+    set(_header "${CMAKE_CURRENT_BINARY_DIR}/${target}PackageMetadata.h")
     set(_code "#pragma once\n#include <framelift/ModuleABI.h>\n\nnamespace framelift::generated\n{\n")
     set(_module_entries)
     set(_module_index 0)

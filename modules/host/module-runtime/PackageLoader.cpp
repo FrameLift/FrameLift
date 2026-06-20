@@ -156,7 +156,7 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         if (!AbiCompatible(info))
         {
             Log::Warn(
-                "Plugin package '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current SDK",
+                "Package '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current SDK",
                 PackageId(info), info->version[0], info->version[1], info->version[2], info->abiVersion, FRAMELIFT_ABI_VERSION
             );
             CloseLib(handle);
@@ -164,13 +164,13 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         }
         if (disabled.contains(PackageId(info)))
         {
-            Log::Info("Plugin package '{}': disabled by user - skipped", PackageId(info));
+            Log::Info("Package '{}': disabled by user - skipped", PackageId(info));
             CloseLib(handle);
             continue;
         }
         if (seenIds.contains(PackageId(info)))
         {
-            Log::Warn("Plugin package '{}': duplicate package id - skipped", PackageId(info));
+            Log::Warn("Package '{}': duplicate package id - skipped", PackageId(info));
             CloseLib(handle);
             continue;
         }
@@ -201,9 +201,48 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         }
         else
         {
-            Log::Warn("Plugin package '{}': {} - skipped", PackageId(candidates[i].info), decisions[i].reason);
+            Log::Warn("Package '{}': {} - skipped", PackageId(candidates[i].info), decisions[i].reason);
             CloseLib(candidates[i].handle);
             candidates[i].handle = nullptr;
+        }
+    }
+
+    // Diagnose colliding providers: two accepted packages declaring the same module
+    // id or feature. We keep first-wins (load order decides the winner) but warn so
+    // the collision is visible rather than silent.
+    {
+        std::unordered_map<std::string, std::string> firstProvider; // token -> package id
+        const auto note = [&](const char* token, const char* kind, const char* owner)
+        {
+            if (!token || !token[0])
+            {
+                return;
+            }
+            const auto [it, inserted] = firstProvider.emplace(token, owner);
+            if (!inserted)
+            {
+                Log::Warn(
+                    "Package '{}': {} '{}' already provided by '{}' - keeping the first provider", owner, kind, token,
+                    it->second
+                );
+            }
+        };
+        for (const auto& accepted : acceptedResolve)
+        {
+            const FrameLiftPackageInfo* info = accepted.info;
+            const std::string owner = PackageId(info);
+            for (int m = 0; m < info->moduleCount; ++m)
+            {
+                const FrameLiftModuleInfo& module = info->modules[m];
+                note(module.id, "module", owner.c_str());
+                for (int f = 0; f < module.providesFeatures.count; ++f)
+                {
+                    note(
+                        module.providesFeatures.items ? module.providesFeatures.items[f] : nullptr, "feature",
+                        owner.c_str()
+                    );
+                }
+            }
         }
     }
 
@@ -212,7 +251,7 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         PackageCandidate& candidate = candidates[acceptedIndex[orderIdx]];
         const FrameLiftPackageInfo* const info = candidate.info;
 
-        const auto pluginStart = Clock::now();
+        const auto packageStart = Clock::now();
         using CreateFn = IModule* (*)();
         using DestroyFn = void (*)(IModule*);
         using GetRenderFn = IRenderable* (*)(IModule*);
@@ -225,7 +264,7 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
 
         if (!createFn || !destroyFn || !getRenderFn || !renderOrderFn)
         {
-            Log::Warn("Plugin package '{}': missing required exports - skipped", PackageId(info));
+            Log::Warn("Package '{}': missing required exports - skipped", PackageId(info));
             CloseLib(candidate.handle);
             candidate.handle = nullptr;
             continue;
@@ -240,7 +279,7 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         IModule* module = createFn();
         if (!module)
         {
-            Log::Warn("Plugin package '{}': framelift_create() returned nullptr - skipped", PackageId(info));
+            Log::Warn("Package '{}': framelift_create() returned nullptr - skipped", PackageId(info));
             CloseLib(candidate.handle);
             candidate.handle = nullptr;
             continue;
@@ -255,11 +294,11 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         candidate.handle = nullptr; // ownership moved to packages_
 
         const std::string by = info->publisher ? std::string(" by ") + info->publisher : std::string();
-        const double pluginMs = std::chrono::duration<double, std::milli>(Clock::now() - pluginStart).count();
+        const double packageMs = std::chrono::duration<double, std::milli>(Clock::now() - packageStart).count();
         Log::Info(
-            "Plugin package '{}' v{}.{}.{}{} loaded (abi version {}, modules {}, render order {}, {:.1f} ms)",
+            "Package '{}' v{}.{}.{}{} loaded (abi version {}, modules {}, render order {}, {:.1f} ms)",
             PackageId(info), info->version[0], info->version[1], info->version[2], by, info->abiVersion, info->moduleCount,
-            order, pluginMs
+            order, packageMs
         );
     }
 
@@ -272,7 +311,7 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
     }
 
     const double totalMs = std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count();
-    Log::Info("Loaded {} plugin package(s) in {:.1f} ms", packages_.size(), totalMs);
+    Log::Info("Loaded {} package(s) in {:.1f} ms", packages_.size(), totalMs);
 }
 
 std::vector<PackageLoader::AvailablePackage> PackageLoader::DiscoverAvailable(const std::string& modulesDir)

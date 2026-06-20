@@ -2,18 +2,18 @@
 
 #include <gtest/gtest.h>
 
-TEST(PluginAbiTest, MatchingEpochLoads)
+TEST(PackageAbiTest, MatchingEpochLoads)
 {
     EXPECT_TRUE(FrameLiftAbiCompatible(FRAMELIFT_ABI_VERSION, FRAMELIFT_ABI_VERSION));
 }
 
-TEST(PluginAbiTest, MismatchedEpochRejectedEitherDirection)
+TEST(PackageAbiTest, MismatchedEpochRejectedEitherDirection)
 {
     EXPECT_FALSE(FrameLiftAbiCompatible(FRAMELIFT_ABI_VERSION - 1, FRAMELIFT_ABI_VERSION));
     EXPECT_FALSE(FrameLiftAbiCompatible(FRAMELIFT_ABI_VERSION + 1, FRAMELIFT_ABI_VERSION));
 }
 
-TEST(PluginAbiTest, MetadataCarriesPackageAndModules)
+TEST(PackageAbiTest, MetadataCarriesPackageAndModules)
 {
     static constexpr const char* const kFeatures[] = {"playlist.panel", "playlist.navigation"};
     static constexpr FrameLiftModuleInfo kModules[] = {

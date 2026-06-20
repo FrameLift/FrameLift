@@ -145,8 +145,8 @@ void Settings::Load(const std::string& path)
 
 // ── Settings::Save ────────────────────────────────────────────────────────────
 // Synchronous section-aware merge-save: owned sections are replaced in place;
-// unknown sections (e.g. plugin data) are preserved unchanged. The merge keeps
-// keys written by PluginSettings::Save() intact.
+// unknown sections (e.g. per-module data) are preserved unchanged. The merge keeps
+// keys written by ModuleSettings::Save() intact.
 void Settings::Save(const std::string& path)
 {
     const SettingsRegistry reg = BuildSettingsRegistry(*this);

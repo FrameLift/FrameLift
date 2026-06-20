@@ -16,7 +16,9 @@ public:
     //   enabled    — whether the package is in the persisted enabled list (live).
     //   loaded     — whether the package is currently loaded this session.
     //   loadFailed — true iff it was enabled at startup but did not load (a real error).
-    // All pointers are valid only for the duration of the call.
+    // The `info` reference and every `const char*` it exposes are valid ONLY for the
+    // duration of this call — for a present-but-disabled package `info` is a stack
+    // temporary. Copy anything you need; never cache the reference or its strings.
     virtual void EnumeratePackages(
         void (*visit)(
             const char* name, const FrameLiftPackageInfo& info, bool enabled, bool loaded, bool loadFailed, void* visitUd

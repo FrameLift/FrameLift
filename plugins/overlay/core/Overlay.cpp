@@ -20,6 +20,9 @@ void Overlay::OnInstall(IModuleContext& ctx)
 {
     Instance = this;
 
+    // Both services are discovered and may be null; playback_ is null-checked at
+    // each use site (TogglePause/SeekAbsolute), props_ is guarded here before its
+    // immediate ObserveProperty calls.
     playback_ = ctx.GetService<IMediaPlayback>();
     props_ = ctx.GetService<IMediaProperties>();
     if (props_)

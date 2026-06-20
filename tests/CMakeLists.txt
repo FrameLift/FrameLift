@@ -80,14 +80,14 @@ set(FRAMELIFT_SDK_TEST_SOURCES
 add_executable(framelift_tests
         unit/misc/CliTests.cpp
         unit/host/SettingsTests.cpp
-        unit/host/PluginContextTests.cpp
-        unit/host/PluginConfigTests.cpp
-        unit/host/PluginSettingsTests.cpp
+        unit/host/ModuleContextTests.cpp
+        unit/host/PackageConfigTests.cpp
+        unit/host/ModuleSettingsTests.cpp
         unit/host/FocusManagerTests.cpp
         unit/misc/KeyNamesTests.cpp
         unit/host/SemVerTests.cpp
-        unit/host/PluginAbiTests.cpp
-        unit/host/PluginResolverTests.cpp
+        unit/host/PackageAbiTests.cpp
+        unit/host/PackageResolverTests.cpp
         unit/misc/UrlUtilsTests.cpp
         unit/misc/ExtensionFilterTests.cpp
         unit/media/FFmpegFiltersTests.cpp
@@ -117,7 +117,7 @@ target_include_directories(framelift_tests PRIVATE
         "${FRAMELIFT_ROOT}/src"
         ${FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS}
         ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
-        "${FRAMELIFT_ROOT}/tests/support"  # TempIni.h for PackageConfig/PluginSettings tests
+        "${FRAMELIFT_ROOT}/tests/support"  # TempIni.h for PackageConfig/ModuleSettings tests
         "${FRAMELIFT_ROOT}/plugins/updater/core"
         "${FRAMELIFT_ROOT}/plugins/playlist/core"
 )
@@ -147,7 +147,7 @@ gtest_discover_tests(framelift_tests_vulkan_off)
 function(add_framelift_plugin_test name)
     cmake_parse_arguments(_FL_TEST "EMIT_MODULE_ENTRY" "METADATA_HEADER" "" ${ARGN})
     if (NOT _FL_TEST_METADATA_HEADER)
-        set(_FL_TEST_METADATA_HEADER "TestPluginMetadata.h")
+        set(_FL_TEST_METADATA_HEADER "TestPackageMetadata.h")
     endif ()
     add_executable(${name} ${_FL_TEST_UNPARSED_ARGUMENTS} ${FRAMELIFT_SDK_TEST_SOURCES})
     set_target_properties(${name} PROPERTIES
@@ -184,12 +184,12 @@ endfunction()
 # extern "C" entry points directly — two exes because the C symbols would clash.
 add_framelift_plugin_test(framelift_test_module_entry
         EMIT_MODULE_ENTRY
-        METADATA_HEADER "TestRenderingPluginMetadata.h"
+        METADATA_HEADER "TestRenderingPackageMetadata.h"
         module-entry/ModuleEntryTests.cpp)
 
 add_framelift_plugin_test(framelift_test_module_entry_norender
         EMIT_MODULE_ENTRY
-        METADATA_HEADER "TestNoRenderPluginMetadata.h"
+        METADATA_HEADER "TestNoRenderPackageMetadata.h"
         module-entry/ModuleEntryNoRenderTests.cpp)
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────

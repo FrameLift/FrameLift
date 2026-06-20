@@ -6,7 +6,7 @@
 #include <iterator>
 #include <string>
 
-TEST(PluginSettingsTest, MissingSectionReturnsDefaults)
+TEST(ModuleSettingsTest, MissingSectionReturnsDefaults)
 {
     const TempFile f; // empty, non-existent section
     const ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -19,7 +19,7 @@ TEST(PluginSettingsTest, MissingSectionReturnsDefaults)
     EXPECT_TRUE(ps.GetBool("flag", true));
 }
 
-TEST(PluginSettingsTest, SaveThenReloadRoundTrips)
+TEST(ModuleSettingsTest, SaveThenReloadRoundTrips)
 {
     const TempFile f;
     {
@@ -41,7 +41,7 @@ TEST(PluginSettingsTest, SaveThenReloadRoundTrips)
     EXPECT_FLOAT_EQ(reloaded.GetFloat("ratio"), 1.5f);
 }
 
-TEST(PluginSettingsTest, SectionsAreIsolated)
+TEST(ModuleSettingsTest, SectionsAreIsolated)
 {
     const TempFile f;
     {
@@ -65,7 +65,7 @@ TEST(PluginSettingsTest, SectionsAreIsolated)
     EXPECT_FALSE(c.WasLoaded());
 }
 
-TEST(PluginSettingsTest, BadNumericFallsBackToDefault)
+TEST(ModuleSettingsTest, BadNumericFallsBackToDefault)
 {
     const TempFile f("[MyPlugin]\ncount=notanumber\n");
     const ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -80,7 +80,7 @@ TEST(PluginSettingsTest, BadNumericFallsBackToDefault)
 // value read as the "wrong" type must never crash — it either converts where it
 // can or falls back to the caller's default. These tests pin that behavior.
 
-TEST(PluginSettingsTest, GetIntOutOfRangeFallsBack)
+TEST(ModuleSettingsTest, GetIntOutOfRangeFallsBack)
 {
     const TempFile f("[MyPlugin]\ncount=999999999999\n");
     const ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -89,7 +89,7 @@ TEST(PluginSettingsTest, GetIntOutOfRangeFallsBack)
     EXPECT_EQ(ps.GetInt("count", -1), -1);
 }
 
-TEST(PluginSettingsTest, GetIntFromFloatStringTruncates)
+TEST(ModuleSettingsTest, GetIntFromFloatStringTruncates)
 {
     const TempFile f("[MyPlugin]\ncount=3.14\n");
     const ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -98,7 +98,7 @@ TEST(PluginSettingsTest, GetIntFromFloatStringTruncates)
     EXPECT_EQ(ps.GetInt("count"), 3);
 }
 
-TEST(PluginSettingsTest, GetBoolOnlyOneIsTrue)
+TEST(ModuleSettingsTest, GetBoolOnlyOneIsTrue)
 {
     for (const char* token : {"true", "0", "2", "yes"})
     {
@@ -112,7 +112,7 @@ TEST(PluginSettingsTest, GetBoolOnlyOneIsTrue)
     EXPECT_TRUE(ps.GetBool("flag", false));
 }
 
-TEST(PluginSettingsTest, CrossTypeReadsAreSafe)
+TEST(ModuleSettingsTest, CrossTypeReadsAreSafe)
 {
     const TempFile f;
     ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -128,7 +128,7 @@ TEST(PluginSettingsTest, CrossTypeReadsAreSafe)
     EXPECT_EQ(ps.GetInt("b"), 0);
 }
 
-TEST(PluginSettingsTest, EmptyValueFallsBackToDefault)
+TEST(ModuleSettingsTest, EmptyValueFallsBackToDefault)
 {
     const TempFile f("[MyPlugin]\nx=\n");
     const ModuleSettingsImpl ps("MyPlugin", f.str());
@@ -140,7 +140,7 @@ TEST(PluginSettingsTest, EmptyValueFallsBackToDefault)
 
 // Plugin keybinds live in their own [<Plugin>.keybinds] section, so writing them
 // must leave the host-owned, commented [keybinds] section untouched.
-TEST(PluginSettingsTest, PluginKeybindSectionLeavesHostKeybindsIntact)
+TEST(ModuleSettingsTest, ModuleKeybindSectionLeavesHostKeybindsIntact)
 {
     const TempFile f(
         "[keybinds]\n# Key combo to play/pause.\ntogglePause=Space\n# Key combo to quit.\nquit=Ctrl+Q\n"
@@ -155,7 +155,7 @@ TEST(PluginSettingsTest, PluginKeybindSectionLeavesHostKeybindsIntact)
     std::ifstream in(f.str());
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-    // The plugin's own camelCase section was created with the bare action key.
+    // The module's own camelCase section was created with the bare action key.
     EXPECT_NE(text.find("[history.keybinds]"), std::string::npos);
     EXPECT_NE(text.find("toggleHistory=H"), std::string::npos);
 

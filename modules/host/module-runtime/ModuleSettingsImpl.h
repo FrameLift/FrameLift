@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <fstream>
 #include <framelift/IModuleSettings.h>
 #include <sstream>
@@ -158,10 +159,31 @@ public:
             lines.insert(lines.end(), block.begin(), block.end());
         }
 
-        std::ofstream f(iniPath_, std::ios::trunc);
-        for (const auto& l : lines)
+        // Write to a sibling temp file then rename over the target, so a crash
+        // mid-write can't corrupt the shared INI.
+        std::filesystem::path tmp(iniPath_);
+        tmp += ".tmp";
         {
-            f << l << '\n';
+            std::ofstream f(tmp, std::ios::trunc);
+            if (!f)
+            {
+                return;
+            }
+            for (const auto& l : lines)
+            {
+                f << l << '\n';
+            }
+            f.flush();
+            if (!f)
+            {
+                return;
+            }
+        }
+        std::error_code ec;
+        std::filesystem::rename(tmp, iniPath_, ec);
+        if (ec)
+        {
+            std::filesystem::remove(tmp, ec);
         }
     }
 

@@ -48,12 +48,33 @@ void PackageConfig::Save(const std::string& path) const
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
 
-    std::ofstream out(path, std::ios::trunc);
-    out << "# FrameLift plugin enablement. Set a plugin to 'disabled' to stop it loading.\n";
-    out << "# Plugins not listed here default to enabled.\n";
-    for (const auto& [id, enabled] : states_) // std::map iterates sorted by id
+    // Write to a sibling temp file then rename over the target, so a crash mid-write
+    // can't leave a truncated/corrupt manifest.
+    const std::filesystem::path target(path);
+    std::filesystem::path tmp(path);
+    tmp += ".tmp";
     {
-        out << id << '=' << (enabled ? "enabled" : "disabled") << '\n';
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out)
+        {
+            return;
+        }
+        out << "# FrameLift package enablement. Set a package to 'disabled' to stop it loading.\n";
+        out << "# Packages not listed here default to enabled.\n";
+        for (const auto& [id, enabled] : states_) // std::map iterates sorted by id
+        {
+            out << id << '=' << (enabled ? "enabled" : "disabled") << '\n';
+        }
+        out.flush();
+        if (!out)
+        {
+            return; // leave the existing manifest untouched on write failure
+        }
+    }
+    std::filesystem::rename(tmp, target, ec);
+    if (ec)
+    {
+        std::filesystem::remove(tmp, ec);
     }
 }
 

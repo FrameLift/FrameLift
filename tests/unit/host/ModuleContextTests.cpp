@@ -33,7 +33,7 @@ std::string GetStr(ModuleContext& ctx, const char* key)
 }
 } // namespace
 
-TEST(PluginContextTest, ReadsDefaultsThroughTypedGetters)
+TEST(ModuleContextTest, ReadsDefaultsThroughTypedGetters)
 {
     Ctx c;
     EXPECT_FLOAT_EQ(c.ctx.GetSettingFloat("ui.panelWidth"), 320.f);
@@ -42,7 +42,7 @@ TEST(PluginContextTest, ReadsDefaultsThroughTypedGetters)
     EXPECT_EQ(GetStr(c.ctx, "files.videoExtensions").rfind("mp4", 0), 0u);
 }
 
-TEST(PluginContextTest, EnumerateSystemFontsIsCachedAndStable)
+TEST(ModuleContextTest, EnumerateSystemFontsIsCachedAndStable)
 {
     Ctx c;
 
@@ -75,7 +75,7 @@ TEST(PluginContextTest, EnumerateSystemFontsIsCachedAndStable)
     EXPECT_TRUE(first.allNonEmpty);
 }
 
-TEST(PluginContextTest, CommitRoundTripsPerType)
+TEST(ModuleContextTest, CommitRoundTripsPerType)
 {
     Ctx c;
     c.ctx.CommitSettingFloat("ui.panelWidth", 500.f);
@@ -91,14 +91,14 @@ TEST(PluginContextTest, CommitRoundTripsPerType)
     EXPECT_FLOAT_EQ(c.settings.Get<UiSettings>().panelWidth, 500.f);
 }
 
-TEST(PluginContextTest, GetSettingStringReportsFullLength)
+TEST(ModuleContextTest, GetSettingStringReportsFullLength)
 {
     Ctx c;
     c.ctx.CommitSettingString("files.videoExtensions", "avi;mov");
     EXPECT_EQ(c.ctx.GetSettingString("files.videoExtensions", nullptr, 0), 7); // strlen("avi;mov")
 }
 
-TEST(PluginContextTest, GetSettingStringTruncatesToBuffer)
+TEST(ModuleContextTest, GetSettingStringTruncatesToBuffer)
 {
     Ctx c;
     c.ctx.CommitSettingString("files.videoExtensions", "avi;mov");
@@ -108,7 +108,7 @@ TEST(PluginContextTest, GetSettingStringTruncatesToBuffer)
     EXPECT_STREQ(buf, "avi"); // ...but writes only cap-1 chars + NUL
 }
 
-TEST(PluginContextTest, UnknownKeysYieldZeroOrEmpty)
+TEST(ModuleContextTest, UnknownKeysYieldZeroOrEmpty)
 {
     Ctx c;
     EXPECT_FLOAT_EQ(c.ctx.GetSettingFloat("no.such.key"), 0.f);
@@ -117,7 +117,7 @@ TEST(PluginContextTest, UnknownKeysYieldZeroOrEmpty)
     EXPECT_EQ(c.ctx.GetSettingString("no.such.key", nullptr, 0), 0);
 }
 
-TEST(PluginContextTest, WrongTypeKeyDoesNotMatch)
+TEST(ModuleContextTest, WrongTypeKeyDoesNotMatch)
 {
     // ui.panelWidth is a float; asking for it as a string should not match.
     Ctx c;
@@ -126,7 +126,7 @@ TEST(PluginContextTest, WrongTypeKeyDoesNotMatch)
 
 // ── Settings file path & reload ───────────────────────────────────────────────
 
-TEST(PluginContextTest, GetSettingsFilePathReportsPathWithBufferContract)
+TEST(ModuleContextTest, GetSettingsFilePathReportsPathWithBufferContract)
 {
     Settings settings;
     ModuleContext ctx{"pref/", &settings, "some/dir/settings.ini"};
@@ -152,7 +152,7 @@ void BumpCounter(void* ud)
 }
 } // namespace
 
-TEST(PluginContextTest, ReloadSettingsRereadsFileAndFiresCallbacks)
+TEST(ModuleContextTest, ReloadSettingsRereadsFileAndFiresCallbacks)
 {
     Settings settings;
     const std::string ini = (std::filesystem::temp_directory_path() / "framelift_test_reload.ini").string();
@@ -231,7 +231,7 @@ void NestedPublishHandler(const void*, void* ud)
 }
 } // namespace
 
-TEST(PluginContextTest, SubscribeDuringDispatchIsSafeAndDeferred)
+TEST(ModuleContextTest, SubscribeDuringDispatchIsSafeAndDeferred)
 {
     Ctx c;
     IModuleContext& ic = c.ctx;
@@ -252,7 +252,7 @@ TEST(PluginContextTest, SubscribeDuringDispatchIsSafeAndDeferred)
     EXPECT_EQ(st.lateCalls, 16); // the 16 added on the first publish fire on the next one
 }
 
-TEST(PluginContextTest, NestedPublishDispatches)
+TEST(ModuleContextTest, NestedPublishDispatches)
 {
     Ctx c;
     IModuleContext& ic = c.ctx;
@@ -266,37 +266,40 @@ TEST(PluginContextTest, NestedPublishDispatches)
     EXPECT_EQ(st.otherCalls, 1); // published from inside the outer dispatch
 }
 
-// ── Plugin catalogue ──────────────────────────────────────────────────────────
+// ── Package catalogue ─────────────────────────────────────────────────────────
 
 namespace
 {
-struct CollectedPlugin
+struct CollectedPackage
 {
     std::string name; // load key
     std::string infoName;
     int version[3];
     std::string publisher;
+    int moduleCount;
     bool enabled;
     bool loaded;
     bool loadFailed;
 };
 
-void CollectPlugin(const char* name, const FrameLiftPackageInfo& info, bool enabled, bool loaded, bool loadFailed, void* ud)
+// Copies every field out of the descriptor *during* the callback — the visitor
+// contract is that the reference and its strings are valid only for this call.
+void CollectPackage(const char* name, const FrameLiftPackageInfo& info, bool enabled, bool loaded, bool loadFailed, void* ud)
 {
-    auto& out = *static_cast<std::vector<CollectedPlugin>*>(ud);
+    auto& out = *static_cast<std::vector<CollectedPackage>*>(ud);
     out.push_back({name, info.name ? info.name : "", {info.version[0], info.version[1], info.version[2]},
-                   info.publisher ? info.publisher : "", enabled, loaded, loadFailed});
+                   info.publisher ? info.publisher : "", info.moduleCount, enabled, loaded, loadFailed});
 }
 
-std::vector<CollectedPlugin> Enumerate(ModuleContext& ctx)
+std::vector<CollectedPackage> Enumerate(ModuleContext& ctx)
 {
-    std::vector<CollectedPlugin> out;
-    ctx.EnumeratePackages(&CollectPlugin, &out);
+    std::vector<CollectedPackage> out;
+    ctx.EnumeratePackages(&CollectPackage, &out);
     return out;
 }
 } // namespace
 
-TEST(PluginContextTest, EnumeratePluginsReportsLoadedAndDisabledEntries)
+TEST(ModuleContextTest, EnumeratePackagesReportsLoadedAndDisabledEntries)
 {
     Ctx c;
     const FrameLiftPackageInfo alpha{FRAMELIFT_ABI_VERSION,
@@ -323,9 +326,12 @@ TEST(PluginContextTest, EnumeratePluginsReportsLoadedAndDisabledEntries)
     EXPECT_TRUE(got[0].loaded);
     EXPECT_FALSE(got[0].loadFailed);
 
+    // Present-but-disabled: a synthesized name-only descriptor whose other fields
+    // must read as zero/null so consumers can rely on the synth path being inert.
     EXPECT_EQ(got[1].name, "framelift.beta");
     EXPECT_EQ(got[1].infoName, "framelift.beta"); // synthesized name-only descriptor
     EXPECT_EQ(got[1].version[0], 0);
+    EXPECT_EQ(got[1].moduleCount, 0);
     EXPECT_TRUE(got[1].publisher.empty());
     EXPECT_FALSE(got[1].enabled);
     EXPECT_FALSE(got[1].loaded);
@@ -337,20 +343,20 @@ TEST(PluginContextTest, EnumeratePluginsReportsLoadedAndDisabledEntries)
     EXPECT_TRUE(got[2].loadFailed); // enabled but missing from the loaded set
 }
 
-TEST(PluginContextTest, EnumeratePluginsEmptyByDefault)
+TEST(ModuleContextTest, EnumeratePackagesEmptyByDefault)
 {
     Ctx c;
     EXPECT_TRUE(Enumerate(c.ctx).empty());
 }
 
-TEST(PluginContextTest, SetPluginEnabledUpdatesCatalogueAndPersists)
+TEST(ModuleContextTest, SetPackageEnabledUpdatesCatalogueAndPersists)
 {
     Settings settings;
-    PackageConfig pluginConfig;
-    const std::string pluginsIni =
-        (std::filesystem::temp_directory_path() / "framelift_test_pluginsini.ini").string();
-    std::filesystem::remove(pluginsIni);
-    ModuleContext ctx{"pref/", &settings, "unused.ini", &pluginConfig, pluginsIni};
+    PackageConfig packageConfig;
+    const std::string packagesIni =
+        (std::filesystem::temp_directory_path() / "framelift_test_packagesini.ini").string();
+    std::filesystem::remove(packagesIni);
+    ModuleContext ctx{"pref/", &settings, "unused.ini", &packageConfig, packagesIni};
 
     ctx.AddPackage("framelift.playlist", true, nullptr);
     ctx.AddPackage("framelift.history", true, nullptr);
@@ -366,10 +372,10 @@ TEST(PluginContextTest, SetPluginEnabledUpdatesCatalogueAndPersists)
 
     // The opt-out manifest persisted the disable and nothing else.
     PackageConfig reloaded;
-    reloaded.Load(pluginsIni);
+    reloaded.Load(packagesIni);
     EXPECT_FALSE(reloaded.IsEnabled("framelift.history"));
     EXPECT_TRUE(reloaded.IsEnabled("framelift.playlist"));
     EXPECT_TRUE(reloaded.IsEnabled("Unknown")); // never written
 
-    std::filesystem::remove(pluginsIni);
+    std::filesystem::remove(packagesIni);
 }

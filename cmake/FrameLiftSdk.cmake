@@ -25,7 +25,7 @@ else ()
     set(_framelift_sdk_src "${CMAKE_SOURCE_DIR}/sdk/src")
 endif ()
 
-include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPluginMetadata.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPackageMetadata.cmake")
 
 # ── Public plugin SDK (headers only) ──────────────────────────────────────────
 if (NOT TARGET FrameLiftSdk)
@@ -56,7 +56,7 @@ function(add_framelift_plugin NAME)
         message(FATAL_ERROR "add_framelift_plugin(${NAME}) requires PLUGIN_JSON <file>")
     endif ()
 
-    framelift_generate_plugin_metadata(
+    framelift_generate_package_metadata(
             "${NAME}"
             "${_FL_PLUGIN_PLUGIN_JSON}"
             _framelift_metadata_header

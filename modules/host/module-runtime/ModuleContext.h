@@ -66,7 +66,7 @@ class ModuleContext final : public IModuleContext,
 public:
     ModuleContext(
         std::string prefPath, Settings* settings, const std::string& settingsPath,
-        PackageConfig* pluginConfig = nullptr, std::string pluginsPath = {}
+        PackageConfig* packageConfig = nullptr, std::string packagesPath = {}
     );
 
     int GetPrefPath(char* buf, int cap) const noexcept override;
@@ -79,8 +79,8 @@ public:
 
     void EnumerateSystemFonts(void (*visit)(const char*, const char*, void*), void* visitUd) const noexcept override;
 
-    // Host feeds the plugin catalogue here after PackageLoader::LoadAll, so
-    // SettingsMenu (and any consumer) can list and toggle plugins via the ABI.
+    // Host feeds the package catalogue here after PackageLoader::LoadAll, so
+    // SettingsMenu (and any consumer) can list and toggle packages via the ABI.
     // info is the loaded descriptor, or nullptr for a present-but-disabled DLL.
     void AddPackage(std::string name, bool enabled, const FrameLiftPackageInfo* info);
 
@@ -149,8 +149,8 @@ private:
     std::string settingsPath_;
     Settings* settings_;
 
-    // User plugin enablement manifest (packages.ini) and its path. Null in contexts
-    // that don't manage plugin enablement (e.g. unit tests).
+    // User package enablement manifest (packages.ini) and its path. Null in contexts
+    // that don't manage package enablement (e.g. unit tests).
     PackageConfig* packageConfig_ = nullptr;
     std::string packagesPath_;
 
@@ -165,7 +165,7 @@ private:
     std::vector<SettingsPageEntry> settingsPages_;
     std::vector<KeybindEntryRec> keybindEntries_;
 
-    // One catalogue entry per available plugin (loaded or merely present).
+    // One catalogue entry per available package (loaded or merely present).
     struct PackageRec
     {
         std::string name;           // package id / load key — owns stable storage

@@ -68,7 +68,7 @@ std::vector<PackageResolveDecision> ResolvePackages(
         const FrameLiftPackageInfo* info = candidates[i].info;
         if (!info)
         {
-            decisions[i].reason = "missing plugin metadata";
+            decisions[i].reason = "missing package metadata";
             continue;
         }
         if (!info->packageId || !info->packageId[0])

@@ -12,11 +12,11 @@
 #include <utility>
 
 ModuleContext::ModuleContext(
-    std::string prefPath, Settings* settings, const std::string& settingsPath, PackageConfig* pluginConfig,
-    std::string pluginsPath
+    std::string prefPath, Settings* settings, const std::string& settingsPath, PackageConfig* packageConfig,
+    std::string packagesPath
 )
-    : prefPath_(std::move(prefPath)), settingsPath_(settingsPath), settings_(settings), packageConfig_(pluginConfig),
-      packagesPath_(std::move(pluginsPath))
+    : prefPath_(std::move(prefPath)), settingsPath_(settingsPath), settings_(settings), packageConfig_(packageConfig),
+      packagesPath_(std::move(packagesPath))
 {
     // Bind the field registry to the live settings, and snapshot the serialized
     // defaults from a fresh Settings so EnumerateSettings can report them.
@@ -52,13 +52,13 @@ int ModuleContext::GetPrefPath(char* buf, int cap) const noexcept
     return len;
 }
 
-// ── Plugin catalogue ──────────────────────────────────────────────────────────
+// ── Package catalogue ─────────────────────────────────────────────────────────
 
 void ModuleContext::AddPackage(std::string name, bool enabled, const FrameLiftPackageInfo* info)
 {
-    // A plugin present but not loaded while enabled was attempted and failed at
+    // A package present but not loaded while enabled was attempted and failed at
     // startup. Computed once here; SetPackageEnabled toggles never revise it, so a
-    // freshly enabled plugin reads as "pending restart", not "failed".
+    // freshly enabled package reads as "pending restart", not "failed".
     const bool loadFailed = !info && enabled;
     packageCatalog_.push_back({std::move(name), enabled, loadFailed, info});
 }
@@ -97,7 +97,7 @@ void ModuleContext::SetPackageEnabled(const char* name, bool enabled) noexcept
     const auto rec = std::ranges::find_if(packageCatalog_, [&](const PackageRec& r) { return r.name == name; });
     if (rec == packageCatalog_.end())
     {
-        return; // unknown plugin
+        return; // unknown package
     }
     rec->enabled = enabled; // reflect immediately so the UI checkbox updates
 
@@ -276,7 +276,7 @@ void ModuleContext::EnumerateSettings(
     }
 }
 
-// ── Plugin settings ───────────────────────────────────────────────────────────
+// ── Module settings ───────────────────────────────────────────────────────────
 
 IModuleSettings& ModuleContext::GetModuleSettings(const char* sectionName) noexcept
 {
