@@ -167,6 +167,20 @@ The auto-updater package declares Windows-only platform support and is disabled 
 The Vulkan and OpenGL loaders are resolved at
 runtime (no link-time `libvulkan` dependency), so only a GPU driver is needed to run.
 
+#### Lean builds
+
+Each built-in module exposes a `FRAMELIFT_MODULE_<NAME>` CMake option whose default is the module's
+`.Module.json` `enabled` flag. Pass `-DFRAMELIFT_MODULE_<NAME>=OFF` to drop a module and its
+dependencies from the build — for example, a Vulkan-free build that keeps only the OpenGL backend:
+
+```sh
+cmake -B cmake-build-lean -DCMAKE_BUILD_TYPE=Debug -DFRAMELIFT_MODULE_GRAPHICS_VULKAN=OFF
+cmake --build cmake-build-lean
+```
+
+CMake prints the enabled/disabled module table at configure time. Modules unsupported on the current
+platform, or marked `required`, cannot be toggled this way.
+
 ### Dependencies
 
 Native media libraries come from vcpkg (Windows) or the system (Linux); everything else is fetched by

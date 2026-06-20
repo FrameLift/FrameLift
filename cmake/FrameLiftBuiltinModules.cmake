@@ -65,13 +65,29 @@ function(_framelift_read_builtin_module module_json)
     endif ()
 
     _framelift_builtin_option_name(_module_option "${_module_id}")
-    if (_module_enabled AND _module_available)
-        set(_module_state 1)
+
+    # The JSON `enabled` flag is the default; forks can override a module from the
+    # command line (e.g. -DFRAMELIFT_MODULE_GRAPHICS_VULKAN=OFF) for a lean build.
+    if (_module_enabled)
+        set(_module_default ON)
     else ()
-        set(_module_state 0)
+        set(_module_default OFF)
     endif ()
-    set(${_module_option} "${_module_state}" CACHE INTERNAL
-            "Generated state for built-in FrameLift module ${_module_id}" FORCE)
+    set(${_module_option} "${_module_default}" CACHE BOOL
+            "Enable built-in FrameLift module ${_module_id}")
+
+    # Platform availability is a hard constraint: a module unsupported on this
+    # platform is always off, regardless of the option/override.
+    if (NOT _module_available)
+        set(${_module_option} OFF CACHE BOOL
+                "Enable built-in FrameLift module ${_module_id}" FORCE)
+    endif ()
+
+    # A required module may not be disabled (by JSON authoring or by override).
+    if (_module_required AND NOT ${_module_option})
+        message(FATAL_ERROR
+                "Built-in module '${_module_id}' is required and cannot be disabled")
+    endif ()
 
     get_property(_module_ids GLOBAL PROPERTY FRAMELIFT_BUILTIN_MODULES)
     if (NOT _module_id IN_LIST _module_ids)
