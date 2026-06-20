@@ -1,7 +1,8 @@
 # FrameLift Plugin SDK
 
-Build plugins for [FrameLift](https://github.com/framelift/framelift) — a lightweight video player — as
-module DLLs that contain runtime-loaded plugin code plus JSON-authored package/module metadata.
+Build plugins for [FrameLift](https://github.com/framelift/framelift) — a lightweight video player. A
+plugin ships as a **package**: one runtime-loaded DLL that bundles one or more **modules**, with the
+JSON-authored package/module metadata compiled in by CMake.
 
 The SDK is **dependency-free**: building a plugin needs only a C++23 compiler and
 CMake. No imgui, spdlog, stb, or JSON libraries are required — the host↔plugin
@@ -34,10 +35,11 @@ cmake --build build
 # -> build/Modules/FrameLift.HelloPlugin.Core.dll
 ```
 
-The example module DLL is emitted under `build/Modules/`.
+The example package DLL is emitted under `build/Modules/`.
 
-Drop the resulting module DLL into the `Modules/` directory next to `FrameLift.exe`, then add
-its package id to the `[plugins] enabled=` list in the FrameLift config, and it loads on next launch.
+Drop the resulting package DLL into the `Modules/` directory next to `FrameLift.exe` and it loads on
+next launch. Packages default to enabled; to stop one loading, set `<package-id>=disabled` in
+`packages.ini` in the FrameLift config directory.
 
 ## Writing a plugin
 
@@ -92,7 +94,7 @@ add_framelift_plugin(MyPlugin
   "publisher": "Acme",
   "description": "Does a thing",
   "version": "1.0.0",
-  "abi": "3.0",
+  "abi": 1,
   "modules": ["core/Core.Module.json"]
 }
 ```
