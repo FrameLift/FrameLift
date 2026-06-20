@@ -142,14 +142,14 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         void* const handle = OpenLib(binary.path.c_str());
         if (!handle)
         {
-            Log::Warn("Module '{}': metadata load failed ({})", binary.moduleFile, LastLoadError());
+            Log::Warn("Package '{}': metadata load failed ({})", binary.moduleFile, LastLoadError());
             continue;
         }
 
         const FrameLiftPackageInfo* const info = ReadPackageInfo(handle);
         if (!info)
         {
-            Log::Warn("Module '{}': missing framelift_module_info - rebuild against current SDK", binary.moduleFile);
+            Log::Warn("Package '{}': missing framelift_module_info - rebuild against current SDK", binary.moduleFile);
             CloseLib(handle);
             continue;
         }

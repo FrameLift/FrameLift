@@ -41,7 +41,7 @@ struct FrameLiftModuleInfo
 };
 
 // POD identity + ABI descriptor exported by framelift_module_info(). The host
-// reads it before constructing the plugin. The version comes from the JSON-authored
+// reads it before constructing the module. The version comes from the JSON-authored
 // abi value and appears first so the loader can read it before touching any later
 // field — the only layout guarantee the host relies on across a version break.
 struct FrameLiftPackageInfo

@@ -1,7 +1,7 @@
 #pragma once
 #include <framelift/ModuleABI.h>
 
-// The plugin/package catalogue: enumerate every package discovered in the Modules/
+// The package catalogue: enumerate every package discovered in the Modules/
 // directory (loaded or present-but-disabled) and toggle enablement. A capability
 // service — discover it with ctx.GetService<IPackageCatalog>().
 class IPackageCatalog
