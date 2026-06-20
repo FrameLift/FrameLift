@@ -79,31 +79,31 @@ set(FRAMELIFT_SDK_TEST_SOURCES
 
 # ── framelift_tests: pure-logic + platform-builder suites (no package entry symbols) ─
 add_executable(framelift_tests
-        CliTests.cpp
-        SettingsTests.cpp
-        PluginContextTests.cpp
-        PluginConfigTests.cpp
-        PluginSettingsTests.cpp
-        FocusManagerTests.cpp
-        KeyNamesTests.cpp
-        SemVerTests.cpp
-        PluginAbiTests.cpp
-        PluginResolverTests.cpp
-        UrlUtilsTests.cpp
-        ExtensionFilterTests.cpp
-        FFmpegFiltersTests.cpp
-        MediaEventTests.cpp
-        SettingsMappingTests.cpp
-        ReadAheadCacheTests.cpp
-        ThemeUtilTests.cpp
-        FontScanTests.cpp
-        FFmpegClockTests.cpp
-        FFmpegHwDecodeTests.cpp
-        FFmpegLetterboxTests.cpp
-        GraphicsApiTests.cpp
-        FFmpegSubtitleBlendTests.cpp
-        FFmpegTrackLabelTests.cpp
-        VulkanQueueLockTests.cpp
+        unit/misc/CliTests.cpp
+        unit/host/SettingsTests.cpp
+        unit/host/PluginContextTests.cpp
+        unit/host/PluginConfigTests.cpp
+        unit/host/PluginSettingsTests.cpp
+        unit/host/FocusManagerTests.cpp
+        unit/misc/KeyNamesTests.cpp
+        unit/host/SemVerTests.cpp
+        unit/host/PluginAbiTests.cpp
+        unit/host/PluginResolverTests.cpp
+        unit/misc/UrlUtilsTests.cpp
+        unit/misc/ExtensionFilterTests.cpp
+        unit/media/FFmpegFiltersTests.cpp
+        unit/media/MediaEventTests.cpp
+        unit/host/SettingsMappingTests.cpp
+        unit/host/ReadAheadCacheTests.cpp
+        unit/misc/ThemeUtilTests.cpp
+        unit/host/FontScanTests.cpp
+        unit/media/FFmpegClockTests.cpp
+        unit/media/FFmpegHwDecodeTests.cpp
+        unit/media/FFmpegLetterboxTests.cpp
+        unit/gfx/GraphicsApiTests.cpp
+        unit/media/FFmpegSubtitleBlendTests.cpp
+        unit/media/FFmpegTrackLabelTests.cpp
+        unit/gfx/VulkanQueueLockTests.cpp
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginContext.cpp"
@@ -119,6 +119,7 @@ target_include_directories(framelift_tests PRIVATE
         ${FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS}
         ${FRAMELIFT_MEDIA_TEST_INCLUDE_DIRS}
         ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
+        "${FRAMELIFT_ROOT}/tests/support"  # TempIni.h for PluginConfig/PluginSettings tests
         "${FRAMELIFT_ROOT}/plugins/updater/core"
         "${FRAMELIFT_ROOT}/plugins/playlist/core"
 )
@@ -127,7 +128,7 @@ framelift_apply_coverage(framelift_tests)
 gtest_discover_tests(framelift_tests)
 
 add_executable(framelift_tests_vulkan_off
-        VulkanModuleDisabledTests.cpp
+        unit/gfx/VulkanModuleDisabledTests.cpp
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
 )
 set_target_properties(framelift_tests_vulkan_off PROPERTIES
@@ -166,8 +167,8 @@ function(add_framelift_plugin_test name)
             ${FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS}
             ${FRAMELIFT_MEDIA_TEST_INCLUDE_DIRS}
             ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
-            "${FRAMELIFT_ROOT}/tests"
-            "${FRAMELIFT_ROOT}/tests/stubs"  # stub IconData.h / Version.h for plugins that need generated headers
+            "${FRAMELIFT_ROOT}/tests/support"
+            "${FRAMELIFT_ROOT}/tests/support/stubs"  # stub IconData.h / Version.h for plugins that need generated headers
             "${FRAMELIFT_ROOT}/plugins/playlist/core"
             "${FRAMELIFT_ROOT}/plugins/history/core"
             "${FRAMELIFT_ROOT}/plugins/settings-menu/core"
@@ -188,22 +189,22 @@ endfunction()
 add_framelift_plugin_test(framelift_test_module_entry
         EMIT_MODULE_ENTRY
         METADATA_HEADER "TestRenderingPluginMetadata.h"
-        ModuleEntryTests.cpp)
+        module-entry/ModuleEntryTests.cpp)
 
 add_framelift_plugin_test(framelift_test_module_entry_norender
         EMIT_MODULE_ENTRY
         METADATA_HEADER "TestNoRenderPluginMetadata.h"
-        ModuleEntryNoRenderTests.cpp)
+        module-entry/ModuleEntryNoRenderTests.cpp)
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
 add_framelift_plugin_test(framelift_test_history
-        HistoryTests.cpp
+        plugins/history/HistoryTests.cpp
         "${FRAMELIFT_ROOT}/plugins/history/core/History.cpp")
 
 # Playlist + SettingsMenu drive the real PluginContext, so they also compile
 # the host plugin runtime and settings modules.
 add_framelift_plugin_test(framelift_test_playlist
-        PlaylistTests.cpp
+        plugins/playlist/PlaylistTests.cpp
         "${FRAMELIFT_ROOT}/plugins/playlist/core/Playlist.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginContext.cpp"
@@ -211,7 +212,7 @@ add_framelift_plugin_test(framelift_test_playlist
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 
 add_framelift_plugin_test(framelift_test_settingsmenu
-        SettingsMenuTests.cpp
+        plugins/settings-menu/SettingsMenuTests.cpp
         "${FRAMELIFT_ROOT}/plugins/settings-menu/core/SettingsMenu.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/plugin-runtime/PluginContext.cpp"
@@ -219,15 +220,15 @@ add_framelift_plugin_test(framelift_test_settingsmenu
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 
 add_framelift_plugin_test(framelift_test_overlay
-        OverlayTests.cpp
+        plugins/overlay/OverlayTests.cpp
         "${FRAMELIFT_ROOT}/plugins/overlay/core/Overlay.cpp")
 
 add_framelift_plugin_test(framelift_test_debugoverlay
-        DebugOverlayTests.cpp
+        plugins/debug-overlay/DebugOverlayTests.cpp
         "${FRAMELIFT_ROOT}/plugins/debug-overlay/core/DebugOverlay.cpp")
 
 add_framelift_plugin_test(framelift_test_benchmark
-        BenchmarkTests.cpp
+        plugins/benchmark/BenchmarkTests.cpp
         "${FRAMELIFT_ROOT}/plugins/benchmark/core/Benchmark.cpp"
         "${FRAMELIFT_ROOT}/plugins/benchmark/core/SysStats.cpp")
 if (WIN32)
@@ -235,5 +236,5 @@ if (WIN32)
 endif ()
 
 add_framelift_plugin_test(framelift_test_remotestream
-        RemoteStreamTests.cpp
+        plugins/remote-stream/RemoteStreamTests.cpp
         "${FRAMELIFT_ROOT}/plugins/remote-stream/core/RemoteStream.cpp")
