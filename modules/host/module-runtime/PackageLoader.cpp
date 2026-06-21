@@ -129,7 +129,7 @@ std::string PackageId(const FrameLiftPackageInfo* info)
 }
 } // namespace
 
-void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_set<std::string>& disabled)
+void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_set<std::string>& disabledModules)
 {
     using Clock = std::chrono::steady_clock;
     const auto loadStart = Clock::now();
@@ -159,12 +159,6 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
                 "Package '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current SDK",
                 PackageId(info), info->version[0], info->version[1], info->version[2], info->abiVersion, FRAMELIFT_ABI_VERSION
             );
-            CloseLib(handle);
-            continue;
-        }
-        if (disabled.contains(PackageId(info)))
-        {
-            Log::Info("Package '{}': disabled by user - skipped", PackageId(info));
             CloseLib(handle);
             continue;
         }
@@ -252,10 +246,10 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
         const FrameLiftPackageInfo* const info = candidate.info;
 
         const auto packageStart = Clock::now();
-        using CreateFn = IModule* (*)();
+        using CreateFn = IModule* (*)(const char*);
         using DestroyFn = void (*)(IModule*);
-        using GetRenderFn = IRenderable* (*)(IModule*);
-        using RenderOrderFn = int (*)();
+        using GetRenderFn = IRenderable* (*)(const char*, IModule*);
+        using RenderOrderFn = int (*)(const char*);
 
         const auto createFn = LoadSym<CreateFn>(candidate.handle, "framelift_create");
         const auto destroyFn = LoadSym<DestroyFn>(candidate.handle, "framelift_destroy");
@@ -276,29 +270,53 @@ void PackageLoader::LoadAll(const std::string& modulesDir, const std::unordered_
             setLogSinkFn(HostLogSink());
         }
 
-        IModule* module = createFn();
-        if (!module)
+        // Instantiate every module the package carries whose id the user hasn't
+        // disabled. A package may end up loading some of its modules and not others.
+        std::vector<PackageLoader::LoadedModule> loadedModules;
+        for (int m = 0; m < info->moduleCount; ++m)
         {
-            Log::Warn("Package '{}': framelift_create() returned nullptr - skipped", PackageId(info));
+            const char* const moduleId = info->modules[m].id;
+            const std::string moduleKey = moduleId ? moduleId : std::string();
+            if (disabledModules.contains(moduleKey))
+            {
+                Log::Info("Module '{}': disabled by user - skipped", moduleKey);
+                continue;
+            }
+
+            IModule* module = createFn(moduleId);
+            if (!module)
+            {
+                Log::Warn("Module '{}': framelift_create() returned nullptr - skipped", moduleKey);
+                continue;
+            }
+
+            const int order = renderOrderFn(moduleId);
+            IRenderable* renderable = getRenderFn(moduleId, module);
+            loadedModules.push_back({moduleKey, module, renderable, order});
+        }
+
+        if (loadedModules.empty())
+        {
+            // Every module disabled (or each failed to construct): the DLL stays
+            // loaded for nothing, so drop it. It still shows in the settings UI via
+            // DiscoverAvailable so the user can re-enable a module.
+            Log::Info("Package '{}': no enabled modules - not loaded", PackageId(info));
             CloseLib(candidate.handle);
             candidate.handle = nullptr;
             continue;
         }
 
-        const int order = renderOrderFn();
-        IRenderable* renderable = getRenderFn(module);
-
         packages_.push_back(
-            {PackageId(info), candidate.binary.moduleFile, candidate.handle, module, renderable, order, destroyFn, info}
+            {PackageId(info), candidate.binary.moduleFile, candidate.handle, destroyFn, info, std::move(loadedModules)}
         );
         candidate.handle = nullptr; // ownership moved to packages_
 
         const std::string by = info->publisher ? std::string(" by ") + info->publisher : std::string();
         const double packageMs = std::chrono::duration<double, std::milli>(Clock::now() - packageStart).count();
         Log::Info(
-            "Package '{}' v{}.{}.{}{} loaded (abi version {}, modules {}, render order {}, {:.1f} ms)",
-            PackageId(info), info->version[0], info->version[1], info->version[2], by, info->abiVersion, info->moduleCount,
-            order, packageMs
+            "Package '{}' v{}.{}.{}{} loaded (abi version {}, {} of {} module(s), {:.1f} ms)", PackageId(info),
+            info->version[0], info->version[1], info->version[2], by, info->abiVersion, packages_.back().modules.size(),
+            info->moduleCount, packageMs
         );
     }
 
@@ -322,18 +340,36 @@ std::vector<PackageLoader::AvailablePackage> PackageLoader::DiscoverAvailable(co
         void* const handle = OpenLib(binary.path.c_str());
         if (!handle)
         {
-            out.push_back({binary.moduleFile, binary.moduleFile});
+            out.push_back({binary.moduleFile, binary.moduleFile, binary.moduleFile});
             continue;
         }
 
         const FrameLiftPackageInfo* const info = ReadPackageInfo(handle);
         if (info && AbiCompatible(info) && info->packageId)
         {
-            out.push_back({info->packageId, binary.moduleFile});
+            // Copy every field the catalogue needs out of the descriptor before the
+            // DLL is closed — the pointers below are invalid after CloseLib.
+            AvailablePackage pkg;
+            pkg.packageId = info->packageId;
+            pkg.moduleFile = binary.moduleFile;
+            pkg.displayName = info->name ? info->name : info->packageId;
+            pkg.version[0] = info->version[0];
+            pkg.version[1] = info->version[1];
+            pkg.version[2] = info->version[2];
+            pkg.publisher = info->publisher ? info->publisher : "";
+            pkg.description = info->description ? info->description : "";
+            for (int m = 0; m < info->moduleCount; ++m)
+            {
+                const FrameLiftModuleInfo& mod = info->modules[m];
+                pkg.modules.push_back(
+                    {mod.id ? mod.id : "", mod.name ? mod.name : "", mod.description ? mod.description : ""}
+                );
+            }
+            out.push_back(std::move(pkg));
         }
         else
         {
-            out.push_back({binary.moduleFile, binary.moduleFile});
+            out.push_back({binary.moduleFile, binary.moduleFile, binary.moduleFile});
         }
         CloseLib(handle);
     }
@@ -344,7 +380,10 @@ PackageLoader::~PackageLoader()
 {
     for (const auto& p : packages_)
     {
-        p.destroyFn(p.module);
+        for (const auto& m : p.modules)
+        {
+            p.destroyFn(m.module);
+        }
         CloseLib(p.handle);
     }
 }

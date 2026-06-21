@@ -16,7 +16,7 @@ inline constexpr FrameLiftModuleInfo kPackageModules[] = {
 };
 inline constexpr FrameLiftPackageInfo kPackageInfo{FRAMELIFT_ABI_VERSION,
                                                  "test.norender",
-                                                 "NonRenderingDummy.Core",
+                                                 "nonrenderingdummy.core",
                                                  "NonRenderingDummy",
                                                  {1, 0, 0},
                                                  nullptr,

@@ -280,12 +280,25 @@ function(framelift_generate_package_metadata target plugin_json out_header out_e
         endif ()
     endforeach ()
 
-    _framelift_pascal_from_id_tail(_module_suffix "${_first_module_id}")
-    if ("${_package_publisher}" STREQUAL "")
-        set(_module_binary_name "${_package_name}.${_module_suffix}")
+    # Binary name: Publisher.Package for a multi-module package, Publisher.Package.Module
+    # for the single-module common case. Lowercased so the shipped .dll/.so artifacts are
+    # all lowercase (matching the host exe and the packages/ folder).
+    list(LENGTH _module_files _module_file_count)
+    if (_module_file_count GREATER 1)
+        if ("${_package_publisher}" STREQUAL "")
+            set(_module_binary_name "${_package_name}")
+        else ()
+            set(_module_binary_name "${_package_publisher}.${_package_name}")
+        endif ()
     else ()
-        set(_module_binary_name "${_package_publisher}.${_package_name}.${_module_suffix}")
+        _framelift_pascal_from_id_tail(_module_suffix "${_first_module_id}")
+        if ("${_package_publisher}" STREQUAL "")
+            set(_module_binary_name "${_package_name}.${_module_suffix}")
+        else ()
+            set(_module_binary_name "${_package_publisher}.${_package_name}.${_module_suffix}")
+        endif ()
     endif ()
+    string(TOLOWER "${_module_binary_name}" _module_binary_name)
 
     set(_package_enabled TRUE)
     _framelift_current_platform(_current_platform)

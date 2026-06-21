@@ -48,7 +48,7 @@ struct FrameLiftPackageInfo
 {
     int abiVersion;
     const char* packageId;   // Stable dotted package id, e.g. "framelift.playlist".
-    const char* moduleFile;  // Shipped module binary basename, e.g. "FrameLift.Playlist.Core".
+    const char* moduleFile;  // Shipped module binary basename, e.g. "framelift.playlist.core".
     const char* name;        // Human-readable package name.
     int version[3];          // Package version from JSON: {major, minor, patch}.
     const char* publisher;   // Optional author/vendor name, nullptr if unset.

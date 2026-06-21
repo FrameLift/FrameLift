@@ -272,84 +272,130 @@ namespace
 {
 struct CollectedPackage
 {
-    std::string name; // load key
-    std::string infoName;
+    std::string id;
+    std::string displayName;
     int version[3];
     std::string publisher;
-    int moduleCount;
+    std::string description;
+    bool loaded;
+};
+
+struct CollectedModule
+{
+    std::string packageId;
+    std::string id;
+    std::string name;
+    std::string description;
     bool enabled;
     bool loaded;
     bool loadFailed;
 };
 
-// Copies every field out of the descriptor *during* the callback — the visitor
-// contract is that the reference and its strings are valid only for this call.
-void CollectPackage(const char* name, const FrameLiftPackageInfo& info, bool enabled, bool loaded, bool loadFailed, void* ud)
+// Copy every string out *during* the callback — the visitor contract is that the
+// pointers are valid only for this call.
+void CollectPackage(
+    const char* id, const char* displayName, const int* version, const char* publisher, const char* description,
+    bool loaded, void* ud
+)
 {
     auto& out = *static_cast<std::vector<CollectedPackage>*>(ud);
-    out.push_back({name, info.name ? info.name : "", {info.version[0], info.version[1], info.version[2]},
-                   info.publisher ? info.publisher : "", info.moduleCount, enabled, loaded, loadFailed});
+    out.push_back(
+        {id, displayName ? displayName : "", {version[0], version[1], version[2]}, publisher ? publisher : "",
+         description ? description : "", loaded}
+    );
 }
 
-std::vector<CollectedPackage> Enumerate(ModuleContext& ctx)
+void CollectModule(
+    const char* packageId, const char* moduleId, const char* name, const char* description, bool enabled, bool loaded,
+    bool loadFailed, void* ud
+)
+{
+    auto& out = *static_cast<std::vector<CollectedModule>*>(ud);
+    out.push_back(
+        {packageId, moduleId, name ? name : "", description ? description : "", enabled, loaded, loadFailed}
+    );
+}
+
+std::vector<CollectedPackage> EnumeratePkgs(ModuleContext& ctx)
 {
     std::vector<CollectedPackage> out;
     ctx.EnumeratePackages(&CollectPackage, &out);
     return out;
 }
+
+std::vector<CollectedModule> EnumerateMods(ModuleContext& ctx)
+{
+    std::vector<CollectedModule> out;
+    ctx.EnumerateModules(&CollectModule, &out);
+    return out;
+}
 } // namespace
 
-TEST(ModuleContextTest, EnumeratePackagesReportsLoadedAndDisabledEntries)
+TEST(ModuleContextTest, EnumeratePackagesAndModulesReportsLoadedAndDisabledEntries)
 {
     Ctx c;
-    const FrameLiftPackageInfo alpha{FRAMELIFT_ABI_VERSION,
-                                    "framelift.alpha",
-                                    "FrameLift.Alpha",
-                                    "Alpha",
-                                    {2, 3, 4},
-                                    "Acme",
-                                    "First plugin",
-                                    nullptr,
-                                    0};
-    c.ctx.AddPackage("framelift.alpha", true, &alpha); // loaded
-    c.ctx.AddPackage("framelift.beta", false, nullptr); // present but disabled
-    c.ctx.AddPackage("Gamma", true, nullptr); // enabled at startup yet not loaded → failed
 
-    const auto got = Enumerate(c.ctx);
-    ASSERT_EQ(got.size(), 3u);
+    ModuleContext::PackageCatalogEntry alpha;
+    alpha.id = "framelift.alpha";
+    alpha.displayName = "Alpha";
+    alpha.version[0] = 2;
+    alpha.version[1] = 3;
+    alpha.version[2] = 4;
+    alpha.publisher = "Acme";
+    alpha.description = "First plugin";
+    alpha.loaded = true;
+    alpha.modules.push_back({"framelift.alpha.core", "Alpha Core", "", true, true});
+    c.ctx.AddPackage(std::move(alpha));
 
-    EXPECT_EQ(got[0].name, "framelift.alpha");
-    EXPECT_EQ(got[0].infoName, "Alpha");
-    EXPECT_EQ(got[0].version[0], 2);
-    EXPECT_EQ(got[0].publisher, "Acme");
-    EXPECT_TRUE(got[0].enabled);
-    EXPECT_TRUE(got[0].loaded);
-    EXPECT_FALSE(got[0].loadFailed);
+    ModuleContext::PackageCatalogEntry beta; // present but its module is disabled
+    beta.id = "framelift.beta";
+    beta.loaded = false;
+    beta.modules.push_back({"framelift.beta.core", "Beta Core", "", false, false});
+    c.ctx.AddPackage(std::move(beta));
 
-    // Present-but-disabled: a synthesized name-only descriptor whose other fields
-    // must read as zero/null so consumers can rely on the synth path being inert.
-    EXPECT_EQ(got[1].name, "framelift.beta");
-    EXPECT_EQ(got[1].infoName, "framelift.beta"); // synthesized name-only descriptor
-    EXPECT_EQ(got[1].version[0], 0);
-    EXPECT_EQ(got[1].moduleCount, 0);
-    EXPECT_TRUE(got[1].publisher.empty());
-    EXPECT_FALSE(got[1].enabled);
-    EXPECT_FALSE(got[1].loaded);
-    EXPECT_FALSE(got[1].loadFailed); // disabled, never attempted
+    ModuleContext::PackageCatalogEntry gamma; // module enabled yet not loaded → failed
+    gamma.id = "framelift.gamma";
+    gamma.loaded = false;
+    gamma.modules.push_back({"framelift.gamma.core", "Gamma Core", "", true, false});
+    c.ctx.AddPackage(std::move(gamma));
 
-    EXPECT_EQ(got[2].name, "Gamma");
-    EXPECT_FALSE(got[2].loaded);
-    EXPECT_TRUE(got[2].enabled);
-    EXPECT_TRUE(got[2].loadFailed); // enabled but missing from the loaded set
+    const auto pkgs = EnumeratePkgs(c.ctx);
+    ASSERT_EQ(pkgs.size(), 3u);
+    EXPECT_EQ(pkgs[0].id, "framelift.alpha");
+    EXPECT_EQ(pkgs[0].displayName, "Alpha");
+    EXPECT_EQ(pkgs[0].version[0], 2);
+    EXPECT_EQ(pkgs[0].publisher, "Acme");
+    EXPECT_TRUE(pkgs[0].loaded);
+    EXPECT_FALSE(pkgs[1].loaded);
+
+    const auto mods = EnumerateMods(c.ctx);
+    ASSERT_EQ(mods.size(), 3u);
+
+    EXPECT_EQ(mods[0].packageId, "framelift.alpha");
+    EXPECT_EQ(mods[0].id, "framelift.alpha.core");
+    EXPECT_TRUE(mods[0].enabled);
+    EXPECT_TRUE(mods[0].loaded);
+    EXPECT_FALSE(mods[0].loadFailed);
+
+    EXPECT_EQ(mods[1].id, "framelift.beta.core");
+    EXPECT_FALSE(mods[1].enabled);
+    EXPECT_FALSE(mods[1].loaded);
+    EXPECT_FALSE(mods[1].loadFailed); // disabled, never attempted
+
+    EXPECT_EQ(mods[2].id, "framelift.gamma.core");
+    EXPECT_TRUE(mods[2].enabled);
+    EXPECT_FALSE(mods[2].loaded);
+    EXPECT_TRUE(mods[2].loadFailed); // enabled but missing from the loaded set
 }
 
 TEST(ModuleContextTest, EnumeratePackagesEmptyByDefault)
 {
     Ctx c;
-    EXPECT_TRUE(Enumerate(c.ctx).empty());
+    EXPECT_TRUE(EnumeratePkgs(c.ctx).empty());
+    EXPECT_TRUE(EnumerateMods(c.ctx).empty());
 }
 
-TEST(ModuleContextTest, SetPackageEnabledUpdatesCatalogueAndPersists)
+TEST(ModuleContextTest, SetModuleEnabledUpdatesCatalogueAndPersists)
 {
     Settings settings;
     PackageConfig packageConfig;
@@ -358,24 +404,29 @@ TEST(ModuleContextTest, SetPackageEnabledUpdatesCatalogueAndPersists)
     std::filesystem::remove(packagesIni);
     ModuleContext ctx{"pref/", &settings, "unused.ini", &packageConfig, packagesIni};
 
-    ctx.AddPackage("framelift.playlist", true, nullptr);
-    ctx.AddPackage("framelift.history", true, nullptr);
+    // One package carrying two modules — the multi-module case: disable just one.
+    ModuleContext::PackageCatalogEntry pkg;
+    pkg.id = "framelift.media";
+    pkg.loaded = true;
+    pkg.modules.push_back({"framelift.media.core", "Core", "", true, true});
+    pkg.modules.push_back({"framelift.media.extra", "Extra", "", true, true});
+    ctx.AddPackage(std::move(pkg));
 
-    ctx.SetPackageEnabled("framelift.history", false); // disable one
-    ctx.SetPackageEnabled("Unknown", false);           // no-op for unknown names
+    ctx.SetModuleEnabled("framelift.media.extra", false); // disable one module
+    ctx.SetModuleEnabled("unknown.module", false);        // no-op for unknown ids
 
     // Catalogue reflects the toggle immediately (drives the live checkbox state).
-    const auto got = Enumerate(ctx);
-    ASSERT_EQ(got.size(), 2u);
-    EXPECT_TRUE(got[0].enabled);  // framelift.playlist
-    EXPECT_FALSE(got[1].enabled); // framelift.history
+    const auto mods = EnumerateMods(ctx);
+    ASSERT_EQ(mods.size(), 2u);
+    EXPECT_TRUE(mods[0].enabled);  // framelift.media.core
+    EXPECT_FALSE(mods[1].enabled); // framelift.media.extra
 
     // The opt-out manifest persisted the disable and nothing else.
     PackageConfig reloaded;
     reloaded.Load(packagesIni);
-    EXPECT_FALSE(reloaded.IsEnabled("framelift.history"));
-    EXPECT_TRUE(reloaded.IsEnabled("framelift.playlist"));
-    EXPECT_TRUE(reloaded.IsEnabled("Unknown")); // never written
+    EXPECT_FALSE(reloaded.IsEnabled("framelift.media.extra"));
+    EXPECT_TRUE(reloaded.IsEnabled("framelift.media.core"));
+    EXPECT_TRUE(reloaded.IsEnabled("unknown.module")); // never written
 
     std::filesystem::remove(packagesIni);
 }

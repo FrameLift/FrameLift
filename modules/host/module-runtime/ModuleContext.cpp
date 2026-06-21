@@ -54,17 +54,30 @@ int ModuleContext::GetPrefPath(char* buf, int cap) const noexcept
 
 // ── Package catalogue ─────────────────────────────────────────────────────────
 
-void ModuleContext::AddPackage(std::string name, bool enabled, const FrameLiftPackageInfo* info)
+void ModuleContext::AddPackage(PackageCatalogEntry entry)
 {
-    // A package present but not loaded while enabled was attempted and failed at
-    // startup. Computed once here; SetPackageEnabled toggles never revise it, so a
-    // freshly enabled package reads as "pending restart", not "failed".
-    const bool loadFailed = !info && enabled;
-    packageCatalog_.push_back({std::move(name), enabled, loadFailed, info});
+    PackageCatalogRec rec;
+    rec.id = std::move(entry.id);
+    rec.displayName = std::move(entry.displayName);
+    rec.version[0] = entry.version[0];
+    rec.version[1] = entry.version[1];
+    rec.version[2] = entry.version[2];
+    rec.publisher = std::move(entry.publisher);
+    rec.description = std::move(entry.description);
+    rec.loaded = entry.loaded;
+    for (auto& m : entry.modules)
+    {
+        // A module enabled at startup yet not loaded was attempted and failed (the
+        // resolver rejected its package, or construction threw). Snapshot it once;
+        // SetModuleEnabled toggles never revise it.
+        const bool loadFailed = m.enabled && !m.loaded;
+        rec.modules.push_back({std::move(m.id), std::move(m.name), std::move(m.description), m.enabled, m.loaded, loadFailed});
+    }
+    packageCatalog_.push_back(std::move(rec));
 }
 
 void ModuleContext::EnumeratePackages(
-    void (*visit)(const char*, const FrameLiftPackageInfo&, bool, bool, bool, void*), void* visitUd
+    void (*visit)(const char*, const char*, const int*, const char*, const char*, bool, void*), void* visitUd
 ) const noexcept
 {
     if (!visit)
@@ -73,39 +86,62 @@ void ModuleContext::EnumeratePackages(
     }
     for (const auto& rec : packageCatalog_)
     {
-        if (rec.info)
+        visit(
+            rec.id.c_str(), rec.displayName.c_str(), rec.version, rec.publisher.c_str(), rec.description.c_str(),
+            rec.loaded, visitUd
+        );
+    }
+}
+
+void ModuleContext::EnumerateModules(
+    void (*visit)(const char*, const char*, const char*, const char*, bool, bool, bool, void*), void* visitUd
+) const noexcept
+{
+    if (!visit)
+    {
+        return;
+    }
+    for (const auto& pkg : packageCatalog_)
+    {
+        for (const auto& m : pkg.modules)
         {
-            visit(rec.name.c_str(), *rec.info, rec.enabled, true, rec.loadFailed, visitUd);
-        }
-        else
-        {
-            // Synthesize a name-only descriptor for a present-but-disabled DLL.
-            const FrameLiftPackageInfo synth{
-                0, rec.name.c_str(), rec.name.c_str(), rec.name.c_str(), {0, 0, 0}, nullptr, nullptr, nullptr, 0};
-            visit(rec.name.c_str(), synth, rec.enabled, false, rec.loadFailed, visitUd);
+            visit(
+                pkg.id.c_str(), m.id.c_str(), m.name.c_str(), m.description.c_str(), m.enabled, m.loaded, m.loadFailed,
+                visitUd
+            );
         }
     }
 }
 
-void ModuleContext::SetPackageEnabled(const char* name, bool enabled) noexcept
+void ModuleContext::SetModuleEnabled(const char* moduleId, bool enabled) noexcept
 {
-    if (!name)
+    if (!moduleId)
     {
         return;
     }
 
-    const auto rec = std::ranges::find_if(packageCatalog_, [&](const PackageRec& r) { return r.name == name; });
-    if (rec == packageCatalog_.end())
+    bool found = false;
+    for (auto& pkg : packageCatalog_)
     {
-        return; // unknown package
+        for (auto& m : pkg.modules)
+        {
+            if (m.id == moduleId)
+            {
+                m.enabled = enabled; // reflect immediately so the UI checkbox updates
+                found = true;
+            }
+        }
     }
-    rec->enabled = enabled; // reflect immediately so the UI checkbox updates
+    if (!found)
+    {
+        return; // unknown module
+    }
 
     // Persist to the opt-out manifest; the change takes effect on the next launch,
     // so there is no live state to notify (skip the change-callback fan-out).
     if (packageConfig_)
     {
-        packageConfig_->Set(rec->name, enabled);
+        packageConfig_->Set(moduleId, enabled);
         packageConfig_->Save(packagesPath_);
     }
 }

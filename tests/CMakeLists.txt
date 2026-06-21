@@ -192,6 +192,11 @@ add_framelift_plugin_test(framelift_test_module_entry_norender
         METADATA_HEADER "TestNoRenderPackageMetadata.h"
         module-entry/ModuleEntryNoRenderTests.cpp)
 
+add_framelift_plugin_test(framelift_test_module_entry_multi
+        EMIT_MODULE_ENTRY
+        METADATA_HEADER "TestMultiModulePackageMetadata.h"
+        module-entry/ModuleEntryMultiTests.cpp)
+
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
 add_framelift_plugin_test(framelift_test_history
         plugins/history/HistoryTests.cpp

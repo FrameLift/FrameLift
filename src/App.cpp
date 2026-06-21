@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <unordered_set>
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
@@ -133,48 +134,70 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
 
 void App::LoadPackages()
 {
-    // Load every package present in the Modules/ subdirectory. Enablement is driven
-    // by module JSON (a disabled package isn't built/shipped, so it's absent here);
-    // the loader resolves dependencies and load order from embedded metadata. Each
-    // package's modules register their own context menu sections during Install().
+    // Load every package present in the packages/ subdirectory. Per-module enablement
+    // comes from packages.ini (keyed by module id); the loader resolves dependencies
+    // and load order from embedded metadata, then instantiates each enabled module.
+    // Each module registers its own context menu sections etc. during Install().
     char baseBuf[512] = {};
     (void)appWindow_->GetBasePath(baseBuf, sizeof(baseBuf));
-    const std::string modulesDir = std::string(baseBuf) + "Modules/";
-    packageLoader_.LoadAll(modulesDir, packageConfig_.DisabledIds());
+    const std::string packagesDir = std::string(baseBuf) + "packages/";
+    packageLoader_.LoadAll(packagesDir, packageConfig_.DisabledIds());
 
+    // What actually got instantiated this session, by package id and module id.
+    std::unordered_set<std::string> loadedPackageIds;
+    std::unordered_set<std::string> loadedModuleIds;
+    for (const auto& p : packageLoader_.Packages())
+    {
+        loadedPackageIds.insert(p.name);
+        for (const auto& m : p.modules)
+        {
+            loadedModuleIds.insert(m.moduleId);
+        }
+    }
+
+    // Build the catalogue from every discovered package (loaded or not) so the
+    // settings UI can list and toggle each module. Populate it before Install() so a
+    // module may enumerate peers during it.
+    std::vector<std::string> discoveredModuleIds;
+    for (auto& pkg : PackageLoader::DiscoverAvailable(packagesDir))
+    {
+        ModuleContext::PackageCatalogEntry entry;
+        entry.id = pkg.packageId;
+        entry.displayName = std::move(pkg.displayName);
+        entry.version[0] = pkg.version[0];
+        entry.version[1] = pkg.version[1];
+        entry.version[2] = pkg.version[2];
+        entry.publisher = std::move(pkg.publisher);
+        entry.description = std::move(pkg.description);
+        entry.loaded = loadedPackageIds.contains(pkg.packageId);
+        for (auto& mod : pkg.modules)
+        {
+            ModuleContext::ModuleCatalogEntry me;
+            discoveredModuleIds.push_back(mod.id);
+            // enabled=false ⇒ user-disabled (unchecked in the UI); enabled=true but
+            // not loaded ⇒ resolver-rejected/failed (surfaces as a load failure).
+            me.enabled = packageConfig_.IsEnabled(mod.id);
+            me.loaded = loadedModuleIds.contains(mod.id);
+            me.id = std::move(mod.id);
+            me.name = std::move(mod.name);
+            me.description = std::move(mod.description);
+            entry.modules.push_back(std::move(me));
+        }
+        moduleCtx_->AddPackage(std::move(entry));
+    }
+
+    // Install each loaded module (every module of every loaded package).
     for (auto& p : packageLoader_.Packages())
     {
-        // Record identity before Install so a module may list peers during it.
-        moduleCtx_->AddPackage(p.name, /*enabled=*/true, p.info);
-        registry_.Add(p.module, *moduleCtx_);
-    }
-
-    // Append any packages that are present but not loaded — either disabled by the
-    // user or rejected by the resolver — so the settings UI can list them.
-    std::vector<std::string> discoveredIds;
-    for (auto& package : PackageLoader::DiscoverAvailable(modulesDir))
-    {
-        discoveredIds.push_back(package.packageId);
-        const bool loaded = std::ranges::any_of(
-            packageLoader_.Packages(),
-            [&](const auto& p)
-            {
-                return p.name == package.packageId;
-            }
-        );
-        if (loaded)
+        for (auto& m : p.modules)
         {
-            continue;
+            registry_.Add(m.module, *moduleCtx_);
         }
-        // enabled=false ⇒ user-disabled (unchecked in the UI); enabled=true but not
-        // loaded ⇒ resolver-rejected (surfaces as a load failure).
-        const bool enabled = packageConfig_.IsEnabled(package.packageId);
-        moduleCtx_->AddPackage(std::move(package.packageId), enabled, nullptr);
     }
 
-    // Refresh the manifest so it lists every discovered package (new ones default to
+    // Refresh the manifest so it lists every discovered module (new ones default to
     // enabled), keeping packages.ini a complete, hand-editable record.
-    packageConfig_.EnsureKnown(discoveredIds);
+    packageConfig_.EnsureKnown(discoveredModuleIds);
     packageConfig_.Save(packagesPath_);
 
     registry_.BindHotkeys(keys_);
@@ -199,9 +222,12 @@ void App::BuildRenderables()
 
     for (const auto& p : packageLoader_.Packages())
     {
-        if (p.renderable)
+        for (const auto& m : p.modules)
         {
-            items.emplace_back(p.renderOrder, p.renderable);
+            if (m.renderable)
+            {
+                items.emplace_back(m.renderOrder, m.renderable);
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-# Explicit host source ownership for FrameLift.exe.
+# Explicit host source ownership for framelift.exe.
 #
 # Built-in modules are JSON-authored and reported by FrameLiftBuiltinModules.cmake.
 # Source groups are appended by module state so lean builds do not compile code

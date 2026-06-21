@@ -17,7 +17,7 @@ inline constexpr FrameLiftModuleInfo kPackageModules[] = {
 };
 inline constexpr FrameLiftPackageInfo kPackageInfo{FRAMELIFT_ABI_VERSION,
                                                  "test.package",
-                                                 "FrameLift.TestPackage.Core",
+                                                 "framelift.testpackage.core",
                                                  "TestPackage",
                                                  {1, 0, 0},
                                                  "FrameLift",

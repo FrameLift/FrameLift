@@ -109,6 +109,9 @@ set_target_properties(FrameLift PROPERTIES
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
         WIN32_EXECUTABLE TRUE
+        # Ship a lowercase artifact name (framelift / framelift.exe) to match the
+        # lowercase package DLLs and the packages/ folder.
+        OUTPUT_NAME "framelift"
 )
 
 # FrameLiftSdk now carries only the public headers; the host links the third-party
@@ -158,9 +161,9 @@ endif ()
 
 FrameLift_apply_release_opts(FrameLift)
 
-# Create Modules/ subdirectory before the first module DLL is built.
+# Create packages/ subdirectory before the first package DLL is built.
 add_custom_command(TARGET FrameLift PRE_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:FrameLift>/Modules"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:FrameLift>/packages"
 )
 
 # Discover plugin package source folders automatically. Each plugin CMakeLists
@@ -199,7 +202,7 @@ endforeach ()
 # On Linux the shared objects are resolved from the system via ldconfig. On
 # Windows SDL3, FFmpeg, and libass all come from vcpkg; their runtime DLLs
 # (SDL3.dll, avcodec-*.dll, ass-*.dll) and transitive deps (freetype/fontconfig/
-# harfbuzz/fribidi/…) are deployed next to FrameLift.exe automatically by vcpkg's
+# harfbuzz/fribidi/…) are deployed next to framelift.exe automatically by vcpkg's
 # app-local deployment (VCPKG_APPLOCAL_DEPS) — no manual copy needed.
 
 # ── SDK example (bitrot guard) ────────────────────────────────────────────────
@@ -208,7 +211,7 @@ endforeach ()
 option(FRAMELIFT_BUILD_SDK_EXAMPLE "Build the bundled HelloPlugin example in-tree" ON)
 if (FRAMELIFT_BUILD_SDK_EXAMPLE)
     add_subdirectory(sdk/examples/hello-plugin)
-    # Keep the example out of the shipped Modules/ dir (it's only a bitrot guard).
+    # Keep the example out of the shipped packages/ dir (it's only a bitrot guard).
     # Override both RUNTIME (.dll) and LIBRARY (.so) so it's redirected on every platform.
     set_target_properties(HelloPlugin PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sdk-example"

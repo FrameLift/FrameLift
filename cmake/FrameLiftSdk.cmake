@@ -2,11 +2,11 @@
 #
 # Two modes, selected by FRAMELIFT_SDK_STANDALONE:
 #   • In-tree (default): included by the root CMakeLists while building FrameLift.
-#     FrameLiftSdk points at sdk/include + the generated-header dir; modules land next
-#     to the host exe in <FrameLift>/Modules.
+#     FrameLiftSdk points at sdk/include + the generated-header dir; packages land next
+#     to the host exe in <FrameLift>/packages.
 #   • Standalone: included by FrameLiftSdkConfig.cmake from an installed SDK package.
 #     FrameLiftSdk points at the packaged include/ + src/; no host target exists, so
-#     modules land in <build>/Modules.
+#     packages land in <build>/packages.
 #
 # The public SDK target (FrameLiftSdk) is dependency-clean: it exposes only the SDK
 # include path. No imgui/spdlog/stb/json — the host owns those.
@@ -49,7 +49,7 @@ set(FRAMELIFT_SDK_SOURCES
 )
 
 # ── Helper: add_framelift_plugin(NAME PLUGIN_JSON <file> src1 src2 ...) ─────────────
-# Creates a SHARED plugin library that links the SDK and outputs into Modules/.
+# Creates a SHARED plugin library that links the SDK and outputs into packages/.
 function(add_framelift_plugin NAME)
     cmake_parse_arguments(_FL_PLUGIN "" "PLUGIN_JSON" "" ${ARGN})
     if (NOT _FL_PLUGIN_PLUGIN_JSON)
@@ -79,7 +79,7 @@ function(add_framelift_plugin NAME)
             CXX_STANDARD 23
             CXX_STANDARD_REQUIRED ON
             CXX_EXTENSIONS OFF
-            # The host scans Modules/ for shared libraries; MinGW would otherwise
+            # The host scans packages/ for shared libraries; MinGW would otherwise
             # emit lib<Name>.dll and the load would fail.
             OUTPUT_NAME "${_framelift_module_binary_name}"
             PREFIX "")
@@ -93,17 +93,17 @@ function(add_framelift_plugin NAME)
                 -static-libgcc -static-libstdc++ -static)
     endif ()
     if (TARGET FrameLift)
-        set(_framelift_plugin_out "$<TARGET_FILE_DIR:FrameLift>/Modules")
+        set(_framelift_plugin_out "$<TARGET_FILE_DIR:FrameLift>/packages")
     else ()
-        set(_framelift_plugin_out "${CMAKE_BINARY_DIR}/Modules")
+        set(_framelift_plugin_out "${CMAKE_BINARY_DIR}/packages")
     endif ()
     # RUNTIME covers the Windows .dll; LIBRARY covers the Linux/macOS .so/.dylib
-    # (a SHARED lib is a LIBRARY artifact off-Windows). Set both so modules always
-    # land in Modules/ regardless of platform.
+    # (a SHARED lib is a LIBRARY artifact off-Windows). Set both so packages always
+    # land in packages/ regardless of platform.
     set_target_properties(${NAME} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${_framelift_plugin_out}"
             LIBRARY_OUTPUT_DIRECTORY "${_framelift_plugin_out}")
-    # Ensure the Modules/ output directory exists before linking.
+    # Ensure the packages/ output directory exists before linking.
     add_custom_command(TARGET ${NAME} PRE_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "${_framelift_plugin_out}")
 endfunction()

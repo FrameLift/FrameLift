@@ -4,7 +4,7 @@ An **extensible** video player built on Dear ImGui, SDL3, FFmpeg, and libass —
 is a runtime-loaded plugin. The host application has no compile-time knowledge of any capability:
 playback controls, playlists, history, settings, network streaming, and updates are all plugin DLLs
 loaded at startup over a stable, versioned binary ABI. Add or remove features by dropping a DLL in or
-out of the `Modules/` folder.
+out of the `packages/` folder.
 
 ## Features
 
@@ -61,11 +61,13 @@ current list of options.
 
 ## Extending FrameLift (Plugin SDK)
 
-Every FrameLift feature ships as a **package** — one runtime-loaded DLL under the `Modules/` folder
+Every FrameLift feature ships as a **package** — one runtime-loaded DLL under the `packages/` folder
 next to the executable. A *plugin* (what you build with the SDK) ships as a package: a `.Plugin.json`
 plus its `.Module.json`(s), compiled into one DLL that carries one or more **modules**, each declaring
-the **features** it provides and requires. You can build your own against the **dependency-free plugin
-SDK** (`framelift-sdk-<ver>.zip`, published as a Release asset on every version tag).
+the **features** it provides and requires. A package may carry several modules, and each module can be
+enabled or disabled independently from the Settings → Plugins page (persisted per module id in
+`packages.ini`). You can build your own against the **dependency-free plugin SDK**
+(`framelift-sdk-<ver>.zip`, published as a Release asset on every version tag).
 
 - **Stable binary boundary.** The host↔plugin boundary is a COM-like binary ABI: pure abstract
   interfaces, POD-only method signatures, and `extern "C"` entry points. A plugin built with any
@@ -102,14 +104,14 @@ FrameLift/
 │   ├── src/                # SDK helper sources compiled into each plugin
 │   └── examples/hello-plugin/  # Minimal worked example (built in-tree as a bitrot guard)
 │
-├── src/                    # Host entry point (FrameLift.exe): App, CLI, main — owns only the loop
+├── src/                    # Host entry point (framelift.exe): App, CLI, main — owns only the loop
 │
 ├── modules/                # Built-in modules compiled into the host (not shipped as DLLs)
 │   ├── host/               # playback, audio, settings, services, controls, fonts, read-ahead, ui, logging, module-runtime
 │   ├── gfx/                # Graphics backends (graphics-core, opengl, vulkan) and video renderers
 │   └── platform/           # SDL3 window (window-sdl) and per-OS dir watchers (dir-watch)
 │
-├── plugins/                # Plugins — each builds one package (DLL) emitted into Modules/
+├── plugins/                # Plugins — each builds one package (DLL) emitted into packages/
 │   ├── overlay/            # Playback controls, idle screen, notifications
 │   ├── playlist/           # Folder playlist and file navigation
 │   ├── history/            # Recently played + resume positions
@@ -126,9 +128,10 @@ FrameLift/
 ```
 
 The host (`src/`) has no compile-time knowledge of specific plugins; every package is loaded at
-runtime from a DLL such as `Modules/FrameLift.Playlist.Core.dll`, skipped if disabled in `packages.ini`
-(one `framelift.playlist=enabled|disabled` row per package; absent ⇒ enabled), dependency-resolved,
-and ABI-checked before any module object is constructed.
+runtime from a DLL such as `packages/framelift.playlist.core.dll`, dependency-resolved and ABI-checked
+before any module object is constructed. Each module a package carries is instantiated unless its id is
+disabled in `packages.ini` (one `framelift.playlist.core=enabled|disabled` row per module; absent ⇒
+enabled).
 
 ## Building from Source
 
@@ -160,9 +163,9 @@ cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build cmake-build-debug --config Debug
 ```
 
-Output: `cmake-build-debug/FrameLift` (`.exe` on Windows). On Windows the required shared libraries
+Output: `cmake-build-debug/framelift` (`.exe` on Windows). On Windows the required shared libraries
 are copied next to the executable; on Linux SDL3/FFmpeg/libass are resolved from the system. Package
-DLLs are placed under `cmake-build-debug/Modules/` (`.dll` on Windows, `.so` on Linux).
+DLLs are placed under `cmake-build-debug/packages/` (`.dll` on Windows, `.so` on Linux).
 The auto-updater package declares Windows-only platform support and is disabled automatically elsewhere.
 The Vulkan and OpenGL loaders are resolved at
 runtime (no link-time `libvulkan` dependency), so only a GPU driver is needed to run.

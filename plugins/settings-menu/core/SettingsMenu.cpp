@@ -2,11 +2,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "Version.h"
 #include <IGraphicsBackend.h>
@@ -1152,82 +1154,153 @@ void SettingsMenu::RenderPagePlugins(UIContext& ctx)
         return;
     }
 
-    ctx.TextDisabledWrapped("Enabling or disabling a plugin takes effect after restarting FrameLift.");
+    IPackageCatalog* const catalog = PackageCatalog();
+    if (!catalog)
+    {
+        return;
+    }
+
+    ctx.TextDisabledWrapped("Enabling or disabling a module takes effect after restarting FrameLift.");
     ctx.Dummy({0.f, 6.f});
 
-    // Walk the host's plugin catalogue and render one block per plugin. State
-    // rides through the C callback via void* (no captures cross the ABI).
-    struct PluginsCtx
+    // Collect the catalogue into host-side structures (STL never crosses the ABI; the
+    // C callbacks copy every string they need before the visitor call returns), then
+    // render one block per package with its modules nested underneath.
+    struct ModuleRow
     {
-        SettingsMenu* self;
-        UIContext* ctx;
-        int count = 0;
+        std::string id;
+        std::string name;
+        std::string description;
+        bool enabled;
+        bool loaded;
+        bool loadFailed;
     };
+    struct PackageRow
+    {
+        std::string id;
+        std::string displayName;
+        std::string publisher;
+        std::string description;
+        int version[3];
+        bool loaded;
+        std::vector<ModuleRow> modules;
+    };
+    std::vector<PackageRow> packages;
 
-    PluginsCtx pc{this, &ctx};
-    PackageCatalog()->EnumeratePackages(
-        [](const char* name, const FrameLiftPackageInfo& info, bool enabled, bool loaded, bool loadFailed, void* pv)
+    catalog->EnumeratePackages(
+        [](const char* packageId, const char* displayName, const int* version, const char* publisher,
+           const char* description, bool loaded, void* ud)
         {
-            auto& [self, ctx, count] = *static_cast<PluginsCtx*>(pv);
-            if (count++ > 0)
-            {
-                ctx->Dummy({0.f, 10.f});
-            }
-
-            const char* title = (loaded && info.name) ? info.name : name;
-            Widgets::SectionHeader(*ctx, title);
-
-            ctx->PushID(name);
-
-            // SettingsMenu cannot disable itself — that would remove this very UI.
-            const bool isSelf = strcmp(name, "framelift.settings_menu") == 0 ||
-                                (loaded && info.name && strcmp(info.name, self->ModuleName()) == 0);
-            if (isSelf)
-            {
-                ctx->TextDisabled("Enabled (required)");
-            }
-            else
-            {
-                bool en = enabled;
-                if (ctx->Checkbox("Enabled", &en))
-                {
-                    self->PackageCatalog()->SetPackageEnabled(name, en);
-                }
-            }
-
-            if (loaded)
-            {
-                char line[256];
-                snprintf(line, sizeof(line), "Version %d.%d.%d", info.version[0], info.version[1], info.version[2]);
-                if (info.publisher && info.publisher[0])
-                {
-                    const std::size_t n = strlen(line);
-                    snprintf(line + n, sizeof(line) - n, "  -  %s", info.publisher);
-                }
-                ctx->TextDisabled(line);
-
-                if (info.description && info.description[0])
-                {
-                    ctx->TextWrapped(info.description);
-                }
-            }
-            else if (loadFailed)
-            {
-                ctx->TextDisabled("Failed to load - check the log.");
-            }
-            else
-            {
-                ctx->TextDisabled(enabled ? "Will load after restart." : "Disabled - enable and restart to load.");
-            }
-
-            ctx->PopID();
+            auto& out = *static_cast<std::vector<PackageRow>*>(ud);
+            out.push_back(
+                {packageId, displayName ? displayName : packageId, publisher ? publisher : "",
+                 description ? description : "", {version[0], version[1], version[2]}, loaded, {}}
+            );
         },
-        &pc
+        &packages
     );
 
-    if (pc.count == 0)
+    catalog->EnumerateModules(
+        [](const char* packageId, const char* moduleId, const char* moduleName, const char* description, bool enabled,
+           bool loaded, bool loadFailed, void* ud)
+        {
+            auto& pkgs = *static_cast<std::vector<PackageRow>*>(ud);
+            for (auto& p : pkgs)
+            {
+                if (p.id == packageId)
+                {
+                    p.modules.push_back(
+                        {moduleId, moduleName ? moduleName : moduleId, description ? description : "", enabled, loaded,
+                         loadFailed}
+                    );
+                    break;
+                }
+            }
+        },
+        &packages
+    );
+
+    if (packages.empty())
     {
         ctx.TextDisabled("No plugins found.");
+        return;
+    }
+
+    int blockIdx = 0;
+    for (const auto& pkg : packages)
+    {
+        if (blockIdx++ > 0)
+        {
+            ctx.Dummy({0.f, 10.f});
+        }
+
+        Widgets::SectionHeader(ctx, pkg.displayName.c_str());
+
+        if (pkg.loaded)
+        {
+            char line[256];
+            snprintf(line, sizeof(line), "Version %d.%d.%d", pkg.version[0], pkg.version[1], pkg.version[2]);
+            if (!pkg.publisher.empty())
+            {
+                const std::size_t n = strlen(line);
+                snprintf(line + n, sizeof(line) - n, "  -  %s", pkg.publisher.c_str());
+            }
+            ctx.TextDisabled(line);
+        }
+        if (!pkg.description.empty())
+        {
+            ctx.TextWrapped(pkg.description.c_str());
+        }
+
+        // The SettingsMenu package can't disable its own modules — that would remove
+        // this very UI.
+        const bool isSelfPackage = pkg.id == "framelift.settings_menu";
+        const bool labelModules = pkg.modules.size() > 1;
+
+        ctx.PushID(pkg.id.c_str());
+        for (const auto& mod : pkg.modules)
+        {
+            ctx.PushID(mod.id.c_str());
+
+            // For a multi-module package, name each module above its toggle so the
+            // checkboxes are distinguishable; a single-module package needs no label.
+            if (labelModules)
+            {
+                ctx.TextDisabled(mod.name.c_str());
+            }
+
+            if (isSelfPackage)
+            {
+                ctx.TextDisabled("Enabled (required)");
+            }
+            else
+            {
+                bool en = mod.enabled;
+                if (ctx.Checkbox("Enabled", &en))
+                {
+                    catalog->SetModuleEnabled(mod.id.c_str(), en);
+                }
+            }
+
+            if (mod.loaded)
+            {
+                if (!mod.description.empty())
+                {
+                    ctx.TextWrapped(mod.description.c_str());
+                }
+            }
+            else if (mod.loadFailed)
+            {
+                ctx.TextDisabled("Failed to load - check the log.");
+            }
+            else
+            {
+                ctx.TextDisabled(mod.enabled ? "Will load after restart." : "Disabled - enable and restart to load.");
+            }
+
+            ctx.PopID();
+        }
+        ctx.PopID();
     }
 }
 

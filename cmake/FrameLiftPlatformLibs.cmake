@@ -6,7 +6,7 @@
 #    find_package / pkg-config.
 #  • Windows: vcpkg manifest mode (see vcpkg.json). The vcpkg toolchain installs the
 #    libraries on configure and seeds the include/lib search paths. Runtime DLLs and
-#    their transitive deps are deployed next to FrameLift.exe automatically by vcpkg's
+#    their transitive deps are deployed next to framelift.exe automatically by vcpkg's
 #    app-local deployment (VCPKG_APPLOCAL_DEPS) — no manual DLL copy needed. Requires
 #    configuring with the vcpkg toolchain (see CMakePresets.json).
 

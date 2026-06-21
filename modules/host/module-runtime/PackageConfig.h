@@ -5,15 +5,16 @@
 #include <unordered_set>
 #include <vector>
 
-// User-editable package enablement manifest (pref-dir packages.ini), independent of
-// the typed Settings. Opt-out semantics: every package present in Modules/ loads
-// unless the user explicitly disables it here, so dropping in a third-party DLL
-// works with no edit. One package per row:
+// User-editable module enablement manifest (pref-dir packages.ini), independent of
+// the typed Settings. Opt-out semantics: every module carried by a package in
+// packages/ loads unless the user explicitly disables it here, so dropping in a
+// third-party DLL works with no edit. One module per row, keyed by MODULE id (a
+// package may carry several, each toggled independently):
 //
-//   framelift.overlay=disabled
-//   framelift.playlist=enabled
+//   framelift.overlay.core=disabled
+//   framelift.playlist.core=enabled
 //
-// A package id absent from the file defaults to enabled.
+// A module id absent from the file defaults to enabled.
 class PackageConfig
 {
 public:
@@ -21,7 +22,7 @@ public:
     // (everything enabled).
     void Load(const std::string& path);
 
-    // Write every known state, one sorted row per package, with a comment header.
+    // Write every known state, one sorted row per module, with a comment header.
     void Save(const std::string& path) const;
 
     [[nodiscard]] bool IsEnabled(const std::string& id) const
@@ -30,7 +31,7 @@ public:
         return it == states_.end() ? true : it->second;
     }
 
-    // Package ids explicitly disabled — handed to the loader to skip.
+    // Module ids explicitly disabled — handed to the loader to skip.
     [[nodiscard]] std::unordered_set<std::string> DisabledIds() const;
 
     void Set(const std::string& id, bool enabled)
@@ -39,7 +40,7 @@ public:
     }
 
     // Record any not-yet-known id as enabled so the saved file is a complete,
-    // hand-editable manifest of the current package set.
+    // hand-editable manifest of the current module set.
     void EnsureKnown(const std::vector<std::string>& ids)
     {
         for (const auto& id : ids)
@@ -49,5 +50,5 @@ public:
     }
 
 private:
-    std::map<std::string, bool> states_; // id → enabled (sorted for deterministic save)
+    std::map<std::string, bool> states_; // module id → enabled (sorted for deterministic save)
 };

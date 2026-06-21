@@ -25,7 +25,7 @@ class FFmpegPlayer;
 // Top-level application object. Owns all subsystems, drives the main loop,
 // and co-ordinates rendering. Exactly one instance exists for the program lifetime.
 // Has no compile-time knowledge of specific modules — every capability ships as a
-// package DLL loaded at runtime from the Modules/ directory.
+// package DLL loaded at runtime from the packages/ directory.
 class App
 {
 public:

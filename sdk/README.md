@@ -32,13 +32,13 @@ framelift-sdk-<ver>/
 # Build the bundled example plugin:
 cmake -B build
 cmake --build build
-# -> build/Modules/FrameLift.HelloPlugin.Core.dll
+# -> build/packages/framelift.helloplugin.core.dll
 ```
 
-The example package DLL is emitted under `build/Modules/`.
+The example package DLL is emitted under `build/packages/`.
 
-Drop the resulting package DLL into the `Modules/` directory next to `FrameLift.exe` and it loads on
-next launch. Packages default to enabled; to stop one loading, set `<package-id>=disabled` in
+Drop the resulting package DLL into the `packages/` directory next to `framelift.exe` and it loads on
+next launch. Modules default to enabled; to stop one loading, set `<module-id>=disabled` in
 `packages.ini` in the FrameLift config directory.
 
 ## Writing a plugin
@@ -114,6 +114,24 @@ add_framelift_plugin(MyPlugin
   "platforms": []
 }
 ```
+
+### Packages with several modules
+
+One package DLL can carry more than one module — useful for a large plugin whose pieces should be
+toggled independently. List every `.Module.json` in the `.Plugin.json` `modules` array, then register
+each entry type against its module id (the ids must match the JSON):
+
+```cpp
+FRAMELIFT_PACKAGE_BEGIN()
+  FRAMELIFT_MODULE("example.my_plugin.core",  MyPluginCore,  { .renderOrder = 50 })
+  FRAMELIFT_MODULE("example.my_plugin.tools", MyPluginTools, { .render = false })
+FRAMELIFT_PACKAGE_END()
+```
+
+Each module shows up as its own toggle under the package on the Settings → Plugins page, persisted by
+module id in `packages.ini`. Artifact names are lowercase: a multi-module package DLL is named
+`publisher.package` (no module suffix); a single-module one is `publisher.package.module`.
+`FRAMELIFT_MODULE_ENTRY` is the single-module shorthand for the block above.
 
 ### Umbrella headers
 

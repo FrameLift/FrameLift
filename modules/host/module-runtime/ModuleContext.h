@@ -72,17 +72,43 @@ public:
     int GetPrefPath(char* buf, int cap) const noexcept override;
 
     void EnumeratePackages(
-        void (*visit)(const char*, const FrameLiftPackageInfo&, bool, bool, bool, void*), void* visitUd
+        void (*visit)(const char*, const char*, const int*, const char*, const char*, bool, void*), void* visitUd
     ) const noexcept override;
 
-    void SetPackageEnabled(const char* name, bool enabled) noexcept override;
+    void EnumerateModules(
+        void (*visit)(const char*, const char*, const char*, const char*, bool, bool, bool, void*), void* visitUd
+    ) const noexcept override;
+
+    void SetModuleEnabled(const char* moduleId, bool enabled) noexcept override;
 
     void EnumerateSystemFonts(void (*visit)(const char*, const char*, void*), void* visitUd) const noexcept override;
 
-    // Host feeds the package catalogue here after PackageLoader::LoadAll, so
-    // SettingsMenu (and any consumer) can list and toggle packages via the ABI.
-    // info is the loaded descriptor, or nullptr for a present-but-disabled DLL.
-    void AddPackage(std::string name, bool enabled, const FrameLiftPackageInfo* info);
+    // One module within a catalogue package. Owned copies so the entry survives after
+    // the discovering DLL is closed.
+    struct ModuleCatalogEntry
+    {
+        std::string id;
+        std::string name;
+        std::string description;
+        bool enabled = true;
+        bool loaded = false;
+    };
+
+    // A package present in packages/ (loaded or merely discovered) and the modules it
+    // carries. Built by the host and handed to AddPackage after PackageLoader::LoadAll
+    // so SettingsMenu (and any consumer) can list and toggle modules via the ABI.
+    struct PackageCatalogEntry
+    {
+        std::string id;
+        std::string displayName;
+        int version[3] = {0, 0, 0};
+        std::string publisher;
+        std::string description;
+        bool loaded = false;
+        std::vector<ModuleCatalogEntry> modules;
+    };
+
+    void AddPackage(PackageCatalogEntry entry);
 
     // Settings getters
     float GetSettingFloat(const char* key) const noexcept override;
@@ -165,16 +191,32 @@ private:
     std::vector<SettingsPageEntry> settingsPages_;
     std::vector<KeybindEntryRec> keybindEntries_;
 
-    // One catalogue entry per available package (loaded or merely present).
-    struct PackageRec
+    // One catalogue entry per available package (loaded or merely present); each owns
+    // the modules it carries. loadFailed (a module enabled at startup yet not loaded)
+    // is computed once in AddPackage and snapshots startup state, so a freshly toggled
+    // module reads as "pending restart", not "failed".
+    struct ModuleCatalogRec
     {
-        std::string name;           // package id / load key — owns stable storage
-        bool enabled;               // true once loaded (enablement is JSON/build-time driven)
-        bool loadFailed;            // enabled at startup yet not loaded (fixed at build time)
-        const FrameLiftPackageInfo* info; // loaded descriptor, or nullptr if not loaded
+        std::string id;
+        std::string name;
+        std::string description;
+        bool enabled;
+        bool loaded;
+        bool loadFailed;
     };
 
-    std::vector<PackageRec> packageCatalog_;
+    struct PackageCatalogRec
+    {
+        std::string id;
+        std::string displayName;
+        int version[3];
+        std::string publisher;
+        std::string description;
+        bool loaded;
+        std::vector<ModuleCatalogRec> modules;
+    };
+
+    std::vector<PackageCatalogRec> packageCatalog_;
 
     // System font catalogue — scanned lazily on first EnumerateSystemFonts call.
     mutable std::vector<FontEntry> fontCache_;

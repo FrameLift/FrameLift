@@ -31,10 +31,10 @@ TEST(ModuleEntryNoRenderTest, OptionalMetadataDefaultsToNull)
 
 TEST(ModuleEntryNoRenderTest, RenderableIsNullAndOrderZero)
 {
-    IModule* module = framelift_create();
+    IModule* module = framelift_create("test.norender.core");
     ASSERT_NE(module, nullptr);
-    EXPECT_EQ(framelift_get_renderable(module), nullptr);
-    EXPECT_EQ(framelift_render_order(), 0);
+    EXPECT_EQ(framelift_get_renderable("test.norender.core", module), nullptr);
+    EXPECT_EQ(framelift_render_order("test.norender.core"), 0);
     framelift_destroy(module);
 }
 

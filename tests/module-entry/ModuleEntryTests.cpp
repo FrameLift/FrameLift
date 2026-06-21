@@ -35,7 +35,7 @@ TEST(ModuleEntryTest, InfoCarriesAbiAndIdentity)
     ASSERT_NE(info, nullptr);
     EXPECT_EQ(info->abiVersion, FRAMELIFT_ABI_VERSION);
     EXPECT_STREQ(info->packageId, "test.rendering");
-    EXPECT_STREQ(info->moduleFile, "Acme.RenderingDummy.Core");
+    EXPECT_STREQ(info->moduleFile, "acme.renderingdummy.core");
     EXPECT_STREQ(info->name, "RenderingDummy");
     EXPECT_EQ(info->version[0], 2);
     EXPECT_EQ(info->version[1], 5);
@@ -50,14 +50,22 @@ TEST(ModuleEntryTest, InfoCarriesAbiAndIdentity)
 
 TEST(ModuleEntryTest, RenderOrderComesFromDescriptor)
 {
-    EXPECT_EQ(framelift_render_order(), 7);
+    EXPECT_EQ(framelift_render_order("test.rendering.core"), 7);
 }
 
 TEST(ModuleEntryTest, RenderableRoundTrip)
 {
-    IModule* module = framelift_create();
+    IModule* module = framelift_create("test.rendering.core");
     ASSERT_NE(module, nullptr);
-    EXPECT_NE(framelift_get_renderable(module), nullptr);
+    EXPECT_NE(framelift_get_renderable("test.rendering.core", module), nullptr);
+    framelift_destroy(module);
+}
+
+TEST(ModuleEntryTest, SingleModuleServesAnyRequestedId)
+{
+    // A single-module package serves its lone module regardless of the requested id.
+    IModule* module = framelift_create("anything");
+    ASSERT_NE(module, nullptr);
     framelift_destroy(module);
 }
 

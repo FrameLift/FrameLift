@@ -18,7 +18,7 @@ inline constexpr FrameLiftModuleInfo kPackageModules[] = {
 };
 inline constexpr FrameLiftPackageInfo kPackageInfo{FRAMELIFT_ABI_VERSION,
                                                  "test.rendering",
-                                                 "Acme.RenderingDummy.Core",
+                                                 "acme.renderingdummy.core",
                                                  "RenderingDummy",
                                                  {2, 5, 9},
                                                  "Acme",

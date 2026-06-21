@@ -166,7 +166,7 @@ jobs:
           [ -f "$GCC_LIBDIR/libstdc++-6.dll" ] && cp "$GCC_LIBDIR/libstdc++-6.dll" "$BUILD_DIR/"
           WINPTHREAD=$(x86_64-w64-mingw32-gcc-posix -print-file-name=libwinpthread-1.dll)
           [ -f "$WINPTHREAD" ] && cp "$WINPTHREAD" "$BUILD_DIR/"
-          (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip FrameLift.exe *.dll Plugins)
+          (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip framelift.exe *.dll packages)
           # The SDK is packaged by the dedicated `build-sdk` job. The in-tree HelloPlugin
           # (FRAMELIFT_BUILD_SDK_EXAMPLE) still builds here as a Windows-side SDK bitrot guard.
       - name: Upload artifact
@@ -205,9 +205,9 @@ jobs:
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
           cmake --build "$BUILD_DIR" --parallel
-          test -f "$BUILD_DIR/FrameLift"
-          test -f "$BUILD_DIR/Plugins/framelift.playlist/Playlist.so"
-          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz FrameLift Plugins)
+          test -f "$BUILD_DIR/framelift"
+          test -f "$BUILD_DIR/packages/framelift.playlist.core.so"
+          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz framelift packages)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -243,7 +243,7 @@ jobs:
           cmake --install "$BUILD_DIR" --prefix "$GITHUB_WORKSPACE/sdk-stage" --component sdk
           cmake -S "$GITHUB_WORKSPACE/sdk-stage" -B "$GITHUB_WORKSPACE/sdk-cleanroom" -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build "$GITHUB_WORKSPACE/sdk-cleanroom"
-          test -f "$GITHUB_WORKSPACE/sdk-cleanroom/Plugins/example.hello_plugin/HelloPlugin.so"
+          test -f "$GITHUB_WORKSPACE/sdk-cleanroom/packages/framelift.helloplugin.core.so"
           # cmake -E tar with --format=zip avoids needing the zip package installed.
           (cd "$GITHUB_WORKSPACE/sdk-stage" && cmake -E tar cf "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-sdk-${VERSION}.zip" --format=zip .)
       - name: Upload artifact
