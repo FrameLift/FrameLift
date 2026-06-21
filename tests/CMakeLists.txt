@@ -24,7 +24,8 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# JSON — needed by plugins that persist data (History).
+# JSON — backs the host JsonServiceImpl, compiled into the History test so its
+# persistence round-trips exercise the real backend.
 FetchContent_Declare(
         nlohmann_json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -176,7 +177,7 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/remote-stream/core"
     )
     target_link_libraries(${name} PRIVATE
-            GTest::gtest_main GTest::gmock Threads::Threads nlohmann_json::nlohmann_json)
+            GTest::gtest_main GTest::gmock Threads::Threads)
     framelift_apply_coverage(${name})
     gtest_discover_tests(${name})
 endfunction()
@@ -200,9 +201,13 @@ add_framelift_plugin_test(framelift_test_module_entry_multi
         module-entry/ModuleEntryMultiTests.cpp)
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
+# History persists through the host IJson service; compile the real nlohmann-backed
+# JsonServiceImpl into the test (the only suite that exercises JSON) and link nlohmann.
 add_framelift_plugin_test(framelift_test_history
         plugins/history/HistoryTests.cpp
-        "${FRAMELIFT_ROOT}/plugins/history/core/History.cpp")
+        "${FRAMELIFT_ROOT}/plugins/history/core/History.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/JsonServiceImpl.cpp")
+target_link_libraries(framelift_test_history PRIVATE nlohmann_json::nlohmann_json)
 
 # Playlist + SettingsMenu drive the real ModuleContext, so they also compile
 # the host plugin runtime and settings modules.

@@ -8,7 +8,7 @@
 #include <windows.h>
 #include <winhttp.h>
 
-#include <nlohmann/json.hpp>
+#include <framelift/JsonHelpers.h>
 
 #include "SemVer.h"
 #include "Updater.h"
@@ -266,6 +266,8 @@ void Updater::OnInstall(IModuleContext& ctx)
 {
     SetupSettingsPage(ctx);
 
+    json_ = ctx.GetService<IJson>();
+
     // Only run in production
     if (std::string(FRAMELIFT_VERSION_STRING) == "0.0.0")
     {
@@ -373,33 +375,40 @@ void Updater::RunWorker()
     // ── 2. Parse JSON response ────────────────────────────────────────────────
     std::string tagName;
     std::string downloadUrl;
-    try
+    if (!json_)
     {
-        using Json = nlohmann::json;
+        Log::Error("[Updater] JSON service unavailable");
+        state_ = UpdaterState::Failed;
+        return;
+    }
+    {
         // GitHub's /releases/latest returns a single release object (the most recent
         // non-draft, non-prerelease). A 404 (no releases) surfaces earlier as a failed
         // HttpsGet, so by here we have a release object to parse.
-        const auto latest = Json::parse(*body);
-        tagName = latest.at("tag_name").get<std::string>();
+        const framelift::JsonDocument doc(*json_, *body);
+        if (!doc)
+        {
+            Log::Error("[Updater] Failed to parse release JSON");
+            state_ = UpdaterState::Failed;
+            return;
+        }
+        const framelift::JsonRef latest = doc.root();
+        tagName = latest.str("tag_name");
         if (!tagName.empty() && tagName.front() == 'v')
         {
             tagName = tagName.substr(1);
         }
 
-        for (const auto& asset : latest.at("assets"))
+        const framelift::JsonRef assets = latest.member("assets");
+        for (int i = 0; i < assets.size(); ++i)
         {
-            if (asset.at("name").get<std::string>() == AssetName)
+            const framelift::JsonRef asset = assets.at(i);
+            if (asset.str("name") == AssetName)
             {
-                downloadUrl = asset.at("browser_download_url").get<std::string>();
+                downloadUrl = asset.str("browser_download_url");
                 break;
             }
         }
-    }
-    catch (const std::exception& e)
-    {
-        Log::Error("[Updater] Failed to parse release JSON: {}", e.what());
-        state_ = UpdaterState::Failed;
-        return;
     }
 
     if (downloadUrl.empty())

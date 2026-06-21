@@ -5,6 +5,5 @@ add_framelift_plugin(History
         ${FRAMELIFT_SDK_SOURCES}
 )
 target_include_directories(History PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/core")
-# History persists its entries as JSON — it brings its own json dependency
-# (the SDK itself is dependency-free).
-target_link_libraries(History PRIVATE nlohmann_json::nlohmann_json)
+# History persists its entries as JSON via the host IJson service (ctx.GetService<IJson>())
+# — no JSON library is linked into the plugin.

@@ -8,6 +8,8 @@
 #include <string>
 #include <thread>
 
+class IJson;
+
 // Background auto-update plugin. On Install(), spawns a thread that queries
 // the GitHub Releases API, downloads zip to %TEMP% and extracts it if a
 // newer version exists, and draws a small status banner in the top-right corner.
@@ -60,6 +62,7 @@ private:
     std::atomic<UpdaterState> state_{UpdaterState::Idle};
     std::wstring pendingDir_; // temp dir holding extracted update files
     std::thread worker_;
+    IJson* json_ = nullptr; // host JSON service for parsing the release response
 
     bool autoUpdate_ = true;
 };

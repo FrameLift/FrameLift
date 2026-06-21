@@ -21,6 +21,14 @@ public:
     // ── IModule ───────────────────────────────────────────────────────────────
     bool HandleKeyDownEvent(const AppEvent& e) override;
 
+    // Inject the host JSON service used for load/save. Set from OnInstall in
+    // production; tests inject a JsonServiceImpl directly. Must be set before
+    // SetStoragePath() for Load() to read anything.
+    void SetJsonService(IJson* json) noexcept
+    {
+        json_ = json;
+    }
+
     // Set the file path for persistence and immediately load any saved data.
     // Must be called before AddEntry(). Replaces the old SDL_GetPrefPath logic.
     void SetStoragePath(std::string path);
@@ -104,6 +112,7 @@ private:
     std::string searchQuery_;
     int cursor_ = -1; // keyboard-navigation cursor into filteredIndices_, or -1 if none
     std::string storagePath_;
+    IJson* json_ = nullptr; // host JSON service for load/save (host-owned; not owned here)
 
     // ── Save ordering ─────────────────────────────────────────────────────────
     // Each Save() snapshots and writes on a detached thread, so renames can land

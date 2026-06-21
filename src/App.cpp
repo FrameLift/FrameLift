@@ -122,6 +122,7 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<Hotkeys>(&keys_);
     moduleCtx_->RegisterService<FocusManager>(&focus_);
     moduleCtx_->RegisterService<IFileDialog>(&fileDialogService_);
+    moduleCtx_->RegisterService<IJson>(&jsonService_);
 
     // Controllers own their own event-bus wiring (settings re-apply, audio ducking,
     // theme reaction) so App holds no subscriptions.

@@ -1,4 +1,5 @@
 #include "History.h"
+#include "JsonServiceImpl.h"
 #include "TempIni.h"
 
 #include <chrono>
@@ -7,6 +8,10 @@
 
 namespace
 {
+// Real nlohmann-backed host JSON service shared by the persistence tests. Stateless,
+// so a single instance is safe across the suite (including detached writer threads).
+JsonServiceImpl g_json;
+
 std::string MostRecent(const History& h)
 {
     const int n = h.GetMostRecent(nullptr, 0);
@@ -27,6 +32,7 @@ std::string WaitForPersistedMostRecent(const std::string& path, const std::strin
     do
     {
         History reload;
+        reload.SetJsonService(&g_json);
         reload.SetStoragePath(path);
         got = MostRecent(reload);
         if (got == expected)
@@ -104,6 +110,7 @@ TEST(HistoryTest, LoadsEntriesFromJson)
     const TempFile f(R"([{"p":"/x/y.mp4","r":42.5,"d":"2024-01-01 00:00:00"}])");
 
     History h;
+    h.SetJsonService(&g_json);
     h.SetStoragePath(f.str()); // triggers Load()
 
     EXPECT_EQ(MostRecent(h), "/x/y.mp4");
@@ -115,6 +122,7 @@ TEST(HistoryTest, SaveRoundTripsToDisk)
     const TempFile f; // owns a unique path; not yet written
 
     History h;
+    h.SetJsonService(&g_json);
     h.SetStoragePath(f.str()); // empty load (file absent)
     h.AddEntry("/a.mp4");      // triggers Save() on a detached thread
 
@@ -129,6 +137,7 @@ TEST(HistoryTest, ConcurrentSavesNeverCorruptFile)
     const TempFile f;
 
     History h;
+    h.SetJsonService(&g_json);
     h.SetStoragePath(f.str());
     for (int i = 0; i < 20; ++i)
     {

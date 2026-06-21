@@ -39,6 +39,8 @@ set(_FRAMELIFT_HOST_SERVICES_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/services/FocusManagerImpl.h"
         "${CMAKE_SOURCE_DIR}/modules/host/services/HotkeysImpl.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/services/HotkeysImpl.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/services/JsonServiceImpl.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/services/JsonServiceImpl.h"
 )
 
 set(_FRAMELIFT_HOST_CONTROLS_SOURCES

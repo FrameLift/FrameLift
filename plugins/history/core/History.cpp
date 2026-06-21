@@ -15,7 +15,8 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include <framelift/JsonHelpers.h>
+#include <iterator>
 #include <numeric>
 #include <thread>
 #include <vector>
@@ -88,6 +89,9 @@ void History::OnInstall(IModuleContext& ctx)
 
     SetContext(&ctx);
     SetFocusManager(ctx.GetService<FocusManager>(), this);
+
+    // Discover the host JSON service before SetStoragePath so Load() can read.
+    json_ = ctx.GetService<IJson>();
 
     // Register storage path from pref dir if not already set by App.
     if (storagePath_.empty())
@@ -189,32 +193,37 @@ void History::SetStoragePath(std::string path)
 
 void History::Load()
 {
-    std::ifstream f(storagePath_);
-    if (!f)
+    if (!json_)
     {
         return;
     }
 
-    try
+    std::ifstream f(storagePath_, std::ios::binary);
+    if (!f)
     {
-        const auto json = nlohmann::json::parse(f);
-        for (const auto& item : json)
+        return;
+    }
+    const std::string contents((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    const framelift::JsonDocument doc(*json_, contents);
+    const framelift::JsonRef root = doc.root();
+    if (doc && root.isArray())
+    {
+        for (int i = 0; i < root.size(); ++i)
         {
-            std::string path = item.value("p", std::string{});
+            const framelift::JsonRef item = root.at(i);
+            std::string path = item.str("p");
             if (path.empty())
             {
                 continue;
             }
-            const double pos = item.value("r", 0.0);
-            std::string date = item.value("d", std::string{});
+            const double pos = item.num("r", 0.0);
+            std::string date = item.str("d");
             std::string label = FilenameOf(path);
             Entry e{std::move(path), std::move(label), pos, std::move(date)};
             FormatEntry(e);
             entries_.push_back(std::move(e));
         }
-    }
-    catch (...)
-    {
     }
     RebuildFilter();
 }
@@ -282,25 +291,24 @@ void History::RebuildFilter()
 
 void History::Save() const noexcept
 {
-    if (storagePath_.empty())
+    if (storagePath_.empty() || !json_)
     {
         return;
     }
 
-    // Snapshot so the background thread never touches our deque.
-    struct Snap
-    {
-        std::string path;
-        double pos;
-        std::string date;
-    };
-
-    std::vector<Snap> snapshot;
-    snapshot.reserve(entries_.size());
+    // Serialise synchronously on the caller's thread (which already owns entries_),
+    // so the detached writer only does file IO and never touches the JSON service —
+    // no cross-thread service use and no json_ lifetime hazard on the writer.
+    framelift::JsonWriter arr = framelift::JsonWriter::Array(*json_);
     for (const auto& e : entries_)
     {
-        snapshot.push_back({e.path, e.resumePos, e.playbackDate});
+        framelift::JsonWriter o = framelift::JsonWriter::Object(*json_);
+        o.set("p", e.path);
+        o.set("r", e.resumePos);
+        o.set("d", e.playbackDate);
+        arr.append(std::move(o));
     }
+    std::string payload = arr.dump(2);
 
     const std::string dst = storagePath_;
     // Monotonic stamp so the writer can tell newer snapshots from older ones, and
@@ -309,27 +317,17 @@ void History::Save() const noexcept
     auto coord = saveCoord_;
 
     std::thread(
-        [snapshot = std::move(snapshot), dst, seq, coord]
+        [payload = std::move(payload), dst, seq, coord]
         {
             std::error_code ec;
             std::filesystem::create_directories(std::filesystem::path(dst).parent_path(), ec);
-
-            nlohmann::json json = nlohmann::json::array();
-            for (const auto& s : snapshot)
-            {
-                json.push_back({
-                    {"p", s.path},
-                    {"r", s.pos},
-                    {"d", s.date},
-                });
-            }
 
             // Write to a unique temp file, then atomically rename over the target so
             // a crash mid-write or a racing save can never leave a truncated file.
             const std::string tmp = dst + "." + std::to_string(seq) + ".tmp";
             {
                 std::ofstream f(tmp, std::ios::trunc);
-                f << json.dump(2) << '\n';
+                f << payload << '\n';
             }
 
             // Commit under the lock so renames are serialised and ordered: drop this

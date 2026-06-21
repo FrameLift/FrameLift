@@ -4,6 +4,7 @@
 #include "PackageConfig.h"
 #include "FocusManagerImpl.h"
 #include "HotkeysImpl.h"
+#include "JsonServiceImpl.h"
 #include "ModuleContext.h"
 #include "PackageLoader.h"
 #include "ModuleRegistry.h"
@@ -83,6 +84,7 @@ private:
     FileDialogServiceImpl fileDialogService_{&settings_};
     FocusManagerImpl focus_;
     HotkeysImpl keys_;
+    JsonServiceImpl jsonService_;
     UIContextImpl uiCtx_;
     ThemeController themeController_;
 

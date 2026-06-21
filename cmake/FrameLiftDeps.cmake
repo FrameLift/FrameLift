@@ -2,7 +2,9 @@
 #
 # These are NOT part of the public plugin SDK — after the COM-like ABI redesign,
 # nothing crosses the host↔plugin boundary as a third-party type, so plugins do
-# not need imgui/spdlog/stb, and only plugins that opt into JSON link nlohmann.
+# not need imgui/spdlog/stb. JSON is a host capability too: nlohmann backs the
+# host IJson service (modules/host/services/JsonServiceImpl), and plugins reach it
+# via ctx.GetService<IJson>() — no plugin links a JSON library.
 # SDL3, FFmpeg, and libass are set up by FrameLiftPlatformLibs.cmake before this module,
 # because the imgui static library links SDL3::SDL3.
 
@@ -115,6 +117,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb)
 
 # ── nlohmann/json (header-only) ───────────────────────────────────────────────
+# Host-only: the backend for the IJson service (JsonServiceImpl). Linked to the
+# FrameLift host target, never to a plugin.
 FetchContent_Declare(
         nlohmann_json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
