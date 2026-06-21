@@ -167,8 +167,7 @@ jobs:
           WINPTHREAD=$(x86_64-w64-mingw32-gcc-posix -print-file-name=libwinpthread-1.dll)
           [ -f "$WINPTHREAD" ] && cp "$WINPTHREAD" "$BUILD_DIR/"
           (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip framelift.exe *.dll packages)
-          # The SDK is packaged by the dedicated `build-sdk` job. The in-tree HelloPlugin
-          # (FRAMELIFT_BUILD_SDK_EXAMPLE) still builds here as a Windows-side SDK bitrot guard.
+          # The SDK is packaged by the dedicated `build-sdk` job.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -217,8 +216,9 @@ jobs:
   # ── Plugin SDK package ──────────────────────────────────────────────────────
   # The SDK is platform-neutral source (headers + helper .cpp compiled per plugin),
   # so it's packaged in its own job. Configure (no host build) stages the `sdk`
-  # install component; the clean-room build then validates the package with a native
-  # compiler, outside the source tree, proving it is self-contained.
+  # install component and zips it. Self-containment (the package builds a working
+  # plugin outside the source tree) is validated by the FrameLift-Examples repo's
+  # CI, which builds the worked examples against this published zip.
   # Produces FrameLift-sdk-<ver>.zip.
   build-sdk:
     needs: test
@@ -241,9 +241,6 @@ jobs:
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_VERSION="$VERSION"
           cmake --install "$BUILD_DIR" --prefix "$GITHUB_WORKSPACE/sdk-stage" --component sdk
-          cmake -S "$GITHUB_WORKSPACE/sdk-stage" -B "$GITHUB_WORKSPACE/sdk-cleanroom" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build "$GITHUB_WORKSPACE/sdk-cleanroom"
-          test -f "$GITHUB_WORKSPACE/sdk-cleanroom/packages/framelift.helloplugin.core.so"
           # cmake -E tar with --format=zip avoids needing the zip package installed.
           (cd "$GITHUB_WORKSPACE/sdk-stage" && cmake -E tar cf "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-sdk-${VERSION}.zip" --format=zip .)
       - name: Upload artifact

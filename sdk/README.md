@@ -14,28 +14,38 @@ interoperates with the host regardless of how the host was built.
 
 ```
 framelift-sdk-<ver>/
-├── CMakeLists.txt          # standalone build root (builds the example)
+├── CMakeLists.txt          # skeleton build root (declare your plugin here)
 ├── cmake/
 │   ├── FrameLiftSdk.cmake       # add_framelift_plugin() + the FrameLiftSdk target
 │   ├── FrameLiftSdkConfig.cmake # find_package(FrameLiftSdk) entry point
 │   └── FrameLiftSdkConfigVersion.cmake
 ├── include/framelift/           # public headers (umbrella: core.h, ui.h, services.h, platform.h)
 ├── src/                    # SDK helper sources, compiled into your plugin
-├── examples/hello-plugin/  # minimal worked example
 ├── README.md
 └── LICENSE
 ```
 
+Worked example plugins live in the separate
+[FrameLift-Examples](https://github.com/FrameLift/FrameLift-Examples) repository — clone it for a
+runnable starting point you can copy from.
+
 ## Quick start
 
-```sh
-# Build the bundled example plugin:
-cmake -B build
-cmake --build build
-# -> build/packages/framelift.helloplugin.core.dll
+The archive root is a skeleton `CMakeLists.txt`: it runs `find_package(FrameLiftSdk)` against the
+SDK shipped beside it, then you declare your plugin (see [Writing a plugin](#writing-a-plugin)):
+
+```cmake
+add_framelift_plugin(MyPlugin
+    PLUGIN_JSON "${CMAKE_CURRENT_SOURCE_DIR}/MyPlugin.Plugin.json"
+    core/MyPlugin.cpp
+    ${FRAMELIFT_SDK_SOURCES})
 ```
 
-The example package DLL is emitted under `build/packages/`.
+```sh
+cmake -B build
+cmake --build build
+# -> build/packages/<publisher>.<package>.<module>.dll
+```
 
 Drop the resulting package DLL into the `packages/` directory next to `framelift.exe` and it loads on
 next launch. Modules default to enabled; to stop one loading, set `<module-id>=disabled` in

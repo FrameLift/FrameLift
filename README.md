@@ -85,8 +85,8 @@ enabled or disabled independently from the Settings → Plugins page (persisted 
   `IHistory`, the settings split (`ISettingsStore`/`ISettingsRegistry`), and platform interface
   families (`IMediaPlayback`/`IAudioControl`/…, `IAppWindow`/`IGraphicsSurface`/`IEventPump`, …).
 
-See [sdk/](sdk/) and the worked example in [sdk/examples/hello-plugin/](sdk/examples/hello-plugin) for
-the API and a minimal plugin to copy from.
+See [sdk/](sdk/) for the API, and the [FrameLift-Examples](https://github.com/FrameLift/FrameLift-Examples)
+repository for worked example plugins to copy from.
 
 ## Repository Layout
 
@@ -101,8 +101,8 @@ FrameLift/
 │   │   ├── services/       # Per-plugin service interfaces (IHistory, …)
 │   │   ├── platform/       # Platform service interfaces
 │   │   └── ui/             # UI helper headers (Panel, UIContext, Widgets, …)
-│   ├── src/                # SDK helper sources compiled into each plugin
-│   └── examples/hello-plugin/  # Minimal worked example (built in-tree as a bitrot guard)
+│   └── src/                # SDK helper sources compiled into each plugin
+│       # (worked examples live in the separate FrameLift-Examples repo)
 │
 ├── src/                    # Host entry point (framelift.exe): App, CLI, main — owns only the loop
 │

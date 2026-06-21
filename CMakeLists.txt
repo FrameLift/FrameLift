@@ -205,20 +205,6 @@ endforeach ()
 # harfbuzz/fribidi/…) are deployed next to framelift.exe automatically by vcpkg's
 # app-local deployment (VCPKG_APPLOCAL_DEPS) — no manual copy needed.
 
-# ── SDK example (bitrot guard) ────────────────────────────────────────────────
-# Build the bundled example plugin in-tree so SDK breakage is caught by the
-# normal build. It is not added to the host's enabled-plugins list.
-option(FRAMELIFT_BUILD_SDK_EXAMPLE "Build the bundled HelloPlugin example in-tree" ON)
-if (FRAMELIFT_BUILD_SDK_EXAMPLE)
-    add_subdirectory(sdk/examples/hello-plugin)
-    # Keep the example out of the shipped packages/ dir (it's only a bitrot guard).
-    # Override both RUNTIME (.dll) and LIBRARY (.so) so it's redirected on every platform.
-    set_target_properties(HelloPlugin PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sdk-example"
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/sdk-example")
-    add_dependencies(FrameLift HelloPlugin)
-endif ()
-
 # ── Unit tests (native, IDE-visible) ─────────────────────────────────────────
 # Compiles only platform-independent units; safe to configure alongside the app.
 # CI's Windows build passes -DFRAMELIFT_BUILD_TESTS=OFF (native test exes can't run
@@ -260,8 +246,6 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/include/"
         DESTINATION include COMPONENT sdk)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/src/"
         DESTINATION src COMPONENT sdk)
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/examples/"
-        DESTINATION examples COMPONENT sdk)
 install(FILES
         "${CMAKE_SOURCE_DIR}/cmake/FrameLiftSdk.cmake"
         "${CMAKE_SOURCE_DIR}/cmake/FrameLiftPackageMetadata.cmake"
