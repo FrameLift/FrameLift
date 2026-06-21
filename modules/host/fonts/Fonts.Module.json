@@ -1,0 +1,22 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.fonts",
+  "name": "Host Fonts",
+  "description": "System font discovery backing plugin-facing font enumeration.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "services.fonts"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

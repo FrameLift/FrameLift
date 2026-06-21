@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.context_menu",
+  "name": "Context Menu",
+  "publisher": "FrameLift",
+  "description": "Right-click context menu for the video area",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

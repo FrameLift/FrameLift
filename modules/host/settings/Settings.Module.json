@@ -1,0 +1,30 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.settings",
+  "name": "Settings",
+  "description": "Host settings storage, defaults, and mapping helpers.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "settings.storage",
+      "settings.mapping"
+    ]
+  },
+  "requires": {
+    "modules": [
+      "framelift.host.graphics_core",
+      "framelift.host.playback",
+      "framelift.host.read_ahead",
+      "framelift.host.ui"
+    ],
+    "features": []
+  },
+  "optional": {
+    "modules": [
+      "framelift.host.graphics_vulkan"
+    ],
+    "features": []
+  },
+  "platforms": []
+}

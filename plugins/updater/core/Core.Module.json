@@ -1,0 +1,23 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.updater.core",
+  "name": "Updater Core",
+  "description": "Windows update checks and install-on-exit status.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "updater.auto_update"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": [
+    "windows"
+  ]
+}

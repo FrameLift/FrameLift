@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.playlist",
+  "name": "Playlist",
+  "publisher": "FrameLift",
+  "description": "Folder playlist and file navigation",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

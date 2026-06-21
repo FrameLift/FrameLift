@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.remote_stream",
+  "name": "RemoteStream",
+  "publisher": "FrameLift",
+  "description": "Plays remote network streams and custom encrypted streams",
+  "version": "1.0.0",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

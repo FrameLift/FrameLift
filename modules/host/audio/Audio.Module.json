@@ -1,0 +1,24 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.audio",
+  "name": "Audio Output",
+  "description": "Host audio output: SDL3 device + swresample, master clock, volume/mute/ducking, and the libavfilter normalization graph.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "audio.output.sdl"
+    ]
+  },
+  "requires": {
+    "modules": [
+      "framelift.host.settings"
+    ],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

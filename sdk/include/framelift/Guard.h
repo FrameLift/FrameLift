@@ -8,7 +8,7 @@ namespace framelift
 // Run fn in try/catch on the plugin side of the ABI boundary. A throw is
 // logged and swallowed (value-returning callables fall back to R{}): the
 // plugin misbehaves loudly instead of taking the host down via the noexcept
-// boundary → std::terminate. Used by the SDK scaffolding (PluginBase, Panel,
+// boundary → std::terminate. Used by the SDK scaffolding (ModuleBase, Panel,
 // SafeRenderable, the helper-thunk trampolines) at every point where the host
 // calls back into plugin code.
 template <typename Fn>

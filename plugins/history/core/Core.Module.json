@@ -1,0 +1,25 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.history.core",
+  "name": "History Core",
+  "description": "Recently played entries, resume positions, and history service.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "history.panel",
+      "history.resume",
+      "history.service"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
+}

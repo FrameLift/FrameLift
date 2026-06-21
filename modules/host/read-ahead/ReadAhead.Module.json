@@ -1,0 +1,22 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.read_ahead",
+  "name": "Read-Ahead Cache",
+  "description": "Shared memory-bounded read-ahead budget and hit/miss/stall metrics for the demuxer packet queues.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "media.read_ahead_cache"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

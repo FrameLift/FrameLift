@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.debug_overlay",
+  "name": "DebugOverlay",
+  "publisher": "FrameLift",
+  "description": "Developer debug overlay",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

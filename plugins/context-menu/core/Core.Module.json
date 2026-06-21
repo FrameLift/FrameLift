@@ -1,0 +1,21 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.context_menu.core",
+  "name": "Context Menu Core",
+  "description": "Right-click menu surface: core playback actions and the ContextMenu service plugins extend.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

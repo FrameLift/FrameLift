@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.history",
+  "name": "History",
+  "publisher": "FrameLift",
+  "description": "Recently-played history and resume",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

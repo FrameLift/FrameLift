@@ -1,0 +1,21 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.debug_overlay.core",
+  "name": "Debug Overlay Core",
+  "description": "Live playback and runtime diagnostic overlay.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "debug.overlay"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

@@ -222,51 +222,54 @@ struct SubtitleStyle
     bool preferForced = false;    // prefer a "forced" subtitle track when present
 };
 
-// Pure interface for a media playback backend.
+// The media playback backend is exposed to plugins as a family of small,
+// independently-discovered capability interfaces rather than one god-interface.
+// One host object (FFmpegPlayer) implements them all and registers under each id;
+// a consumer fetches only the facets it uses via ctx.GetService<T>() and degrades
+// gracefully when a facet returns nullptr. Adding a new playback capability is a
+// NEW interface here — never an append to an existing one — so the ABI version and
+// the vtable layout of every interface below stay frozen.
+//
 // All backend-specific headers (FFmpeg, libass, etc.) are kept behind this boundary.
-class IMediaPlayer
+
+// Transport: loading, play/pause, seeking, image timing, options + the event pump.
+class IMediaPlayback
 {
 public:
-    static constexpr const char* InterfaceId = "framelift.IMediaPlayer";
-    virtual ~IMediaPlayer() = default;
+    static constexpr const char* InterfaceId = "framelift.IMediaPlayback";
+    virtual ~IMediaPlayback() = default;
 
-    // ── Playback commands ──────────────────────────────────────────────────────
     // Load a file and begin playing. Pass resumePos > 0 to resume from that
     // position (seconds); pass 0.0 to start from the beginning.
     virtual void LoadFile(const char* path, double resumePos = 0.0) noexcept = 0;
 
     virtual void SetPause(bool paused) noexcept = 0;
     virtual void TogglePause() noexcept = 0;
-    virtual void ToggleMute() noexcept = 0;
-    virtual void AdjustVolume(int delta) noexcept = 0;
     virtual void Seek(double seconds) noexcept = 0;
     virtual void SeekAbsolute(double seconds) noexcept = 0;
     virtual void SetImageDisplayDuration(double seconds) noexcept = 0;
-    virtual void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept = 0;
     virtual void SetPlaybackOptions(const PlaybackOptions& opts) noexcept = 0;
 
-    // ── Subtitle / audio tracks ────────────────────────────────────────────────
-    // Enumerate tracks: visit(track, ud) is called once per track.
-    virtual void EnumerateSubtitleTracks(
-        void (*visit)(const SubtitleTrack* track, void* ud), void* ud
-    ) const noexcept = 0;
-    virtual void SelectSubtitleTrack(int64_t id) noexcept = 0;
-    virtual void EnumerateAudioTracks(void (*visit)(const AudioTrack* track, void* ud), void* ud) const noexcept = 0;
-    virtual void SelectAudioTrack(int64_t id) noexcept = 0;
-    virtual void ToggleSubtitles() noexcept = 0;
+    // Configure the memory-bounded demuxer read-ahead cache. Applied on the next LoadFile().
+    virtual void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept = 0;
 
-    // ── Toggle state ──────────────────────────────────────────────────────────
-    [[nodiscard]] virtual bool IsMuted() const noexcept = 0;
-    [[nodiscard]] virtual bool IsNormalizeEnabled() const noexcept = 0;
-    [[nodiscard]] virtual bool IsSubtitlesEnabled() const noexcept = 0;
-    virtual void CycleSubtitleTrack() noexcept = 0;
-    virtual void AdjustSubtitleDelay(double delta) noexcept = 0;
-    virtual void SetSubtitleDelay(double seconds) noexcept = 0;
+    // Drain one pending backend event. Returns type==None when the queue is empty.
+    [[nodiscard]] virtual MediaEvent PollEvent() noexcept = 0;
 
-    // ── Async property queries ─────────────────────────────────────────────────
-    // Callbacks are invoked on the main thread from PollEvent().
-    // ok=false when the property is unavailable or the player is idle.
-    // cb/ud must remain valid until the callback fires (typically one or two frames).
+    // Background-thread callback — invoked from the player's internal thread to nudge
+    // the host to PollEvent(). cb/ud must remain valid for the player's lifetime.
+    virtual void SetWakeupCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
+};
+
+// Async property queries. Callbacks are invoked on the main thread from PollEvent().
+// ok=false when the property is unavailable or the player is idle. cb/ud must remain
+// valid until the callback fires (typically one or two frames).
+class IMediaProperties
+{
+public:
+    static constexpr const char* InterfaceId = "framelift.IMediaProperties";
+    virtual ~IMediaProperties() = default;
+
     virtual void GetDoubleAsync(
         PlayerProperty prop, void (*cb)(double value, bool ok, void* ud), void* ud
     ) noexcept = 0;
@@ -281,15 +284,15 @@ public:
     virtual void GetDisplaySizeAsync(void (*cb)(const DisplaySize* size, bool ok, void* ud), void* ud) noexcept = 0;
 
     virtual void ObserveProperty(PlayerProperty prop) noexcept = 0;
+};
 
-    // ── Events ────────────────────────────────────────────────────────────────
-    [[nodiscard]] virtual MediaEvent PollEvent() noexcept = 0;
+// Video output / presentation surface.
+class IVideoOutput
+{
+public:
+    static constexpr const char* InterfaceId = "framelift.IVideoOutput";
+    virtual ~IVideoOutput() = default;
 
-    // Background-thread callbacks — invoked from the player's internal thread.
-    // cb/ud must remain valid for the player's lifetime.
-    virtual void SetWakeupCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
-
-    // ── Rendering ─────────────────────────────────────────────────────────────
     // graphicsBackend: opaque handle to the host's active graphics backend (a
     // host-internal IGraphicsBackend*). The player builds its video renderer from it,
     // so the same call works for the OpenGL and Vulkan backends.
@@ -297,28 +300,60 @@ public:
     virtual void SetRenderUpdateCallback(void (*cb)(void* ud), void* ud) noexcept = 0;
     [[nodiscard]] virtual bool HasNewFrame() noexcept = 0;
     virtual void RenderFrame(int w, int h) noexcept = 0;
+};
 
-    // ── Read-ahead cache ───────────────────────────────────────────
-    // Configure the memory-bounded demuxer read-ahead cache. Applied on the next
-    // LoadFile(). Appended at the end of the interface to keep the vtable layout
-    // of earlier slots stable (host-provided surface; MINOR ABI addition).
-    virtual void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept = 0;
+// Audio: mute/volume, normalization, track selection, output device + preferences.
+class IAudioControl
+{
+public:
+    static constexpr const char* InterfaceId = "framelift.IAudioControl";
+    virtual ~IAudioControl() = default;
 
-    // ── Subtitle styling / behavior ────────────────────────────────────────────
-    // Apply user subtitle appearance + selection preferences. Styling takes effect
-    // on the next rendered frame; the behavior fields apply on the next LoadFile().
-    // Appended at the end (host-provided surface; MINOR ABI addition).
-    virtual void SetSubtitleStyle(const SubtitleStyle& style) noexcept = 0;
+    virtual void ToggleMute() noexcept = 0;
+    virtual void AdjustVolume(int delta) noexcept = 0;
+    [[nodiscard]] virtual bool IsMuted() const noexcept = 0;
 
-    // ── Audio preferences ─────────────────────────────────────────────────────
+    virtual void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept = 0;
+    [[nodiscard]] virtual bool IsNormalizeEnabled() const noexcept = 0;
+
+    virtual void EnumerateAudioTracks(void (*visit)(const AudioTrack* track, void* ud), void* ud) const noexcept = 0;
+    virtual void SelectAudioTrack(int64_t id) noexcept = 0;
+
     // Platform playback devices. The first entry should be a synthetic default
     // device with an empty name. The callback receives stack-local POD snapshots.
-    // Appended at the end (host-provided surface; MINOR ABI addition).
     virtual void EnumerateAudioOutputDevices(
         void (*visit)(const AudioOutputDevice* device, void* ud), void* ud
     ) const noexcept = 0;
 
     // Apply user audio output, track-selection and behavior preferences.
-    // Appended at the end (host-provided surface; MINOR ABI addition).
     virtual void SetAudioPreferences(const AudioPreferences& prefs) noexcept = 0;
+
+    // The currently-applied audio preferences (the last value passed to
+    // SetAudioPreferences, or defaults if never set). Lets a UI read and round-trip
+    // the live runtime prefs (e.g. sync-offset / output-device tweaks) without
+    // holding its own copy.
+    [[nodiscard]] virtual AudioPreferences GetAudioPreferences() const noexcept = 0;
+};
+
+// Subtitles: track selection, visibility, delay and appearance/behavior styling.
+class ISubtitleControl
+{
+public:
+    static constexpr const char* InterfaceId = "framelift.ISubtitleControl";
+    virtual ~ISubtitleControl() = default;
+
+    // Enumerate tracks: visit(track, ud) is called once per track.
+    virtual void EnumerateSubtitleTracks(
+        void (*visit)(const SubtitleTrack* track, void* ud), void* ud
+    ) const noexcept = 0;
+    virtual void SelectSubtitleTrack(int64_t id) noexcept = 0;
+    virtual void ToggleSubtitles() noexcept = 0;
+    [[nodiscard]] virtual bool IsSubtitlesEnabled() const noexcept = 0;
+    virtual void CycleSubtitleTrack() noexcept = 0;
+    virtual void AdjustSubtitleDelay(double delta) noexcept = 0;
+    virtual void SetSubtitleDelay(double seconds) noexcept = 0;
+
+    // Apply user subtitle appearance + selection preferences. Styling takes effect
+    // on the next rendered frame; the behavior fields apply on the next LoadFile().
+    virtual void SetSubtitleStyle(const SubtitleStyle& style) noexcept = 0;
 };

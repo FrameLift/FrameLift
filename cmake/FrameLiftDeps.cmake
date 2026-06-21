@@ -31,6 +31,7 @@ FetchContent_MakeAvailable(spdlog)
 
 # Vulkan-Headers — the API headers + the Vulkan::Headers interface target that volk,
 # VMA and vk-bootstrap consume. Declared first so the others detect and reuse it.
+if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
 FetchContent_Declare(
         vulkan_headers
         GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
@@ -67,6 +68,7 @@ FetchContent_Declare(
         GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(vk_bootstrap)
+endif ()
 
 # ── Dear ImGui ────────────────────────────────────────────────────────────────
 # The docking-branch tag is a superset of the like-versioned release: it adds
@@ -83,15 +85,19 @@ FetchContent_Declare(
 # add_subdirectory() in that case (CMake 3.28+), leaving imgui_SOURCE_DIR set.
 FetchContent_MakeAvailable(imgui)
 
-add_library(imgui STATIC
+set(_FRAMELIFT_IMGUI_SOURCES
         "${imgui_SOURCE_DIR}/imgui.cpp"
         "${imgui_SOURCE_DIR}/imgui_draw.cpp"
         "${imgui_SOURCE_DIR}/imgui_tables.cpp"
         "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
         "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
 )
+if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
+    list(APPEND _FRAMELIFT_IMGUI_SOURCES
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
+endif ()
+add_library(imgui STATIC ${_FRAMELIFT_IMGUI_SOURCES})
 target_include_directories(imgui PUBLIC
         "${imgui_SOURCE_DIR}"
         "${imgui_SOURCE_DIR}/backends"
@@ -103,8 +109,10 @@ target_link_libraries(imgui PUBLIC SDL3::SDL3)
 # loaded entry points. PUBLIC so the host's Vulkan backend TU sees the same flag when
 # it includes imgui_impl_vulkan.h. Only volk_headers here (include-only) — the single
 # compiled `volk` definition is linked into the FrameLift exe.
-target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
-target_link_libraries(imgui PUBLIC volk_headers)
+if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
+    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+    target_link_libraries(imgui PUBLIC volk_headers)
+endif ()
 
 # ── stb (header-only) ─────────────────────────────────────────────────────────
 FetchContent_Declare(

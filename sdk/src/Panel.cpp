@@ -1,10 +1,11 @@
-﻿#include <algorithm>
+#include <algorithm>
 #include <cmath>
 #include <framelift/Events.h>
 #include <framelift/FocusManager.h>
 #include <framelift/Guard.h>
-#include <framelift/IPluginContext.h>
+#include <framelift/IModuleContext.h>
 #include <framelift/platform/IAppWindow.h>
+#include <framelift/services/ISettingsStore.h>
 #include <framelift/ui/Panel.h>
 #include <framelift/ui/UIContext.h>
 
@@ -14,10 +15,10 @@ Panel::Panel(const Side side, const float defaultWidth, const char* title)
 {
 }
 
-void Panel::SetFocusManager(FocusManager* fm, IPlugin* self)
+void Panel::SetFocusManager(FocusManager* fm, IModule* self)
 {
     focusManager_ = fm;
-    selfPlugin_ = self;
+    selfModule_ = self;
 }
 
 void Panel::Toggle()
@@ -33,13 +34,13 @@ void Panel::SetOpen(const bool v)
     {
         if (focusManager_)
         {
-            focusManager_->Acquire(selfPlugin_);
+            focusManager_->Acquire(selfModule_);
         }
         OnOpened();
     }
     else if (wasOpen && !open_)
     {
-        // Closing a popped-out panel re-docks it to the edge (hidden, snapped — no
+        // Closing a popped-out panel re-docks it to the edge (hidden, snapped - no
         // slide) so the next open uses the normal docked slide-in.
         if (poppedOut_)
         {
@@ -48,19 +49,21 @@ void Panel::SetOpen(const bool v)
         }
         if (focusManager_)
         {
-            focusManager_->Release(selfPlugin_);
+            focusManager_->Release(selfModule_);
         }
     }
 }
 
 float Panel::GetWidth() const
 {
-    return panelCtx_ ? panelCtx_->GetSettingFloat("ui.panelWidth") : defaultWidth_;
+    auto* store = panelCtx_ ? panelCtx_->GetService<ISettingsStore>() : nullptr;
+    return store ? store->GetSettingFloat("ui.panelWidth") : defaultWidth_;
 }
 
 float Panel::GetSlideSpeed() const
 {
-    return panelCtx_ ? panelCtx_->GetSettingFloat("ui.slideSpeed") : 18.f;
+    auto* store = panelCtx_ ? panelCtx_->GetService<ISettingsStore>() : nullptr;
+    return store ? store->GetSettingFloat("ui.slideSpeed") : 18.f;
 }
 
 float Panel::PanelWidth() const
@@ -121,7 +124,7 @@ void Panel::Render(UIContext& ctx) noexcept
 
     const float w = GetWidth();
 
-    // ── Slide animation ───────────────────────────────────────────────────────
+    // -- Slide animation -------------------------------------------------------
     const float targetX = open_ ? 0.f : side_ == Side::Left ? -w : w;
 
     const float speed = GetSlideSpeed() * ctx.GetDeltaTime();
@@ -134,7 +137,7 @@ void Panel::Render(UIContext& ctx) noexcept
         animX_ += (targetX - animX_) * std::min(speed, 1.f);
     }
 
-    // Broadcast the animated width so other plugins (e.g. Overlay's controls
+    // Broadcast the animated width so other modules (e.g. Overlay's controls
     // bar) can inset around the panel. Published before the early-return so
     // the final settle-to-hidden frame still reports width 0.
     if (panelCtx_)
@@ -153,7 +156,7 @@ void Panel::Render(UIContext& ctx) noexcept
         return;
     }
 
-    // ── Panel position ────────────────────────────────────────────────────────
+    // -- Panel position --------------------------------------------------------
     const float posX = side_ == Side::Left ? animX_ : static_cast<float>(windowW) - w + animX_;
 
     // Keep the docked panel inside the host window: while it slides off-screen on

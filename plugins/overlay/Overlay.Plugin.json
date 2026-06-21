@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.overlay",
+  "name": "Overlay",
+  "publisher": "FrameLift",
+  "description": "On-screen media overlay",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}

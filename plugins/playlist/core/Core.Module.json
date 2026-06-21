@@ -1,0 +1,24 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.playlist.core",
+  "name": "Playlist Core",
+  "description": "Directory scanning, playlist panel, and file navigation.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "playlist.panel",
+      "playlist.navigation"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
+}

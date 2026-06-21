@@ -150,7 +150,6 @@ jobs:
             -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
             -DCMAKE_BUILD_TYPE=Release \
             -DFRAMELIFT_BUILD_TESTS=OFF \
-            -DFRAMELIFT_ENABLE_UPDATER=ON \
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
       - name: Build
@@ -167,9 +166,8 @@ jobs:
           [ -f "$GCC_LIBDIR/libstdc++-6.dll" ] && cp "$GCC_LIBDIR/libstdc++-6.dll" "$BUILD_DIR/"
           WINPTHREAD=$(x86_64-w64-mingw32-gcc-posix -print-file-name=libwinpthread-1.dll)
           [ -f "$WINPTHREAD" ] && cp "$WINPTHREAD" "$BUILD_DIR/"
-          (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip FrameLift.exe *.dll Plugins)
-          # The SDK is packaged by the dedicated `build-sdk` job. The in-tree HelloPlugin
-          # (FRAMELIFT_BUILD_SDK_EXAMPLE) still builds here as a Windows-side SDK bitrot guard.
+          (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip framelift.exe *.dll packages)
+          # The SDK is packaged by the dedicated `build-sdk` job.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -178,7 +176,8 @@ jobs:
 
   # ── Native Linux build ──────────────────────────────────────────────────────
   # Builds the host + cross-platform plugins natively against system SDL3/FFmpeg.
-  # The Updater is Windows-only, so it's disabled here. Produces FrameLift-linux-x64.tar.gz.
+  # Windows-only plugins are disabled by module platform metadata.
+  # Produces FrameLift-linux-x64.tar.gz.
   #
   # ubuntu:25.04 because libsdl3-dev first ships there (24.04 LTS has only SDL2).
   build-linux:
@@ -202,13 +201,12 @@ jobs:
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DFRAMELIFT_BUILD_TESTS=OFF \
-            -DFRAMELIFT_ENABLE_UPDATER=OFF \
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
           cmake --build "$BUILD_DIR" --parallel
-          test -f "$BUILD_DIR/FrameLift"
-          test -f "$BUILD_DIR/Plugins/Playlist.so"
-          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz FrameLift Plugins)
+          test -f "$BUILD_DIR/framelift"
+          test -f "$BUILD_DIR/packages/framelift.playlist.core.so"
+          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz framelift packages)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -218,8 +216,9 @@ jobs:
   # ── Plugin SDK package ──────────────────────────────────────────────────────
   # The SDK is platform-neutral source (headers + helper .cpp compiled per plugin),
   # so it's packaged in its own job. Configure (no host build) stages the `sdk`
-  # install component; the clean-room build then validates the package with a native
-  # compiler, outside the source tree, proving it is self-contained.
+  # install component and zips it. Self-containment (the package builds a working
+  # plugin outside the source tree) is validated by the FrameLift-Examples repo's
+  # CI, which builds the worked examples against this published zip.
   # Produces FrameLift-sdk-<ver>.zip.
   build-sdk:
     needs: test
@@ -242,9 +241,6 @@ jobs:
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_VERSION="$VERSION"
           cmake --install "$BUILD_DIR" --prefix "$GITHUB_WORKSPACE/sdk-stage" --component sdk
-          cmake -S "$GITHUB_WORKSPACE/sdk-stage" -B "$GITHUB_WORKSPACE/sdk-cleanroom" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build "$GITHUB_WORKSPACE/sdk-cleanroom"
-          test -f "$GITHUB_WORKSPACE/sdk-cleanroom/Plugins/HelloPlugin.so"
           # cmake -E tar with --format=zip avoids needing the zip package installed.
           (cd "$GITHUB_WORKSPACE/sdk-stage" && cmake -E tar cf "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-sdk-${VERSION}.zip" --format=zip .)
       - name: Upload artifact

@@ -1,0 +1,27 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.module_runtime",
+  "name": "Module Runtime",
+  "description": "Runtime package discovery, dependency resolution, module context, and settings bridge.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "modules.runtime",
+      "modules.resolution",
+      "modules.context"
+    ]
+  },
+  "requires": {
+    "modules": [
+      "framelift.host.settings",
+      "framelift.host.services"
+    ],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

@@ -1,0 +1,21 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.benchmark.core",
+  "name": "Benchmark Core",
+  "description": "Playback benchmark overlay and system statistics.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "benchmark.overlay"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

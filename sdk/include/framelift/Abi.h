@@ -37,19 +37,17 @@
 //      Subscribers:    event const char* fields are valid only during the callback.
 //    Plugins that need to outlive the call must copy into their own storage.
 //
-// 5. ABI VERSION (major.minor.patch — sdk/include/framelift/PluginABI.h).
-//    The loader accepts a plugin iff plugin.abiMajor == host.abiMajor and
-//    plugin.abiMinor <= host.abiMinor, checked before any vtable is touched.
-//      MAJOR — any breaking change: removing/reordering virtual methods,
-//              changing a signature, OR appending to a host-CALLED plugin
-//              interface (IPlugin, IRenderable) or framelift_* export — the host
-//              would call a new slot on an older, shorter plugin vtable.
-//      MINOR — backward-compatible additions to host-PROVIDED surface:
-//              appending a method to IPluginContext, a new service interface, a
-//              new optional export.  Old plugins keep loading.
-//      PATCH — ABI-neutral fixes; carried and logged but not gated.
-//    FrameLiftPluginInfo is itself part of the ABI: only a MAJOR bump may change its
-//    layout.
+// 5. ABI VERSION (a single integer — sdk/include/framelift/ModuleABI.h).
+//    The loader accepts a plugin iff plugin.abiVersion == host.abiVersion, checked
+//    before any vtable is touched. Host and plugins are built from one source tree
+//    in lockstep, so an exact match is the whole rule — a mismatch means a stale
+//    binary that must be rebuilt, not negotiated.
+//      Bump FRAMELIFT_ABI_VERSION only on a Tier-1 break: a framelift_* export
+//      signature, the FrameLiftPackageInfo/FrameLiftModuleInfo layout, a host-CALLED
+//      interface (IModule, IRenderable), or the bootstrap surface of IModuleContext.
+//      New host capabilities are NOT a break — they ship as new, independently
+//      discovered service interfaces (GetService<T>() returns nullptr when absent),
+//      so adding one never touches the version.
 //
 // ── Helper macros ─────────────────────────────────────────────────────────────
 

@@ -2,7 +2,10 @@
 #include <cstddef>
 #include <functional>
 #include <framelift/Guard.h>
-#include <framelift/IPluginContext.h>
+#include <framelift/IModuleContext.h>
+#include <framelift/services/IAppPaths.h>
+#include <framelift/services/ISettingsRegistry.h>
+#include <framelift/services/ISettingsStore.h>
 #include <string>
 #include <utility>
 
@@ -10,7 +13,7 @@
 // These helpers compile into the plugin (no DLL boundary crossing) and wrap the
 // raw fn-ptr+ud ABI into ergonomic std::function / lambda subscriptions.
 // They heap-allocate closures and register cleanup callbacks to free them on
-// plugin unload (IPluginContext::ClearSubscriptions).
+// plugin unload (IModuleContext::ClearSubscriptions).
 
 namespace framelift
 {
@@ -18,7 +21,7 @@ namespace framelift
 // Subscribe to an event type using a lambda or std::function.
 // Closure is heap-allocated and freed automatically when the plugin unloads.
 template <typename TEvent, typename Fn>
-void Subscribe(IPluginContext& ctx, Fn&& handler)
+void Subscribe(IModuleContext& ctx, Fn&& handler)
 {
     struct Sub
     {
@@ -47,7 +50,7 @@ void Subscribe(IPluginContext& ctx, Fn&& handler)
 // Register a settings-change callback using a lambda.
 // Closure is heap-allocated and freed on plugin unload.
 template <typename Fn>
-void RegisterSettingsChangeCallback(IPluginContext& ctx, Fn&& handler)
+void RegisterSettingsChangeCallback(IModuleContext& ctx, Fn&& handler)
 {
     struct Closure
     {
@@ -70,38 +73,53 @@ void RegisterSettingsChangeCallback(IPluginContext& ctx, Fn&& handler)
         }
     };
 
-    ctx.RegisterSettingsChangeCallback(&Closure::call, new Closure{std::forward<Fn>(handler)}, &Closure::cleanup);
+    if (auto* store = ctx.GetService<ISettingsStore>())
+    {
+        store->RegisterSettingsChangeCallback(
+            &Closure::call, new Closure{std::forward<Fn>(handler)}, &Closure::cleanup
+        );
+    }
 }
 
 // Get a setting string into a std::string (allocates, plugin-side only).
-inline std::string GetSettingString(const IPluginContext& ctx, const char* key)
+inline std::string GetSettingString(const IModuleContext& ctx, const char* key)
 {
-    const int len = ctx.GetSettingString(key, nullptr, 0);
+    const auto* store = ctx.GetService<ISettingsStore>();
+    if (!store)
+    {
+        return {};
+    }
+    const int len = store->GetSettingString(key, nullptr, 0);
     if (len <= 0)
     {
         return {};
     }
     std::string out(static_cast<std::size_t>(len), '\0');
-    ctx.GetSettingString(key, out.data(), len + 1);
+    store->GetSettingString(key, out.data(), len + 1);
     return out;
 }
 
 // Get the pref path as a std::string (allocates, plugin-side only).
-inline std::string GetPrefPath(const IPluginContext& ctx)
+inline std::string GetPrefPath(const IModuleContext& ctx)
 {
-    const int len = ctx.GetPrefPath(nullptr, 0);
+    const auto* paths = ctx.GetService<IAppPaths>();
+    if (!paths)
+    {
+        return {};
+    }
+    const int len = paths->GetPrefPath(nullptr, 0);
     if (len <= 0)
     {
         return {};
     }
     std::string out(static_cast<std::size_t>(len), '\0');
-    ctx.GetPrefPath(out.data(), len + 1);
+    paths->GetPrefPath(out.data(), len + 1);
     return out;
 }
 
 // Register a keybind backed by a std::string member.
 // Avoids having to write the get/set lambdas for each binding.
-inline void RegisterKeybindEntry(IPluginContext& ctx, const char* label, const char* actionName, std::string& bindStr)
+inline void RegisterKeybindEntry(IModuleContext& ctx, const char* label, const char* actionName, std::string& bindStr)
 {
     struct Acc
     {
@@ -122,7 +140,10 @@ inline void RegisterKeybindEntry(IPluginContext& ctx, const char* label, const c
         }
     };
 
-    ctx.RegisterKeybindEntry(label, actionName, Acc::get, Acc::set, &bindStr);
+    if (auto* registry = ctx.GetService<ISettingsRegistry>())
+    {
+        registry->RegisterKeybindEntry(label, actionName, Acc::get, Acc::set, &bindStr);
+    }
 }
 
 } // namespace framelift

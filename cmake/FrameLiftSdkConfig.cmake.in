@@ -4,12 +4,14 @@
 #
 # Usage from a plugin's CMakeLists.txt:
 #   find_package(FrameLiftSdk REQUIRED)
-#   add_framelift_plugin(MyPlugin MyPlugin.cpp ${FRAMELIFT_SDK_SOURCES})
+#   add_framelift_plugin(MyPlugin
+#       PLUGIN_JSON "${CMAKE_CURRENT_SOURCE_DIR}/MyPlugin.Plugin.json"
+#       core/MyPlugin.cpp ${FRAMELIFT_SDK_SOURCES})
 #
 # The SDK is dependency-free: no imgui/spdlog/stb/json are required to build a
-# plugin. find_package compatibility is gated on the ABI major version via the
-# accompanying FrameLiftSdkConfigVersion.cmake (SameMajorVersion); the runtime loader
-# additionally enforces minor compatibility (host.minor >= plugin.minor).
+# plugin. find_package compatibility is gated on the ABI version via the accompanying
+# FrameLiftSdkConfigVersion.cmake (ExactVersion); the runtime loader enforces the same
+# exact-version match before touching any vtable.
 
 set(FRAMELIFT_SDK_STANDALONE ON)
 include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftSdk.cmake")

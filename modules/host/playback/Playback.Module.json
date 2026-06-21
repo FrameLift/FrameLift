@@ -1,0 +1,34 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.host.playback",
+  "name": "Media Playback",
+  "description": "FFmpeg-backed media playback, subtitles, and hardware decode helpers.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "media.playback.ffmpeg",
+      "media.subtitles.libass",
+      "video.decode.ffmpeg",
+      "video.decode.hardware"
+    ]
+  },
+  "requires": {
+    "modules": [
+      "framelift.host.read_ahead",
+      "framelift.host.audio"
+    ],
+    "features": []
+  },
+  "optional": {
+    "modules": [
+      "framelift.host.graphics_vulkan"
+    ],
+    "features": [
+      "graphics.backend.vulkan",
+      "video.decode.vulkan",
+      "video.decode.vulkan_zero_copy"
+    ]
+  },
+  "platforms": []
+}

@@ -1,0 +1,22 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.overlay.core",
+  "name": "Overlay Core",
+  "description": "Playback controls, foreground HUD, idle screen, and notifications.",
+  "enabled": true,
+  "provides": {
+    "features": [
+      "overlay.controls",
+      "overlay.hud"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

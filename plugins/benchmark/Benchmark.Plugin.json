@@ -1,0 +1,12 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.benchmark",
+  "name": "Benchmark",
+  "publisher": "FrameLift",
+  "description": "Performance benchmark overlay",
+  "version": "project",
+  "abi": 1,
+  "modules": [
+    "core/Core.Module.json"
+  ]
+}
