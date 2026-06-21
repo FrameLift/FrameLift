@@ -74,7 +74,7 @@ TEST(PackageConfigTest, SaveWritesSortedRowsWithHeader)
     std::ifstream in(f.str());
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-    EXPECT_EQ(text.rfind("# FrameLift plugin enablement", 0), 0u); // starts with the header
+    EXPECT_EQ(text.rfind("# FrameLift module enablement", 0), 0u); // starts with the header
     const auto aaa = text.find("framelift.aaa=disabled");
     const auto zzz = text.find("framelift.zzz=enabled");
     ASSERT_NE(aaa, std::string::npos);
