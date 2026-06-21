@@ -38,6 +38,9 @@ ModuleContext::ModuleContext(
     RegisterServiceRaw(IAppPaths::InterfaceId, static_cast<IAppPaths*>(this));
 }
 
+// Anchors the vtable and the implicit-member destructor in this single TU (see header).
+ModuleContext::~ModuleContext() = default;
+
 // ── Pref path ─────────────────────────────────────────────────────────────────
 
 int ModuleContext::GetPrefPath(char* buf, int cap) const noexcept

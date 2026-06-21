@@ -69,6 +69,12 @@ public:
         PackageConfig* packageConfig = nullptr, std::string packagesPath = {}
     );
 
+    // Anchored out-of-line so the implicit virtual destructor (and its secondary-base
+    // thunks) is emitted in exactly one TU. Without this, every TU that destroys a
+    // ModuleContext (App's unique_ptr) emits its own linkonce copy, which mingw + LTO
+    // fails to fold into one — a multiple-definition link error.
+    ~ModuleContext() override;
+
     int GetPrefPath(char* buf, int cap) const noexcept override;
 
     void EnumeratePackages(
