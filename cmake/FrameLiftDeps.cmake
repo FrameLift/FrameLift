@@ -20,7 +20,7 @@ FetchContent_MakeAvailable(spdlog)
 # ── Vulkan stack (second graphics backend — OpenGL→Vulkan migration, #17) ───────
 # Resolved via FetchContent rather than vcpkg so the SAME setup works identically on
 # the Windows MinGW cross-build and the native-Linux build (vcpkg only runs on
-# Windows here). volk, VMA and vk-bootstrap are single-source / header-only and
+# Windows here). volk and VMA are single-source / header-only and
 # compile in-tree, exactly like imgui/spdlog above. Crucially, volk loads the Vulkan
 # loader dynamically at runtime (volkInitialize), so there is NO link-time dependency
 # on libvulkan — sidestepping the brittle MinGW loader-import path. The runtime loader
@@ -29,8 +29,8 @@ FetchContent_MakeAvailable(spdlog)
 #
 # Tags are a coherent ~1.3.x set; bump together if a tag ever 404s.
 
-# Vulkan-Headers — the API headers + the Vulkan::Headers interface target that volk,
-# VMA and vk-bootstrap consume. Declared first so the others detect and reuse it.
+# Vulkan-Headers — the API headers + the Vulkan::Headers interface target that volk
+# and VMA consume. Declared first so the others detect and reuse it.
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
 FetchContent_Declare(
         vulkan_headers
@@ -59,15 +59,6 @@ FetchContent_Declare(
         GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(vma)
-
-# vk-bootstrap — instance/physical-device/device/swapchain selection boilerplate.
-FetchContent_Declare(
-        vk_bootstrap
-        GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
-        GIT_TAG v1.4.353
-        GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(vk_bootstrap)
 endif ()
 
 # ── Dear ImGui ────────────────────────────────────────────────────────────────

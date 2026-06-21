@@ -22,14 +22,32 @@ public:
     static constexpr uint32_t kMaxFamilies = 32;
     static constexpr uint32_t kMaxQueuesPerFamily = 8;
 
-    void Lock(uint32_t family, uint32_t index) noexcept { mutexes_[FamilySlot(family)][QueueSlot(index)].lock(); }
+    // Turn locking on/off. When the device's queues are created internally synchronized
+    // (VK_KHR_internally_synchronized_queues), the driver makes concurrent submits safe,
+    // so the renderer's guards and FFmpeg's lock_queue callback are both unnecessary and
+    // this lock becomes a no-op. Set once at device-creation time, before any threads run.
+    void SetEnabled(bool enabled) noexcept { enabled_ = enabled; }
+
+    void Lock(uint32_t family, uint32_t index) noexcept
+    {
+        if (enabled_)
+        {
+            mutexes_[FamilySlot(family)][QueueSlot(index)].lock();
+        }
+    }
 
     bool TryLock(uint32_t family, uint32_t index) noexcept
     {
-        return mutexes_[FamilySlot(family)][QueueSlot(index)].try_lock();
+        return enabled_ ? mutexes_[FamilySlot(family)][QueueSlot(index)].try_lock() : true;
     }
 
-    void Unlock(uint32_t family, uint32_t index) noexcept { mutexes_[FamilySlot(family)][QueueSlot(index)].unlock(); }
+    void Unlock(uint32_t family, uint32_t index) noexcept
+    {
+        if (enabled_)
+        {
+            mutexes_[FamilySlot(family)][QueueSlot(index)].unlock();
+        }
+    }
 
 private:
     static uint32_t FamilySlot(uint32_t family) noexcept { return family < kMaxFamilies ? family : kMaxFamilies - 1; }
@@ -39,6 +57,7 @@ private:
         return index < kMaxQueuesPerFamily ? index : kMaxQueuesPerFamily - 1;
     }
 
+    bool enabled_ = true;
     std::array<std::array<std::mutex, kMaxQueuesPerFamily>, kMaxFamilies> mutexes_{};
 };
 

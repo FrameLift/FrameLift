@@ -10,8 +10,6 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include <vk_mem_alloc.h>
 
-#include <VkBootstrap.h>
-
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -21,8 +19,10 @@
 
 #include <framelift/Log.h>
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 namespace
 {
@@ -31,6 +31,19 @@ constexpr bool kEnableValidation = true;
 #else
 constexpr bool kEnableValidation = false;
 #endif
+
+// True if `name` appears in a vkEnumerate*ExtensionProperties result.
+bool HasExt(const std::vector<VkExtensionProperties>& list, const char* name)
+{
+    for (const VkExtensionProperties& e : list)
+    {
+        if (std::strcmp(e.extensionName, name) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
 
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                              VkDebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -130,26 +143,53 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
     // ── Instance ───────────────────────────────────────────────────────────────
     uint32_t sdlExtCount = 0;
     const char* const* sdlExts = SDL_Vulkan_GetInstanceExtensions(&sdlExtCount);
-    std::vector<const char*> extensions(sdlExts, sdlExts + sdlExtCount);
+    std::vector<const char*> instExts(sdlExts, sdlExts + sdlExtCount);
 
-    vkb::InstanceBuilder instanceBuilder;
+    // Enable the validation layer only when present (so a dev box without the SDK still runs).
+    const char* const kValidationLayer = "VK_LAYER_KHRONOS_validation";
+    bool useValidation = false;
+    if (kEnableValidation)
+    {
+        uint32_t layerCount = 0;
+        vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+        std::vector<VkLayerProperties> layers(layerCount);
+        vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+        for (const VkLayerProperties& l : layers)
+        {
+            if (std::strcmp(l.layerName, kValidationLayer) == 0)
+            {
+                useValidation = true;
+                break;
+            }
+        }
+        if (useValidation)
+        {
+            instExts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+    }
+
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.pApplicationName = "FrameLift";
     // 1.3 instance: required by FFmpeg's Vulkan hwaccel (AVVulkanDeviceContext). The
     // device may still come back at 1.1 on older GPUs (video unsupported → CPU fallback).
-    instanceBuilder.set_app_name("FrameLift").require_api_version(1, 3, 0).enable_extensions(extensions);
-    if (kEnableValidation)
+    app.apiVersion = VK_API_VERSION_1_3;
+
+    VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ici.pApplicationInfo = &app;
+    ici.enabledExtensionCount = static_cast<uint32_t>(instExts.size());
+    ici.ppEnabledExtensionNames = instExts.data();
+    if (useValidation)
     {
-        instanceBuilder.request_validation_layers(true).enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        ici.enabledLayerCount = 1;
+        ici.ppEnabledLayerNames = &kValidationLayer;
     }
-    auto instanceRet = instanceBuilder.build();
-    if (!instanceRet)
+    if (vkCreateInstance(&ici, nullptr, &instance_) != VK_SUCCESS)
     {
-        Fatal(("Vulkan instance creation failed: " + instanceRet.error().message()).c_str());
+        Fatal("Vulkan instance creation failed");
     }
-    vkb::Instance vkbInstance = instanceRet.value();
-    instance_ = vkbInstance.instance;
     volkLoadInstance(instance_);
 
-    if (kEnableValidation)
+    if (useValidation)
     {
         VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
         dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
@@ -183,66 +223,148 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
     enabledFeatures2_.features.shaderInt64 = VK_TRUE;
     enabledFeatures2_.features.vertexPipelineStoresAndAtomics = VK_TRUE;
 
+    // Candidate device + chosen queue families and the extension set we will enable.
     struct DevicePick
     {
-        vkb::PhysicalDevice phys;
-        vkb::Device device;
-    };
-    auto tryBuild = [&](bool withVideo) -> std::optional<DevicePick> {
-        vkb::PhysicalDeviceSelector sel(vkbInstance);
-        sel.set_surface(surface_);
-        if (withVideo)
-        {
-            sel.set_minimum_version(1, 3)
-                .set_required_features(enabledFeatures2_.features)
-                .set_required_features_11(enabledF11_)
-                .set_required_features_12(enabledF12_)
-                .set_required_features_13(enabledF13_)
-                .add_required_extension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME)
-                .add_required_extension(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
-        }
-        else
-        {
-            sel.set_minimum_version(1, 1);
-        }
-        auto pr = sel.select();
-        if (!pr)
-        {
-            return std::nullopt;
-        }
-        vkb::PhysicalDevice phys = pr.value();
-        if (withVideo)
-        {
-            // Codec + maintenance extensions vary by GPU; enable whichever are present.
-            phys.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
-            phys.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
-            phys.enable_extension_if_present(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
-            phys.enable_extension_if_present(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME);
-        }
-        vkb::DeviceBuilder db(phys);
-        // Replicate vk-bootstrap's default one-queue-per-family setup (which is what makes
-        // the video-decode queue exist), but request a SECOND queue on every graphics-capable
-        // family that allows it. ImGui's multi-viewport rendering can use that second
-        // queue so secondary-window submits/presents do not share queue index 0 with
-        // video work.
-        const auto families = phys.get_queue_families();
-        std::vector<vkb::CustomQueueDescription> queueSetup;
-        queueSetup.reserve(families.size());
-        for (uint32_t i = 0; i < families.size(); ++i)
-        {
-            const bool dualGraphics = (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && families[i].queueCount >= 2;
-            queueSetup.emplace_back(i, std::vector<float>(dualGraphics ? 2 : 1, 1.0f));
-        }
-        db.custom_queue_setup(queueSetup);
-        auto dr = db.build();
-        if (!dr)
-        {
-            return std::nullopt;
-        }
-        return DevicePick{phys, dr.value()};
+        VkPhysicalDevice phys = VK_NULL_HANDLE;
+        uint32_t graphicsFamily = 0;
+        uint32_t presentFamily = 0;
+        std::vector<const char*> deviceExts;
+        bool internalSync = false; // VK_KHR_internally_synchronized_queues usable
     };
 
-    auto pick = tryBuild(true);
+    uint32_t physCount = 0;
+    vkEnumeratePhysicalDevices(instance_, &physCount, nullptr);
+    std::vector<VkPhysicalDevice> physDevices(physCount);
+    vkEnumeratePhysicalDevices(instance_, &physCount, physDevices.data());
+
+    // Pick the first device satisfying the tier (graphics + present + required
+    // extensions/features), preferring a discrete GPU. The video tier additionally
+    // requires the Vulkan-video decode stack and the 1.1/1.2/1.3 feature set we enable.
+    auto tryPick = [&](bool withVideo) -> std::optional<DevicePick> {
+        std::optional<DevicePick> best;
+        bool bestDiscrete = false;
+        for (VkPhysicalDevice pd : physDevices)
+        {
+            VkPhysicalDeviceProperties pp{};
+            vkGetPhysicalDeviceProperties(pd, &pp);
+            if (pp.apiVersion < (withVideo ? VK_API_VERSION_1_3 : VK_API_VERSION_1_1))
+            {
+                continue;
+            }
+
+            uint32_t qfCount = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(pd, &qfCount, nullptr);
+            std::vector<VkQueueFamilyProperties> qfp(qfCount);
+            vkGetPhysicalDeviceQueueFamilyProperties(pd, &qfCount, qfp.data());
+            int gfx = -1, present = -1;
+            for (uint32_t i = 0; i < qfCount; ++i)
+            {
+                if (gfx < 0 && (qfp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+                {
+                    gfx = static_cast<int>(i);
+                }
+                VkBool32 sup = VK_FALSE;
+                vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, surface_, &sup);
+                if (present < 0 && sup)
+                {
+                    present = static_cast<int>(i);
+                }
+            }
+            if (gfx < 0 || present < 0)
+            {
+                continue;
+            }
+            // Prefer presenting on the graphics family when it supports it (the common case,
+            // and it lets the swapchain use EXCLUSIVE sharing).
+            VkBool32 gfxPresents = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(pd, static_cast<uint32_t>(gfx), surface_, &gfxPresents);
+            if (gfxPresents)
+            {
+                present = gfx;
+            }
+
+            uint32_t extCount = 0;
+            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, nullptr);
+            std::vector<VkExtensionProperties> exts(extCount);
+            vkEnumerateDeviceExtensionProperties(pd, nullptr, &extCount, exts.data());
+            if (!HasExt(exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+            {
+                continue;
+            }
+            if (withVideo && (!HasExt(exts, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) ||
+                              !HasExt(exts, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME)))
+            {
+                continue;
+            }
+
+            DevicePick cand;
+            cand.phys = pd;
+            cand.graphicsFamily = static_cast<uint32_t>(gfx);
+            cand.presentFamily = static_cast<uint32_t>(present);
+            cand.deviceExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+
+            if (withVideo)
+            {
+                // Require the features we enable below: a device missing any can't take the video tier.
+                VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+                VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+                VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+                VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                f2.pNext = &f11;
+                f11.pNext = &f12;
+                f12.pNext = &f13;
+                vkGetPhysicalDeviceFeatures2(pd, &f2);
+                const bool featuresOk = f11.samplerYcbcrConversion && f12.timelineSemaphore &&
+                                        f13.synchronization2 && f2.features.shaderImageGatherExtended &&
+                                        f2.features.fragmentStoresAndAtomics && f2.features.shaderInt64 &&
+                                        f2.features.vertexPipelineStoresAndAtomics;
+                if (!featuresOk)
+                {
+                    continue;
+                }
+
+                cand.deviceExts.push_back(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+                cand.deviceExts.push_back(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+                // Codec + maintenance extensions vary by GPU; enable whichever are present.
+                for (const char* opt : {VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME, VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME,
+                                        VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME, VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME})
+                {
+                    if (HasExt(exts, opt))
+                    {
+                        cand.deviceExts.push_back(opt);
+                    }
+                }
+
+                // Proper (non-deprecated) FFmpeg queue synchronization: when the driver
+                // supports internally-synchronized queues, we create them with that bit and
+                // skip FFmpeg's deprecated lock_queue callback + our host-side queue lock.
+                if (HasExt(exts, VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME))
+                {
+                    VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR isq{
+                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR};
+                    VkPhysicalDeviceFeatures2 q2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                    q2.pNext = &isq;
+                    vkGetPhysicalDeviceFeatures2(pd, &q2);
+                    if (isq.internallySynchronizedQueues)
+                    {
+                        cand.deviceExts.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
+                        cand.internalSync = true;
+                    }
+                }
+            }
+
+            const bool discrete = pp.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+            if (!best || (discrete && !bestDiscrete))
+            {
+                best = std::move(cand);
+                bestDiscrete = discrete;
+            }
+        }
+        return best;
+    };
+
+    auto pick = tryPick(true);
     if (pick)
     {
         supportsVulkanVideo_ = true;
@@ -250,48 +372,109 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
     else
     {
         Log::Info("Vulkan: video-decode device unavailable; using a plain render device (CPU upload path)");
-        pick = tryBuild(false);
+        pick = tryPick(false);
     }
     if (!pick)
     {
         Fatal("Vulkan device creation failed");
     }
 
-    physicalDevice_ = pick->phys.physical_device;
+    physicalDevice_ = pick->phys;
+    graphicsQueueFamily_ = pick->graphicsFamily;
+    presentQueueFamily_ = pick->presentFamily;
+    internalQueueSync_ = pick->internalSync;
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(physicalDevice_, &props);
     nvidiaAdapter_ = props.vendorID == 0x10DE;
-    vkb::Device vkbDevice = pick->device;
-    device_ = vkbDevice.device;
+
+    // ── Logical device ─────────────────────────────────────────────────────────
+    // One queue per family (so the video-decode queue exists for FFmpeg to fetch), with a
+    // SECOND queue on every graphics-capable family that allows it: ImGui's multi-viewport
+    // rendering uses that second queue so secondary-window submits/presents do not share
+    // queue index 0 with video work (#26).
+    uint32_t allQfCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &allQfCount, nullptr);
+    std::vector<VkQueueFamilyProperties> allQfp(allQfCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &allQfCount, allQfp.data());
+
+    static const float kPrios[2] = {1.0f, 1.0f};
+    std::vector<VkDeviceQueueCreateInfo> queueInfos;
+    queueInfos.reserve(allQfCount);
+    for (uint32_t i = 0; i < allQfCount; ++i)
+    {
+        const bool dualGraphics = (allQfp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && allQfp[i].queueCount >= 2;
+        VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        qci.queueFamilyIndex = i;
+        qci.queueCount = dualGraphics ? 2 : 1;
+        qci.pQueuePriorities = kPrios;
+        if (internalQueueSync_)
+        {
+            // Driver-internal synchronization for every shared queue → no host-side lock.
+            qci.flags |= VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR;
+        }
+        queueInfos.push_back(qci);
+    }
+
+    // Feature chain handed to FFmpeg later via GetVulkanDeviceInfo (it walks
+    // VkPhysicalDeviceFeatures2 -> 11/12/13). Link it once, before device creation.
+    enabledFeatures2_.pNext = &enabledF11_;
+    enabledF11_.pNext = &enabledF12_;
+    enabledF12_.pNext = &enabledF13_;
+    enabledF13_.pNext = nullptr;
+
+    VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    dci.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
+    dci.pQueueCreateInfos = queueInfos.data();
+    dci.enabledExtensionCount = static_cast<uint32_t>(pick->deviceExts.size());
+    dci.ppEnabledExtensionNames = pick->deviceExts.data();
+    // The plain 1.1 fallback enables no extra features (matches the old minimal device);
+    // only the video tier needs the 1.1/1.2/1.3 chain FFmpeg relies on.
+    VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR isqEnable{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR};
+    isqEnable.internallySynchronizedQueues = VK_TRUE;
+    if (supportsVulkanVideo_)
+    {
+        dci.pNext = &enabledFeatures2_;
+        if (internalQueueSync_)
+        {
+            // Chain the feature only for this synchronous create call; unlink it right
+            // after so the member chain FFmpeg later walks doesn't dangle into this local.
+            enabledF13_.pNext = &isqEnable;
+        }
+    }
+    const VkResult devRes = vkCreateDevice(physicalDevice_, &dci, nullptr, &device_);
+    enabledF13_.pNext = nullptr;
+    if (devRes != VK_SUCCESS)
+    {
+        Fatal("Vulkan device creation failed");
+    }
     volkLoadDevice(device_);
 
-    graphicsQueue_ = vkbDevice.get_queue(vkb::QueueType::graphics).value();
-    graphicsQueueFamily_ = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
-    presentQueue_ = vkbDevice.get_queue(vkb::QueueType::present).value();
-    presentQueueFamily_ = vkbDevice.get_queue_index(vkb::QueueType::present).value();
+    vkGetDeviceQueue(device_, graphicsQueueFamily_, 0, &graphicsQueue_);
+    vkGetDeviceQueue(device_, presentQueueFamily_, 0, &presentQueue_);
+
+    // When the device's queues are internally synchronized, the driver makes concurrent
+    // submits safe — disable the host-side queue lock entirely (the FFmpeg bridge likewise
+    // skips its deprecated lock_queue callback, via VulkanDeviceInfo::internalQueueSync).
+    queueLock_.SetEnabled(!internalQueueSync_);
+    Log::Info("Vulkan: queue synchronization = {}", internalQueueSync_ ? "internal (driver)" : "host lock");
 
     // Grab the second graphics-family queue for ImGui multi-viewport (#26). If the family
     // exposes only one queue, ImGui shares the render queue and the queue lock serializes
     // secondary-window submits/presents with video work.
     imguiQueue_ = graphicsQueue_;
     imguiQueueIndex_ = 0;
+    if (graphicsQueueFamily_ < allQfCount && allQfp[graphicsQueueFamily_].queueCount >= 2)
     {
-        uint32_t qfCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &qfCount, nullptr);
-        std::vector<VkQueueFamilyProperties> qfp(qfCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &qfCount, qfp.data());
-        if (graphicsQueueFamily_ < qfCount && qfp[graphicsQueueFamily_].queueCount >= 2)
-        {
-            vkGetDeviceQueue(device_, graphicsQueueFamily_, 1, &imguiQueue_);
-            imguiQueueIndex_ = 1;
-            Log::Info("Vulkan: dedicated ImGui multi-viewport queue (graphics family {}, index {})",
-                      graphicsQueueFamily_, imguiQueueIndex_);
-        }
-        else
-        {
-            Log::Info("Vulkan: graphics family exposes a single queue; ImGui shares the render "
-                      "queue (multi-viewport may contend with video)");
-        }
+        vkGetDeviceQueue(device_, graphicsQueueFamily_, 1, &imguiQueue_);
+        imguiQueueIndex_ = 1;
+        Log::Info("Vulkan: dedicated ImGui multi-viewport queue (graphics family {}, index {})", graphicsQueueFamily_,
+                  imguiQueueIndex_);
+    }
+    else
+    {
+        Log::Info("Vulkan: graphics family exposes a single queue; ImGui shares the render "
+                  "queue (multi-viewport may contend with video)");
     }
 
     // Record the queue flags + (if video) detect the decode queue family and its codec
@@ -300,30 +483,16 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
     {
         DetectVideoDecodeQueue();
     }
-    if (!supportsVulkanVideo_)
+    if (!supportsVulkanVideo_ && graphicsQueueFamily_ < allQfCount)
     {
-        // tryBuild(true) may succeed on a device that lacks an actual decode queue;
+        // tryPick(true) may succeed on a device that lacks an actual decode queue;
         // DetectVideoDecodeQueue() clears the flag in that case. Still record graphics
         // flags for completeness.
-        uint32_t qfCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &qfCount, nullptr);
-        std::vector<VkQueueFamilyProperties> qfp(qfCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &qfCount, qfp.data());
-        if (graphicsQueueFamily_ < qfCount)
-        {
-            graphicsQueueFlags_ = qfp[graphicsQueueFamily_].queueFlags;
-        }
+        graphicsQueueFlags_ = allQfp[graphicsQueueFamily_].queueFlags;
     }
 
-    // Link the feature chain now (after vk-bootstrap copied the unchained structs) so
-    // GetVulkanDeviceInfo can hand FFmpeg the full VkPhysicalDeviceFeatures2 -> 11/12/13 chain.
-    enabledFeatures2_.pNext = &enabledF11_;
-    enabledF11_.pNext = &enabledF12_;
-    enabledF12_.pNext = &enabledF13_;
-    enabledF13_.pNext = nullptr;
-
-    // Record the enabled device-extension list (verbatim) for FFmpeg's wrap.
-    enabledDeviceExtNames_ = pick->phys.get_extensions();
+    // Record the enabled device-extension list for FFmpeg's wrap.
+    enabledDeviceExtNames_.assign(pick->deviceExts.begin(), pick->deviceExts.end());
     enabledDeviceExtPtrs_.clear();
     enabledDeviceExtPtrs_.reserve(enabledDeviceExtNames_.size());
     for (const std::string& e : enabledDeviceExtNames_)
@@ -390,28 +559,119 @@ void VulkanGraphicsBackend::OnWindowCreated(SDL_Window* window)
 
 bool VulkanGraphicsBackend::CreateSwapchain()
 {
-    int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(window_, &pw, &ph);
+    VkSurfaceCapabilitiesKHR caps{};
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
 
-    vkb::SwapchainBuilder builder(physicalDevice_, device_, surface_, graphicsQueueFamily_, presentQueueFamily_);
-    builder.set_desired_format(VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-        .set_desired_present_mode(vsync_ ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR)
-        .set_desired_extent(static_cast<uint32_t>(pw), static_cast<uint32_t>(ph))
-        .set_old_swapchain(swapchain_);
-    auto ret = builder.build();
-    if (!ret)
+    // Surface format: prefer B8G8R8A8_UNORM / sRGB-nonlinear, else the first reported.
+    uint32_t fmtCount = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &fmtCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(fmtCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &fmtCount, formats.data());
+    VkSurfaceFormatKHR chosen{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+    if (!formats.empty())
     {
-        Log::Error("Vulkan swapchain build failed: {}", ret.error().message());
+        chosen = formats[0];
+        for (const VkSurfaceFormatKHR& f : formats)
+        {
+            if (f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
+                chosen = f;
+                break;
+            }
+        }
+    }
+
+    // Present mode: FIFO is always available (VSync). Prefer MAILBOX when VSync is off.
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    if (!vsync_)
+    {
+        uint32_t pmCount = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmCount, nullptr);
+        std::vector<VkPresentModeKHR> modes(pmCount);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmCount, modes.data());
+        for (VkPresentModeKHR m : modes)
+        {
+            if (m == VK_PRESENT_MODE_MAILBOX_KHR)
+            {
+                presentMode = m;
+                break;
+            }
+        }
+    }
+
+    // Extent: honour the surface's currentExtent when fixed, else clamp the pixel size.
+    VkExtent2D extent = caps.currentExtent;
+    if (caps.currentExtent.width == UINT32_MAX)
+    {
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(window_, &pw, &ph);
+        extent.width = std::clamp(static_cast<uint32_t>(pw), caps.minImageExtent.width, caps.maxImageExtent.width);
+        extent.height = std::clamp(static_cast<uint32_t>(ph), caps.minImageExtent.height, caps.maxImageExtent.height);
+    }
+
+    uint32_t imageCount = caps.minImageCount + 1;
+    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)
+    {
+        imageCount = caps.maxImageCount;
+    }
+
+    VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    sci.surface = surface_;
+    sci.minImageCount = imageCount;
+    sci.imageFormat = chosen.format;
+    sci.imageColorSpace = chosen.colorSpace;
+    sci.imageExtent = extent;
+    sci.imageArrayLayers = 1;
+    sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    const uint32_t qfi[2] = {graphicsQueueFamily_, presentQueueFamily_};
+    if (graphicsQueueFamily_ != presentQueueFamily_)
+    {
+        sci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        sci.queueFamilyIndexCount = 2;
+        sci.pQueueFamilyIndices = qfi;
+    }
+    else
+    {
+        sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+    sci.preTransform = caps.currentTransform;
+    sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    sci.presentMode = presentMode;
+    sci.clipped = VK_TRUE;
+    // The previous swapchain (if any) is retired here and destroyed by RecreateSwapchain.
+    sci.oldSwapchain = swapchain_;
+
+    VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
+    if (vkCreateSwapchainKHR(device_, &sci, nullptr, &newSwapchain) != VK_SUCCESS)
+    {
+        Log::Error("Vulkan swapchain creation failed");
         return false;
     }
-    vkb::Swapchain sc = ret.value();
-    swapchain_ = sc.swapchain;
-    swapchainFormat_ = sc.image_format;
-    swapchainExtent_ = sc.extent;
-    swapchainImages_ = sc.get_images().value();
-    swapchainImageViews_ = sc.get_image_views().value();
+    swapchain_ = newSwapchain;
+    swapchainFormat_ = chosen.format;
+    swapchainExtent_ = extent;
+
+    uint32_t scImgCount = 0;
+    vkGetSwapchainImagesKHR(device_, swapchain_, &scImgCount, nullptr);
+    swapchainImages_.resize(scImgCount);
+    vkGetSwapchainImagesKHR(device_, swapchain_, &scImgCount, swapchainImages_.data());
+
+    swapchainImageViews_.resize(scImgCount);
+    for (uint32_t i = 0; i < scImgCount; ++i)
+    {
+        VkImageViewCreateInfo iv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        iv.image = swapchainImages_[i];
+        iv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        iv.format = swapchainFormat_;
+        iv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &iv, nullptr, &swapchainImageViews_[i]) != VK_SUCCESS)
+        {
+            Log::Error("Vulkan swapchain image view creation failed");
+            return false;
+        }
+    }
     // ImGui's MinImageCount must be >= 2 and <= ImageCount; the actual count satisfies both.
-    minImageCount_ = static_cast<uint32_t>(swapchainImages_.size());
+    minImageCount_ = scImgCount;
     return true;
 }
 
@@ -858,7 +1118,7 @@ void VulkanGraphicsBackend::DetectVideoDecodeQueue()
         return;
     }
 
-    // vk-bootstrap's default queue setup creates one queue per family, so the decode
+    // Default queue setup creates one queue per family, so the decode
     // queue exists; fetch it (used for diagnostics — FFmpeg fetches its own by family).
     vkGetDeviceQueue(device_, static_cast<uint32_t>(videoDecodeQueueFamily_), 0, &videoDecodeQueue_);
     Log::Info("Vulkan: video-decode queue family {} (codec ops 0x{:x})", videoDecodeQueueFamily_,
@@ -885,6 +1145,7 @@ bool VulkanGraphicsBackend::GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noe
     out.videoDecodeCaps = videoDecodeCaps_;
     out.supportsVideoDecode = supportsVulkanVideo_;
     out.queueLock = &queueLock_;
+    out.internalQueueSync = internalQueueSync_;
     return true;
 }
 

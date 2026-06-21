@@ -19,6 +19,19 @@ extern "C"
 #include <libavutil/hwcontext_vulkan.h>
 }
 
+// Scoped suppression of deprecated-field writes (cross-compiler).
+#if defined(__GNUC__) || defined(__clang__)
+#define FFVK_PUSH_IGNORE_DEPRECATED                                                                                     \
+    _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+#define FFVK_POP_IGNORE_DEPRECATED _Pragma("GCC diagnostic pop")
+#elif defined(_MSC_VER)
+#define FFVK_PUSH_IGNORE_DEPRECATED __pragma(warning(push)) __pragma(warning(disable : 4996))
+#define FFVK_POP_IGNORE_DEPRECATED __pragma(warning(pop))
+#else
+#define FFVK_PUSH_IGNORE_DEPRECATED
+#define FFVK_POP_IGNORE_DEPRECATED
+#endif
+
 namespace
 {
 // FFmpeg submits transfer/compute work from its decode thread on queues it shares with
@@ -62,10 +75,18 @@ AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info)
     // thread's and hang the driver (issue #26). user_opaque carries the shared lock to
     // the callbacks; it is the user's field and untouched by av_hwdevice_ctx_init.
     devCtx->user_opaque = info.queueLock;
-    if (info.queueLock)
+    if (info.queueLock && !info.internalQueueSync)
     {
+        // Fallback path (no VK_KHR_internally_synchronized_queues support): FFmpeg's
+        // lock_queue/unlock_queue are deprecated, but they are the only portable way to
+        // make FFmpeg's decode-thread submits share the renderer's VulkanQueueLock when
+        // both touch the same VkQueue (issue #26). When the device's queues are internally
+        // synchronized the driver handles this, so these callbacks are left unset and no
+        // deprecated field is touched at all. This is the ONLY deprecated use in the TU.
+        FFVK_PUSH_IGNORE_DEPRECATED
         vk->lock_queue = LockQueueCb;
         vk->unlock_queue = UnlockQueueCb;
+        FFVK_POP_IGNORE_DEPRECATED
     }
 
     vk->get_proc_addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(info.getInstanceProcAddr);
@@ -105,20 +126,6 @@ AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info)
         ++n;
     }
     vk->nb_qf = n;
-
-#if FF_API_VULKAN_FIXED_QUEUES
-    // Also populate the deprecated fixed-queue fields for this FFmpeg's compatibility path.
-    vk->queue_family_index = info.graphicsQueueFamily;
-    vk->nb_graphics_queues = info.graphicsQueueFamily >= 0 ? 1 : 0;
-    vk->queue_family_tx_index = info.graphicsQueueFamily;
-    vk->nb_tx_queues = info.graphicsQueueFamily >= 0 ? 1 : 0;
-    vk->queue_family_comp_index = info.graphicsQueueFamily;
-    vk->nb_comp_queues = info.graphicsQueueFamily >= 0 ? 1 : 0;
-    vk->queue_family_encode_index = -1;
-    vk->nb_encode_queues = 0;
-    vk->queue_family_decode_index = info.videoDecodeQueueFamily;
-    vk->nb_decode_queues = info.videoDecodeQueueFamily >= 0 ? 1 : 0;
-#endif
 
     const int err = av_hwdevice_ctx_init(ref);
     if (err < 0)
