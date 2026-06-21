@@ -132,6 +132,13 @@ private:
     // so the const GetVulkanDeviceInfo() can hand FFmpeg a non-const pointer to it.
     mutable VulkanQueueLock queueLock_;
 
+    // True when the device's queues were created internally synchronized
+    // (VK_KHR_internally_synchronized_queues). When set, queueLock_ is disabled and the
+    // FFmpeg bridge skips the deprecated lock_queue/unlock_queue callbacks. Detected at
+    // physical-device selection; ~no shipping driver exposes the extension today, so this
+    // is normally false and the lock fallback runs.
+    bool internalQueueSync_ = false;
+
     // ── Vulkan-video decode device state (Phase 3, #18) ────────────────────────
     // Populated only when the physical device exposes a video-decode queue + the
     // required extensions; otherwise supportsVulkanVideo_ stays false and the player

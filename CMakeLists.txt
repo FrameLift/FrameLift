@@ -127,11 +127,12 @@ target_link_libraries(FrameLift PRIVATE
         imgui spdlog::spdlog nlohmann_json::nlohmann_json)
 
 # Vulkan graphics backend (OpenGL→Vulkan migration, #17). volk is the meta-loader
-# (compiled here exactly once — imgui only takes volk_headers); VMA + vk-bootstrap
-# are header/single-source. No link-time libvulkan: volk loads it at runtime.
+# (compiled here exactly once — imgui only takes volk_headers); VMA is single-source.
+# Instance/device/swapchain setup is hand-rolled. No link-time
+# libvulkan: volk loads it at runtime.
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     target_link_libraries(FrameLift PRIVATE
-            volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator vk-bootstrap::vk-bootstrap)
+            volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
 endif ()
 
 # Compile the video shaders to embedded SPIR-V headers and make the host depend on

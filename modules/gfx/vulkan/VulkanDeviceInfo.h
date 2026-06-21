@@ -37,6 +37,12 @@ struct VulkanDeviceInfo
     // lock_queue/unlock_queue callbacks so FFmpeg's decode-thread queue submits are
     // serialized against the render thread's. void* to keep this header Vulkan/FFmpeg-free.
     void* queueLock = nullptr;
+
+    // True when the device's queues were created with VK_KHR_internally_synchronized_queues
+    // (VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR). The driver then makes
+    // concurrent submits safe, so the bridge does NOT wire FFmpeg's deprecated
+    // lock_queue/unlock_queue callbacks (and the backend's VulkanQueueLock is a no-op).
+    bool internalQueueSync = false;
 };
 
 // Snapshot of one decoded AVVkFrame's primary image + its timeline-semaphore sync

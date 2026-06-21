@@ -202,7 +202,6 @@ CMake via `FetchContent`.
 | Vulkan-Headers   | 1.4.354           | FetchContent  |
 | volk             | 1.4.350           | FetchContent  |
 | VulkanMemoryAllocator | 3.4.0        | FetchContent  |
-| vk-bootstrap     | 1.4.353           | FetchContent  |
 | glslang          | 15.0.0 (build-time, fallback) | PATH / FetchContent |
 
 ## License
