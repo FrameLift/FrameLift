@@ -581,23 +581,10 @@ bool VulkanGraphicsBackend::CreateSwapchain()
         }
     }
 
-    // Present mode: FIFO is always available (VSync). Prefer MAILBOX when VSync is off.
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    if (!vsync_)
-    {
-        uint32_t pmCount = 0;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmCount, nullptr);
-        std::vector<VkPresentModeKHR> modes(pmCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmCount, modes.data());
-        for (VkPresentModeKHR m : modes)
-        {
-            if (m == VK_PRESENT_MODE_MAILBOX_KHR)
-            {
-                presentMode = m;
-                break;
-            }
-        }
-    }
+    // Present mode: always FIFO (the only universally-available mode, paced to the display
+    // refresh). A video player gains nothing from MAILBOX/IMMEDIATE — those just render as fast
+    // as the GPU allows, burning power for frames the display never shows — so we never use them.
+    const VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
     // Extent: honour the surface's currentExtent when fixed, else clamp the pixel size.
     VkExtent2D extent = caps.currentExtent;
@@ -672,6 +659,9 @@ bool VulkanGraphicsBackend::CreateSwapchain()
     }
     // ImGui's MinImageCount must be >= 2 and <= ImageCount; the actual count satisfies both.
     minImageCount_ = scImgCount;
+
+    Log::Debug("Vulkan swapchain created: imageCount={} extent={}x{}",
+              scImgCount, extent.width, extent.height);
     return true;
 }
 
@@ -1027,14 +1017,10 @@ void VulkanGraphicsBackend::SwapBuffers()
     }
 }
 
-void VulkanGraphicsBackend::SetVSync(bool enabled)
+void VulkanGraphicsBackend::SetVSync(bool /*enabled*/)
 {
-    if (vsync_ == enabled)
-    {
-        return;
-    }
-    vsync_ = enabled;
-    RecreateSwapchain(); // present mode is baked into the swapchain
+    // No-op: the Vulkan swapchain is always FIFO (vsynced) — see CreateSwapchain. The vsync
+    // toggle only has meaning on the OpenGL backend. Kept to satisfy the IGraphicsBackend ABI.
 }
 
 bool VulkanGraphicsBackend::ImmediateSubmit(void (*record)(VkCommandBuffer, void*), void* ud)

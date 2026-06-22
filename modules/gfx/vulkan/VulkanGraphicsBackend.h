@@ -108,7 +108,6 @@ private:
 
     SDL_Window* window_ = nullptr;
     bool shown_ = false;  // created hidden; shown on the first successful present
-    bool vsync_ = false;  // FIFO when true, MAILBOX/IMMEDIATE when false
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;

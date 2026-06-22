@@ -744,15 +744,33 @@ void VulkanVideoRenderer::DrawVulkanFrame()
         return;
     }
 
-    // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into a
-    //    pre-cmd that runs first in the single per-frame submit, outside the render pass.
-    RecordFrameTransition(info.image, info.layout, info.queueFamily);
+    // The decoder always hands us a fresh frame in its decode layout, owned by the decode queue;
+    // only WE ever leave a frame in SHADER_READ_ONLY_OPTIMAL owned by the graphics queue (step 4
+    // below). So observing that state means this is a re-present of a frame we already prepared —
+    // the display is repainting an unchanged frame (paused, or video fps < display refresh). We
+    // hold a ref on the AVVkFrame, so the decoder cannot reuse/overwrite the image meanwhile, and
+    // same-queue ordering already serialises this sample after the previous one — so there is
+    // nothing to wait on. Re-running the decode→sample wait every such present is what pegged the
+    // graphics queue: each present's TOP_OF_PIPE wait self-chains onto the previous present's
+    // signal, which FIFO paces to vblank, so the queue sat blocked for most of every frame.
+    const bool alreadyPrepared = info.layout == static_cast<int>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) &&
+                                 info.queueFamily == backend_->GraphicsQueueFamily();
 
-    // 2. Register the frame's timeline on that single submit: wait until decode signalled
-    //    `v` (gating the transition at TOP_OF_PIPE), and signal `v+1` when our sample
-    //    completes — the value FFmpeg/the next consumer waits on before reusing the image.
     const auto frameSem = reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(info.semaphore));
-    backend_->AddFrameWait(frameSem, info.semValue, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+    if (!alreadyPrepared)
+    {
+        // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into a
+        //    pre-cmd that runs first in the single per-frame submit, outside the render pass.
+        RecordFrameTransition(info.image, info.layout, info.queueFamily);
+
+        // 2. Wait until decode signalled `v` (gating the transition at TOP_OF_PIPE). Only needed
+        //    on the first present of a freshly decoded frame; re-presents skip it (see above).
+        backend_->AddFrameWait(frameSem, info.semValue, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+    }
+
+    // Signal `v+1` when this sample completes — the value FFmpeg/the next consumer waits on before
+    // reusing the image. Emitted on EVERY present (the value advances each time via step 4), so the
+    // guarantee covers the *last* sample of the frame even when re-presents skipped the wait.
     backend_->AddFrameSignal(frameSem, info.semValue + 1);
 
     // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed.
@@ -778,9 +796,13 @@ void VulkanVideoRenderer::DrawVulkanFrame()
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // 4. Publish the post-sample state so FFmpeg/next consumer observes the right layout,
-    //    timeline value and owning queue family.
-    SetVulkanFrameState(vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1,
-                        backend_->GraphicsQueueFamily());
+    //    timeline value and owning queue family. Only on a freshly prepared frame — a re-present
+    //    neither transitioned the image nor advanced the timeline, so its state already stands.
+    if (!alreadyPrepared)
+    {
+        SetVulkanFrameState(vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1,
+                            backend_->GraphicsQueueFamily());
+    }
 }
 
 void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
