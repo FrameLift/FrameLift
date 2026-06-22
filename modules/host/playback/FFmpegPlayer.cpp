@@ -1711,7 +1711,6 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     }
     normalizeEnabled_ = enabled;
     normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
-    Log::Debug("SetAudioNormalize: {}", enabled);
 
     if (idle_.load())
     {
