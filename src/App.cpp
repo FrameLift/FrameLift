@@ -376,6 +376,31 @@ void App::DrainMediaEvents()
         {
             playbackControls_->SetPlayerIdle(ev.property.value.flag != 0);
         }
+
+        // A file that ended for any reason other than clean EOF failed — tell the user
+        // why. Overlay subscribes to NotificationEvent and shows the toast.
+        if (ev.type == MediaEventType::EndFile && ev.endReason != EndFileReason::Eof && moduleCtx_)
+        {
+            const char* msg = "Couldn't play file";
+            switch (ev.endReason)
+            {
+            case EndFileReason::NotFound:
+                msg = "File not found";
+                break;
+            case EndFileReason::Unsupported:
+                msg = "Unsupported format or codec";
+                break;
+            case EndFileReason::Corrupt:
+                msg = "File is corrupt or truncated";
+                break;
+            case EndFileReason::NoStream:
+                msg = "No playable audio or video stream";
+                break;
+            default:
+                break; // Error / Other → generic message above
+            }
+            moduleCtx_->Publish<NotificationEvent>({msg});
+        }
 #if FRAMELIFT_MODULE_WIN_SHELL
         if (winShell_)
         {

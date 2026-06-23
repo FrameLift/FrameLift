@@ -46,7 +46,7 @@ void DebugOverlay::HandleMediaEvent(const MediaEvent& event)
             title_.clear();
             hwDec_ = "N/A";
             videoW_ = videoH_ = 0;
-            dropped_ = mistimed_ = cacheUsed_ = 0;
+            dropped_ = mistimed_ = decodeErrors_ = cacheUsed_ = 0;
         }
         return;
     }
@@ -126,6 +126,7 @@ void DebugOverlay::RequestRefresh()
     player->GetDoubleAsync(PlayerProperty::Volume, dblCb, new DblField{&volume_, 100.0});
     player->GetInt64Async(PlayerProperty::DroppedFrames, i64Cb, new I64Field{&dropped_, 0});
     player->GetInt64Async(PlayerProperty::MistimedFrames, i64Cb, new I64Field{&mistimed_, 0});
+    player->GetInt64Async(PlayerProperty::DecodeErrors, i64Cb, new I64Field{&decodeErrors_, 0});
     player->GetInt64Async(PlayerProperty::CacheUsed, i64Cb, new I64Field{&cacheUsed_, 0});
     player->GetInt64Async(PlayerProperty::CacheHits, i64Cb, new I64Field{&cacheHits_, 0});
     player->GetInt64Async(PlayerProperty::CacheMisses, i64Cb, new I64Field{&cacheMisses_, 0});
@@ -246,6 +247,9 @@ void DebugOverlay::OnRender(UIContext& ctx)
 
         std::snprintf(buf, sizeof(buf), "%" PRId64, mistimed_);
         row("Mistimed frames: ", buf);
+
+        std::snprintf(buf, sizeof(buf), "%" PRId64, decodeErrors_);
+        row("Decode errors: ", buf);
 
         ctx.Dummy({0.f, 3.f});
 

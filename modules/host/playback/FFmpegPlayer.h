@@ -316,6 +316,7 @@ private:
     std::atomic<int64_t> displayHeight_{0};
     std::atomic<int64_t> droppedFrames_{0};
     std::atomic<int64_t> mistimedFrames_{0}; // frames presented while already behind the master clock
+    std::atomic<int64_t> decodeErrors_{0};   // packets that failed avcodec_send_packet
     std::atomic<bool> idle_{true};
     std::atomic<bool> paused_{false};
     std::atomic<bool> eofReached_{false};
