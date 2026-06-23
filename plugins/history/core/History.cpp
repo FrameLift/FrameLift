@@ -490,57 +490,31 @@ void History::RenderContent(const float panelW, float /*panelH*/, UIContext& ctx
     constexpr float padding = 12.f;
     constexpr float headerH = 36.f;
     constexpr float searchH = 32.f;
-    constexpr float popReserve = 26.f; // right-edge space reserved for the Panel pop-out toggle
 
     // ── Header ───────────────────────────────────────────────────────────────
+    std::string counter;
+    if (!entries_.empty())
     {
-        const UI::Vec2 hdrMin = ctx.GetCursorScreenPos();
-        const UI::Vec2 hdrMax = {hdrMin.x + panelW, hdrMin.y + headerH};
-        auto& dl = ctx.GetWindowDrawList();
-
-        dl.AddRectFilled(hdrMin, hdrMax, UI::MakeColor32(18, 10, 28, 230));
-
-        // Title – top-left (suppressed when popped out: the OS title bar shows it)
-        float counterX = padding;
-        if (!IsPoppedOut())
-        {
-            ctx.SetCursorPosY(10.f);
-            ctx.SetCursorPosX(padding);
-            ctx.TextColored(UI::Color4f(0.88f, 0.82f, 1.f, 1.f), "History");
-            counterX = padding + 60.f;
-        }
-
-        // Entry count – beside the title
-        if (!entries_.empty())
-        {
-            ctx.SetCursorPosY(10.f);
-            ctx.SetCursorPosX(counterX);
-            const std::string counter = searchQuery_.empty()
-                                            ? std::to_string(entries_.size())
-                                            : std::to_string(filteredIndices_.size()) + " / " +
-                                              std::to_string(entries_.size());
-            ctx.TextColored(UI::Color4f(0.5f, 0.45f, 0.65f, 1.f), counter.c_str());
-        }
-
-        // ─ Clear button (X) ──────────────────────────────────────────────────
-        ctx.SetCursorPosY(8.f);
-        ctx.SetCursorPosX(panelW - popReserve - padding - 22.f);
-        ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
-        ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.45f, 0.15f, 0.20f, 0.85f));
-        if (ctx.Button("X", {22.f, 20.f}))
-        {
-            Clear();
-        }
-        ctx.PopStyleColor(2);
-
-        // Bottom separator
-        dl.AddLine(
-            {hdrMin.x + padding, hdrMax.y - 1.f}, {hdrMin.x + panelW - padding, hdrMax.y - 1.f},
-            UI::MakeColor32(80, 55, 120, 200)
-        );
-
-        ctx.SetCursorPosY(headerH);
+        counter = searchQuery_.empty()
+                      ? std::to_string(entries_.size())
+                      : std::to_string(filteredIndices_.size()) + " / " + std::to_string(entries_.size());
     }
+    Widgets::PanelHeader(
+        ctx, panelW, headerH, "History", IsPoppedOut(), counter.empty() ? nullptr : counter.c_str(), 60.f
+    );
+
+    // ─ Clear button (X) ────────────────────────────────────────────────────────
+    ctx.SetCursorPosY(8.f);
+    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 0));
+    ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
+    ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.45f, 0.15f, 0.20f, 0.85f));
+    if (ctx.Button("X", {22.f, 20.f}))
+    {
+        Clear();
+    }
+    ctx.PopStyleColor(2);
+
+    ctx.SetCursorPosY(headerH); // restore cursor below the header before the search box
 
     // ── Search ────────────────────────────────────────────────────────────────
     {
@@ -555,63 +529,27 @@ void History::RenderContent(const float panelW, float /*panelH*/, UIContext& ctx
         ctx.SetCursorPosY(headerH + searchH);
     }
 
-    ctx.BeginChild("##histItems", UI::Vec2(panelW, 0.f));
-
-    for (int i = 0; i < static_cast<int>(filteredIndices_.size()); ++i)
+    // ── Items ────────────────────────────────────────────────────────────────
+    const char* emptyMsg = entries_.empty() ? "No history yet." : "No results.";
+    const int clicked =
+        framelift::ListView("##histItems", rowH)
+            .Selected(cursor_)
+            .EmptyText(emptyMsg)
+            .Render(
+                ctx, panelW, static_cast<int>(filteredIndices_.size()),
+                [&](UIContext& c, const framelift::ListRow& row)
+                {
+                    const int ei = filteredIndices_[row.index];
+                    const UI::Color4f nameCol =
+                        row.selected ? UI::Color4f(1.f, 1.f, 1.f, 1.f) : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
+                    row.TextLine(c, 6.f, nameCol, entries_[ei].label.c_str());
+                    row.TextLine(c, 24.f, UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[ei].dir.c_str());
+                    row.TextLine(c, 40.f, UI::Color4f(0.35f, 0.32f, 0.45f, 1.f), entries_[ei].meta.c_str());
+                }
+            );
+    if (clicked >= 0)
     {
-        const int ei = filteredIndices_[i];
-        const bool isCursor = i == cursor_;
-
-        // Content-local Y of this row's top. Scroll-independent: ImGui applies the
-        // scroll offset internally. Using window-local coordinates (not screen-derived
-        // ones) keeps the content height stable while scrolling so ScrollY isn't clamped.
-        const float rowTop = static_cast<float>(i) * rowH;
-        ctx.SetCursorPosY(rowTop);
-
-        const UI::Vec2 rowMin = ctx.GetCursorScreenPos();
-        const UI::Vec2 rowMax = {rowMin.x + panelW, rowMin.y + rowH};
-        auto& dl = ctx.GetWindowDrawList();
-
-        if (isCursor)
-        {
-            dl.AddRectFilled(rowMin, rowMax, UI::MakeColor32(60, 45, 90, 160));
-        }
-
-        ctx.PushID(i);
-        ctx.SetCursorPosX(0.f);
-        if (ctx.Selectable("##row", isCursor, UI::SelectableFlags::None, UI::Vec2(panelW, rowH - 2.f)))
-        {
-            cursor_ = i;
-            ConfirmCursor();
-        }
-        ctx.PopID();
-
-        ctx.SetCursorPosX(padding);
-        ctx.SetCursorPosY(rowTop + 6.f);
-
-        const UI::Color4f nameCol = isCursor ? UI::Color4f(1.f, 1.f, 1.f, 1.f) : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
-        ctx.TextColored(nameCol, entries_[ei].label.c_str());
-
-        ctx.SetCursorPosX(padding);
-        ctx.SetCursorPosY(rowTop + 24.f);
-        ctx.TextColored(UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[ei].dir.c_str());
-
-        ctx.SetCursorPosX(padding);
-        ctx.SetCursorPosY(rowTop + 40.f);
-        ctx.TextColored(UI::Color4f(0.35f, 0.32f, 0.45f, 1.f), entries_[ei].meta.c_str());
-
-        dl.AddLine(
-            {rowMin.x + padding, rowMax.y - 1.f}, {rowMax.x - padding, rowMax.y - 1.f}, UI::MakeColor32(70, 55, 100, 80)
-        );
+        cursor_ = clicked;
+        ConfirmCursor();
     }
-
-    if (filteredIndices_.empty())
-    {
-        ctx.SetCursorPosY(40.f);
-        ctx.SetCursorPosX(padding);
-        const char* msg = entries_.empty() ? "No history yet." : "No results.";
-        ctx.TextColored(UI::Color4f(0.4f, 0.35f, 0.55f, 1.f), msg);
-    }
-
-    ctx.EndChild();
 }

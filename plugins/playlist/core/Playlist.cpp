@@ -763,143 +763,79 @@ void Playlist::ConfirmCursor()
 void Playlist::RenderContent(const float panelW, float /*panelH*/, UIContext& ctx)
 {
     constexpr float rowH = 44.f;
-    constexpr float padding = 12.f;
     constexpr float headerH = 36.f;
-    constexpr float popReserve = 26.f; // right-edge space reserved for the Panel pop-out toggle
 
     // ── Header ───────────────────────────────────────────────────────────────
+    // Refresh the cached counter string only when the indices actually change.
+    const char* counter = nullptr;
+    if (!entries_.empty())
     {
-        const UI::Vec2 hdrMin = ctx.GetCursorScreenPos();
-        const UI::Vec2 hdrMax = {hdrMin.x + panelW, hdrMin.y + headerH};
-        auto& dl = ctx.GetWindowDrawList();
-
-        dl.AddRectFilled(hdrMin, hdrMax, UI::MakeColor32(18, 10, 28, 230));
-
-        // ─ Title – top-left (suppressed when popped: the OS title bar shows it) ─
-        float counterX = padding;
-        if (!IsPoppedOut())
+        if (current_ != counterCur_ || entries_.size() != counterTotal_)
         {
-            ctx.SetCursorPosY(10.f);
-            ctx.SetCursorPosX(padding);
-            ctx.TextColored(UI::Color4f(0.88f, 0.82f, 1.f, 1.f), "Playlist");
-            counterX = padding + 64.f;
+            counterCur_ = current_;
+            counterTotal_ = entries_.size();
+            counterText_ =
+                (current_ >= 0 ? std::to_string(current_ + 1) : "-") + " / " + std::to_string(entries_.size());
         }
+        counter = counterText_.c_str();
+    }
 
-        // ─ Entry counter – beside the title ────────────────────────────────────
-        if (!entries_.empty())
-        {
-            ctx.SetCursorPosY(10.f);
-            ctx.SetCursorPosX(counterX);
-            if (current_ != counterCur_ || entries_.size() != counterTotal_)
-            {
-                counterCur_ = current_;
-                counterTotal_ = entries_.size();
-                counterText_ =
-                    (current_ >= 0 ? std::to_string(current_ + 1) : "-") + " / " + std::to_string(entries_.size());
-            }
-            ctx.TextColored(UI::Color4f(0.5f, 0.45f, 0.65f, 1.f), counterText_.c_str());
-        }
+    Widgets::PanelHeader(ctx, panelW, headerH, "Playlist", IsPoppedOut(), counter);
 
-        // ─ Shuffle button (S) ──────────────────────────────────────────────────
-        ctx.SetCursorPosY(8.f);
-        ctx.SetCursorPosX(panelW - popReserve - padding - 22.f - 4.f - 22.f);
-        if (shuffleEnabled_)
-        {
-            ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.45f, 0.20f, 0.75f, 0.90f));
-            ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.55f, 0.30f, 0.85f, 1.0f));
-        }
-        else
-        {
-            ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
-            ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.25f, 0.20f, 0.40f, 0.85f));
-        }
-        if (ctx.Button("S", {22.f, 20.f}))
-        {
-            ToggleShuffle();
-        }
-        ctx.PopStyleColor(2);
-
-        // ─ Reload button (R) ──────────────────────────────────────────────────
-        ctx.SetCursorPosY(8.f);
-        ctx.SetCursorPosX(panelW - popReserve - padding - 22.f);
+    // ─ Shuffle button (S) ──────────────────────────────────────────────────────
+    ctx.SetCursorPosY(8.f);
+    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 1));
+    if (shuffleEnabled_)
+    {
+        ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.45f, 0.20f, 0.75f, 0.90f));
+        ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.55f, 0.30f, 0.85f, 1.0f));
+    }
+    else
+    {
         ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
         ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.25f, 0.20f, 0.40f, 0.85f));
-        if (ctx.Button("R", {22.f, 20.f}))
-        {
-            Reload();
-        }
-        ctx.PopStyleColor(2);
-
-        dl.AddLine(
-            {hdrMin.x + padding, hdrMax.y - 1.f}, {hdrMin.x + panelW - padding, hdrMax.y - 1.f},
-            UI::MakeColor32(80, 55, 120, 200)
-        );
-
-        ctx.SetCursorPosY(headerH);
     }
-
-    ctx.BeginChild("##plitems", UI::Vec2(panelW, 0.f));
-
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i)
+    if (ctx.Button("S", {22.f, 20.f}))
     {
-        const bool isPlaying = i == current_;
-        const bool isCursor = i == cursor_;
-
-        // Content-local Y of this row's top. Scroll-independent: ImGui applies the
-        // scroll offset internally. Using window-local coordinates (not screen-derived
-        // ones) keeps the content height stable while scrolling so ScrollY isn't clamped.
-        const float rowTop = static_cast<float>(i) * rowH;
-        ctx.SetCursorPosY(rowTop);
-
-        const UI::Vec2 rowMin = ctx.GetCursorScreenPos();
-        const UI::Vec2 rowMax = {rowMin.x + panelW, rowMin.y + rowH};
-        auto& dl = ctx.GetWindowDrawList();
-
-        if (isCursor && !isPlaying)
-        {
-            dl.AddRectFilled(rowMin, rowMax, UI::MakeColor32(60, 45, 90, 160));
-        }
-        if (isPlaying)
-        {
-            dl.AddRectFilled(rowMin, rowMax, UI::MakeColor32(90, 60, 160, 190));
-        }
-
-        ctx.PushID(i);
-        ctx.SetCursorPosX(0.f);
-        if (ctx.Selectable("##row", isCursor, UI::SelectableFlags::None, UI::Vec2(panelW, rowH - 2.f)))
-        {
-            cursor_ = i;
-            Activate(i);
-        }
-        ctx.PopID();
-
-        ctx.SetCursorPosX(padding);
-        ctx.SetCursorPosY(rowTop + 6.f);
-
-        const UI::Color4f nameCol = isPlaying
-                                        ? UI::Color4f(1.f, 0.4f, 0.4f, 1.f)
-                                        : isCursor
-                                        ? UI::Color4f(1.f, 1.f, 1.f, 1.f)
-                                        : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
-        ctx.TextColored(nameCol, entries_[i].label.c_str());
-
-        ctx.SetCursorPosX(padding);
-        ctx.SetCursorPosY(rowTop + 24.f);
-        ctx.TextColored(UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[i].path.c_str());
-
-        dl.AddLine(
-            {rowMin.x + padding, rowMax.y - 1.f}, {rowMax.x - padding, rowMax.y - 1.f}, UI::MakeColor32(70, 55, 100, 80)
-        );
+        ToggleShuffle();
     }
+    ctx.PopStyleColor(2);
 
-    if (entries_.empty())
+    // ─ Reload button (R) ───────────────────────────────────────────────────────
+    ctx.SetCursorPosY(8.f);
+    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 0));
+    ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
+    ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.25f, 0.20f, 0.40f, 0.85f));
+    if (ctx.Button("R", {22.f, 20.f}))
     {
-        ctx.SetCursorPosY(40.f);
-        ctx.SetCursorPosX(padding);
-        ctx.TextColored(UI::Color4f(0.4f, 0.35f, 0.55f, 1.f), "No items. Open a file to begin.");
+        Reload();
     }
+    ctx.PopStyleColor(2);
 
-    ctx.EndChild();
+    ctx.SetCursorPosY(headerH); // restore cursor below the header before the list
+
+    // ── Items ────────────────────────────────────────────────────────────────
+    const int clicked =
+        framelift::ListView("##plitems", rowH)
+            .Selected(cursor_)
+            .Highlighted(current_)
+            .EmptyText("No items. Open a file to begin.")
+            .Render(
+                ctx, panelW, static_cast<int>(entries_.size()),
+                [&](UIContext& c, const framelift::ListRow& row)
+                {
+                    const UI::Color4f nameCol = row.highlighted ? UI::Color4f(1.f, 0.4f, 0.4f, 1.f)
+                                                : row.selected  ? UI::Color4f(1.f, 1.f, 1.f, 1.f)
+                                                                : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
+                    row.TextLine(c, 6.f, nameCol, entries_[row.index].label.c_str());
+                    row.TextLine(c, 24.f, UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[row.index].path.c_str());
+                }
+            );
+    if (clicked >= 0)
+    {
+        cursor_ = clicked;
+        Activate(clicked);
+    }
 }
 
 // ── Plugin settings page ──────────────────────────────────────────────────────

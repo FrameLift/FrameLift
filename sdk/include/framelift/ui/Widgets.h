@@ -48,4 +48,23 @@ bool ColorEdit(UIContext& ctx, const char* label, const char* description, float
 // When isCapturing is true, shows "Press key..." and a Cancel button instead.
 // The caller must wrap the call in PushID/PopID for button uniqueness.
 KeybindAction KeybindRow(UIContext& ctx, const char* label, const std::string& binding, bool isCapturing);
+
+// ── Panel header ──────────────────────────────────────────────────────────────
+// The titled header bar shared by side panels: a filled background strip, a title
+// (suppressed when poppedOut, since the OS title bar then shows it), an optional
+// counter beside the title, and a bottom separator. Advances the cursor to just
+// below the header so list content follows immediately.
+//
+// Action buttons vary per panel, so they stay caller-drawn: position each with
+// HeaderButtonX(), draw it with SetCursorPosY(8.f), then restore the cursor with
+// SetCursorPosY(headerH) before the list. counterInset is the gap from the left
+// padding to the counter (≈ the rendered title width).
+void PanelHeader(
+    UIContext& ctx, float panelW, float headerH, const char* title, bool poppedOut, const char* counter = nullptr,
+    float counterInset = 64.f
+);
+
+// X position for a header action-button slot, counted from the right edge
+// (slot 0 = rightmost), reserving space for the Panel pop-out toggle.
+float HeaderButtonX(float panelW, int slot, float buttonW = 22.f);
 } // namespace Widgets

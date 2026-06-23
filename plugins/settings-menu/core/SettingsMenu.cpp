@@ -1556,18 +1556,11 @@ void SettingsMenu::OnRender(UIContext& ctx)
     // background overrides and let the themed (light) colors show through.
     const bool darkChrome = model_.Str("theme.preset") != "light";
 
-    if (darkChrome)
-    {
-        ctx.PushStyleColor(UI::ColorSlot::WindowBg, UI::Color4f(0.12f, 0.10f, 0.16f, 1.f));
-    }
-    ctx.PushStyleVar(UI::StyleVar::WindowPadding, UI::Vec2(0.f, 0.f));
-    ctx.PushStyleVar(UI::StyleVar::WindowRounding, 0.f);
-
-    const UI::WindowFlags flags = UI::WindowFlags::NoResize | UI::WindowFlags::NoMove |
-                                  UI::WindowFlags::NoSavedSettings | UI::WindowFlags::NoCollapse |
-                                  UI::WindowFlags::NoTitleBar;
-
-    if (ctx.Begin("##frameliftsettings", &open_, flags))
+    const framelift::ScopedWindow window(
+        ctx, "##frameliftsettings", framelift::WindowPreset::Fullscreen, &open_,
+        {.rounding = 0.f, .padding = {0.f, 0.f}, .hasBg = darkChrome, .bg = {0.12f, 0.10f, 0.16f, 1.f}}
+    );
+    if (window)
     {
         // ── Body: sidebar + content side-by-side ──────────────────────────────
         ctx.BeginChild("##settbody", {0.f, -BotH});
@@ -1670,12 +1663,5 @@ void SettingsMenu::OnRender(UIContext& ctx)
         {
             Close();
         }
-    }
-    ctx.End();
-
-    ctx.PopStyleVar(2);
-    if (darkChrome)
-    {
-        ctx.PopStyleColor(1);
     }
 }

@@ -235,15 +235,14 @@ void Benchmark::OnRender(UIContext& ctx)
     }
 
     // A normal titled/movable/resizable window. NoSavedSettings: the seeded pop-out
-    // placement is per-session and must not leak into imgui.ini.
-    const UI::WindowFlags flags =
-        UI::WindowFlags::NoScrollbar | UI::WindowFlags::NoCollapse | UI::WindowFlags::NoSavedSettings;
-
-    ctx.PushStyleVar(UI::StyleVar::WindowRounding, 4.f);
-    ctx.PushStyleVar(UI::StyleVar::WindowPadding, {10.f, 8.f});
-    ctx.PushStyleColor(UI::ColorSlot::WindowBg, UI::Color4f(0.04f, 0.04f, 0.04f, 1.f)); // opaque for an OS window
-
-    if (ctx.Begin("Benchmark", &open_, flags))
+    // placement is per-session and must not leak into imgui.ini. Opaque background
+    // for an OS window.
+    const framelift::ScopedWindow window(
+        ctx, "Benchmark",
+        UI::WindowFlags::NoScrollbar | UI::WindowFlags::NoCollapse | UI::WindowFlags::NoSavedSettings, &open_,
+        {.rounding = 4.f, .padding = {10.f, 8.f}, .hasBg = true, .bg = {0.04f, 0.04f, 0.04f, 1.f}}
+    );
+    if (window)
     {
         constexpr UI::Color4f kLabel = {0.65f, 0.65f, 0.65f, 1.f};
         constexpr UI::Color4f kValue = {1.f, 1.f, 0.f, 1.f};
@@ -371,8 +370,4 @@ void Benchmark::OnRender(UIContext& ctx)
             accumulating_ = !isIdle_; // keep recording if a file is still playing
         }
     }
-    ctx.End();
-
-    ctx.PopStyleColor();
-    ctx.PopStyleVar(2);
 }

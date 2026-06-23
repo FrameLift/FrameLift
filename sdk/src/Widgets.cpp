@@ -175,3 +175,54 @@ Widgets::KeybindAction Widgets::KeybindRow(
     ctx.Dummy({0.f, RowSpacing});
     return result;
 }
+
+// ── Panel header ──────────────────────────────────────────────────────────────
+
+namespace
+{
+constexpr float HeaderPadding = 12.f; // left/right inset for header content
+constexpr float PopReserve = 26.f;    // right-edge space reserved for the Panel pop-out toggle
+constexpr float HeaderBtnGap = 4.f;   // horizontal gap between action buttons
+} // namespace
+
+void Widgets::PanelHeader(
+    UIContext& ctx, const float panelW, const float headerH, const char* title, const bool poppedOut,
+    const char* counter, const float counterInset
+)
+{
+    const UI::Vec2 hdrMin = ctx.GetCursorScreenPos();
+    const UI::Vec2 hdrMax = {hdrMin.x + panelW, hdrMin.y + headerH};
+    DrawList& dl = ctx.GetWindowDrawList();
+
+    dl.AddRectFilled(hdrMin, hdrMax, UI::MakeColor32(18, 10, 28, 230));
+
+    // Title – top-left (suppressed when popped out: the OS title bar shows it).
+    float counterX = HeaderPadding;
+    if (!poppedOut && title && title[0])
+    {
+        ctx.SetCursorPosY(10.f);
+        ctx.SetCursorPosX(HeaderPadding);
+        ctx.TextColored(UI::Color4f(0.88f, 0.82f, 1.f, 1.f), title);
+        counterX = HeaderPadding + counterInset;
+    }
+
+    // Counter – beside the title.
+    if (counter && counter[0])
+    {
+        ctx.SetCursorPosY(10.f);
+        ctx.SetCursorPosX(counterX);
+        ctx.TextColored(UI::Color4f(0.5f, 0.45f, 0.65f, 1.f), counter);
+    }
+
+    dl.AddLine(
+        {hdrMin.x + HeaderPadding, hdrMax.y - 1.f}, {hdrMin.x + panelW - HeaderPadding, hdrMax.y - 1.f},
+        UI::MakeColor32(80, 55, 120, 200)
+    );
+
+    ctx.SetCursorPosY(headerH);
+}
+
+float Widgets::HeaderButtonX(const float panelW, const int slot, const float buttonW)
+{
+    return panelW - PopReserve - HeaderPadding - buttonW - static_cast<float>(slot) * (buttonW + HeaderBtnGap);
+}

@@ -185,16 +185,18 @@ void LogViewer::OnRender(UIContext& ctx)
     }
 
     ctx.SetNextWindowSize({760.f, 420.f}, UI::Cond::FirstUseEver);
-    if (!ctx.Begin("Log Viewer", &open_, UI::WindowFlags::None))
+
+    // None (not the NoSavedSettings Floating preset): this window's position/size
+    // are intentionally persisted to imgui.ini across sessions.
+    const framelift::ScopedWindow window(ctx, "Log Viewer", UI::WindowFlags::None, &open_);
+    if (!window)
     {
-        ctx.End();
         return;
     }
 
     if (!logs_)
     {
         ctx.TextColored({1.f, 0.4f, 0.4f, 1.f}, "Log buffer service unavailable.");
-        ctx.End();
         return;
     }
 
@@ -236,6 +238,4 @@ void LogViewer::OnRender(UIContext& ctx)
         }
     }
     ctx.EndChild();
-
-    ctx.End();
 }

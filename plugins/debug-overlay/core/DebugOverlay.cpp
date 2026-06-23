@@ -183,19 +183,13 @@ void DebugOverlay::OnRender(UIContext& ctx)
     constexpr float kW = 480.f;
 
     ctx.SetNextWindowPos({kPadX, kPadY});
-    ctx.SetNextWindowBgAlpha(0.82f);
-
-    const UI::WindowFlags flags = UI::WindowFlags::NoTitleBar | UI::WindowFlags::NoResize | UI::WindowFlags::NoMove |
-                                  UI::WindowFlags::NoScrollbar | UI::WindowFlags::NoSavedSettings |
-                                  UI::WindowFlags::NoBringToFrontOnFocus;
-
-    ctx.PushStyleVar(UI::StyleVar::WindowRounding, 4.f);
-    ctx.PushStyleVar(UI::StyleVar::WindowPadding, {10.f, 8.f});
-    ctx.PushStyleColor(UI::ColorSlot::WindowBg, UI::Color4f(0.04f, 0.04f, 0.04f, 0.88f));
-
     ctx.SetNextWindowSize({kW, 0.f});
 
-    if (ctx.Begin("##debugOverlay", nullptr, flags))
+    const framelift::ScopedWindow window(
+        ctx, "##debugOverlay", framelift::WindowPreset::Hud, nullptr,
+        {.rounding = 4.f, .padding = {10.f, 8.f}, .hasBg = true, .bg = {0.04f, 0.04f, 0.04f, 0.88f}, .bgAlpha = 0.82f}
+    );
+    if (window)
     {
         constexpr UI::Color4f kLabel = {0.65f, 0.65f, 0.65f, 1.f};
         constexpr UI::Color4f kValue = {1.f, 1.f, 0.f, 1.f};
@@ -256,8 +250,6 @@ void DebugOverlay::OnRender(UIContext& ctx)
         std::snprintf(buf, sizeof(buf), "%" PRId64, decodeErrors_);
         row("Decode errors: ", buf);
 
-        ctx.Dummy({0.f, 3.f});
-
         std::snprintf(buf, sizeof(buf), "%.0f%%", volume_);
         row("Volume: ", buf);
 
@@ -268,8 +260,4 @@ void DebugOverlay::OnRender(UIContext& ctx)
         const char* status = isIdle_ ? "Idle" : (isPaused_ ? "Paused" : "Playing");
         row("Playback status: ", status);
     }
-    ctx.End();
-
-    ctx.PopStyleColor();
-    ctx.PopStyleVar(2);
 }

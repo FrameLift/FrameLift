@@ -84,7 +84,7 @@ enum class WindowFlags : std::uint16_t
     NoBringToFrontOnFocus = 1 << 13,
 };
 
-[[nodiscard]] inline WindowFlags operator|(WindowFlags a, WindowFlags b)
+[[nodiscard]] constexpr WindowFlags operator|(WindowFlags a, WindowFlags b)
 {
     return static_cast<WindowFlags>(static_cast<int>(a) | static_cast<int>(b));
 }

@@ -45,6 +45,7 @@ set(FRAMELIFT_SDK_SOURCES
         "${_framelift_sdk_src}/Log.cpp"
         "${_framelift_sdk_src}/Panel.cpp"
         "${_framelift_sdk_src}/Widgets.cpp"
+        "${_framelift_sdk_src}/Window.cpp"
         "${_framelift_sdk_src}/KeyNames.cpp"
 )
 
