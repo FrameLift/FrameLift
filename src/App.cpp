@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <algorithm>
+#include <chrono>
 #include <ranges>
 #include <unordered_set>
 
@@ -443,16 +444,25 @@ void App::Dispatch(const AppEvent& e)
     // the input. RenderUpdate and PlayerWakeup are excluded: a new frame already renders via
     // HasNewFrame(), and media state changes set pendingVideoRedraw_ in DrainMediaEvents().
     // Continuing animations are driven separately by redrawPending_ (RequestRedraw).
+    //
+    // discreteInput_ is the one-shot subset (key/button/wheel/drop/custom) that must paint
+    // now. MouseMotion and WindowExposed are deliberately *not* discrete: a multi-viewport
+    // panel re-presented every frame keeps posting WindowExposed, and dragging the mouse
+    // floods MouseMotion — left un-throttled either one free-runs the paint rate. They still
+    // request a paint (uiEventThisIteration_) but the loop caps it to kUiRedrawIntervalMs.
     switch (e.type) // NOLINT(clang-diagnostic-switch-enum)
     {
-    case AppEventType::WindowExposed:
     case AppEventType::KeyDown:
     case AppEventType::KeyUp:
     case AppEventType::MouseButtonDown:
-    case AppEventType::MouseMotion:
     case AppEventType::MouseWheel:
     case AppEventType::DropFile:
     case AppEventType::Custom:
+        discreteInput_ = true;
+        uiEventThisIteration_ = true;
+        break;
+    case AppEventType::WindowExposed:
+    case AppEventType::MouseMotion:
         uiEventThisIteration_ = true;
         break;
     default:
@@ -590,6 +600,7 @@ int App::Run()
     // hidden window emits no WindowExposed event, so we cannot rely on the loop
     // to trigger this first render.
     RenderFrame();
+    lastPaint_ = std::chrono::steady_clock::now();
 
     FRAMELIFT_PERF_END("app-start");
 
@@ -599,10 +610,12 @@ int App::Run()
         // How long to block waiting for the next event:
         //  - not renderable (minimized/occluded): we don't paint, so just idle on events
         //    (100 ms) instead of busy-looping;
-        //  - something is animating (redrawPending_): wait one ~60 fps tick so the loop
-        //    repaints at a vsync-like rate. This caps a continuous RequestRedraw() (a fade,
-        //    a live benchmark/debug panel, a blinking text caret) to ~60 fps instead of
-        //    free-running at the display rate when vsync is off;
+        //  - a continuous paint is pending (an animation's redrawPending_, or a throttled
+        //    motion/expose held in continuousPaintPending_): wait only until the next ~60 fps
+        //    tick is due (kUiRedrawIntervalMs since lastPaint_). The timeout alone does NOT
+        //    pace the loop — a multi-viewport panel re-presented each frame keeps posting
+        //    WindowExposed and a moving mouse floods MouseMotion, so WaitNextEvent returns
+        //    early and the real cap is the wall-clock gate below, not this wait;
         //  - otherwise idle: block on events indefinitely. Every source of visual change
         //    posts a wake event — a decoded frame (RenderUpdate), input, media state
         //    (PlayerWakeup), and async results (Playlist dir-watch / file dialog via
@@ -613,9 +626,12 @@ int App::Run()
         {
             timeoutMs = 100;
         }
-        else if (redrawPending_)
+        else if (redrawPending_ || continuousPaintPending_)
         {
-            timeoutMs = kUiRedrawIntervalMs;
+            const auto sinceMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - lastPaint_)
+                                     .count();
+            timeoutMs = std::max(0, kUiRedrawIntervalMs - static_cast<int>(sinceMs));
         }
         else
         {
@@ -623,19 +639,38 @@ int App::Run()
         }
 
         uiEventThisIteration_ = false;
+        discreteInput_ = false;
         DrainEvents(timeoutMs);
 
         if (!running_ || !appWindow_->IsRenderable())
         {
             continue;
         }
-        // Render only when something visible changed: a freshly decoded frame, a
-        // player-requested repaint (media/subtitle/seek), a pending video-driven resize, a
-        // user-input event this iteration, or an in-progress animation (redrawPending_).
-        // Otherwise we loop back and block, leaving the GPU idle.
-        if (player_->HasNewFrame() || pendingVideoRedraw_ || pendingResize_ || uiEventThisIteration_ || redrawPending_)
+
+        // A bare motion/expose wants a paint but is rate-limited; remember it so it still
+        // paints once the interval elapses even if no further event arrives. (Discrete input
+        // sets discreteInput_ below and paints immediately.)
+        if (uiEventThisIteration_)
+        {
+            continuousPaintPending_ = true;
+        }
+
+        // Paint when something visible changed. Immediate sources paint now: a freshly
+        // decoded frame, a player-requested repaint (media/subtitle/seek), a video-driven
+        // resize, or discrete user input. Continuous sources (an in-progress animation, or a
+        // pending motion/expose) are throttled to kUiRedrawIntervalMs against lastPaint_ so a
+        // wake-event flood can't free-run the paint rate — and with it the second-swapchain
+        // platform-window present nested in Render() — past ~60 fps. Otherwise loop back and
+        // block, leaving the GPU idle.
+        const bool immediate =
+            player_->HasNewFrame() || pendingVideoRedraw_ || pendingResize_ || discreteInput_;
+        const auto now = std::chrono::steady_clock::now();
+        const bool intervalElapsed = now - lastPaint_ >= std::chrono::milliseconds(kUiRedrawIntervalMs);
+        if (immediate || ((redrawPending_ || continuousPaintPending_) && intervalElapsed))
         {
             RenderFrame();
+            lastPaint_ = std::chrono::steady_clock::now();
+            continuousPaintPending_ = false;
         }
     }
     return 0;

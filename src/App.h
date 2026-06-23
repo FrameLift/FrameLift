@@ -16,6 +16,7 @@
 #include <framelift/platform/IAppWindow.h>
 #include <framelift/platform/IDirWatcher.h>
 #include <framelift/platform/IMediaPlayer.h>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -93,6 +94,21 @@ private:
     // painting exactly as long as something is actually animating, then sleeps.
     bool uiEventThisIteration_ = false;
     bool redrawPending_ = false;
+
+    // discreteInput_ marks a one-shot input this iteration (key/button/wheel/drop/custom)
+    // that must paint immediately; a *continuous* wake (an animation's redrawPending_, or a
+    // bare mouse-motion / WindowExposed) is instead throttled to kUiRedrawIntervalMs against
+    // lastPaint_, so a flood of self-induced exposes (the multi-viewport panels re-present
+    // every frame and keep posting window events) or mouse motion can't free-run the paint
+    // rate — and with it the second-swapchain platform-window present — past ~60 fps.
+    bool discreteInput_ = false;
+    // A continuous paint (animation, or a deferred motion/expose) that is waiting on the
+    // kUiRedrawIntervalMs clock before it may paint. Sticky across iterations so a single
+    // throttled wake still paints once the interval elapses (e.g. the first mouse-motion
+    // that should reveal the controls bar), instead of being dropped when its one-shot
+    // uiEventThisIteration_ resets.
+    bool continuousPaintPending_ = false;
+    std::chrono::steady_clock::time_point lastPaint_{};
 
     Settings settings_;
     PackageConfig packageConfig_;
