@@ -41,6 +41,42 @@ TEST(MediaEventTest, LifecycleEventTypesAreDistinctAndAppended)
     }
 }
 
+// EndFileReason gained classified failure values (issue #13). They must be distinct,
+// ordered after the original Eof/Error/Other, and the enum must stay a single byte so
+// the MediaEvent layout is unchanged (no ABI bump).
+TEST(MediaEventTest, EndFileReasonClassifiedValuesAreDistinctAndAppended)
+{
+    EXPECT_EQ(sizeof(EndFileReason), 1u);
+
+    const int lastOriginal = static_cast<int>(EndFileReason::Other);
+    EXPECT_GT(static_cast<int>(EndFileReason::NotFound), lastOriginal);
+    EXPECT_GT(static_cast<int>(EndFileReason::Unsupported), lastOriginal);
+    EXPECT_GT(static_cast<int>(EndFileReason::Corrupt), lastOriginal);
+    EXPECT_GT(static_cast<int>(EndFileReason::NoStream), lastOriginal);
+
+    const int vals[] = {
+        static_cast<int>(EndFileReason::Eof),         static_cast<int>(EndFileReason::Error),
+        static_cast<int>(EndFileReason::Other),       static_cast<int>(EndFileReason::NotFound),
+        static_cast<int>(EndFileReason::Unsupported),  static_cast<int>(EndFileReason::Corrupt),
+        static_cast<int>(EndFileReason::NoStream),
+    };
+    for (size_t i = 0; i < std::size(vals); ++i)
+    {
+        for (size_t j = i + 1; j < std::size(vals); ++j)
+        {
+            EXPECT_NE(vals[i], vals[j]);
+        }
+    }
+}
+
+// DecodeErrors was appended before Unknown (after the cache metrics), keeping every
+// earlier PlayerProperty ordinal stable.
+TEST(MediaEventTest, DecodeErrorsPropertyAppendedBeforeUnknown)
+{
+    EXPECT_GT(static_cast<int>(PlayerProperty::DecodeErrors), static_cast<int>(PlayerProperty::CacheMisses));
+    EXPECT_LT(static_cast<int>(PlayerProperty::DecodeErrors), static_cast<int>(PlayerProperty::Unknown));
+}
+
 // A PropertyChange carrying a string value: plugins read value.str when
 // type == String. The value must be a NUL-terminated copy.
 TEST(MediaEventTest, StringPropertyValueRoundTrips)

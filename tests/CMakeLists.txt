@@ -100,6 +100,7 @@ add_executable(framelift_tests
         unit/misc/ThemeUtilTests.cpp
         unit/host/FontScanTests.cpp
         unit/media/FFmpegClockTests.cpp
+        unit/media/FFmpegErrorTests.cpp
         unit/media/FFmpegHwDecodeTests.cpp
         unit/media/FFmpegLetterboxTests.cpp
         unit/gfx/GraphicsApiTests.cpp

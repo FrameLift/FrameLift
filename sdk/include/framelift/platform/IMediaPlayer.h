@@ -22,7 +22,12 @@ enum class EndFileReason : std::uint8_t
 {
     Eof,
     Error,
-    Other
+    Other,
+    // Classified failure reasons.
+    NotFound,    // file/URL missing or inaccessible
+    Unsupported, // no demuxer/decoder/protocol for this container or codec
+    Corrupt,     // invalid or truncated data
+    NoStream,    // opened, but no playable audio or video stream
 };
 
 enum class PropertyType : std::uint8_t
@@ -70,6 +75,8 @@ enum class PlayerProperty : std::uint8_t
     //    ABI ordinals above stable). Polled via GetInt64Async. ───────────────────
     CacheHits,   // "cache-hit-count"   Int64 – packets served without a read-ahead stall
     CacheMisses, // "cache-miss-count"  Int64 – read-ahead underruns (decode worker had to wait)
+
+    DecodeErrors, // "decode-error-count" Int64 – packets that failed to decode (send_packet errors)
 
     Unknown, // placeholder for unrecognised properties – safe to ignore
 };

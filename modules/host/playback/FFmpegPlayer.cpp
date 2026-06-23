@@ -3,6 +3,7 @@
 #include "FFmpegAudioFilter.h"
 #include "FFmpegAudioOutput.h"
 #include "FFmpegClock.h"
+#include "FFmpegError.h"
 #include "FFmpegFilters.h"
 #include "FFmpegHwDecode.h"
 #include "FFmpegLetterbox.h"
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -37,11 +39,25 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/dict.h>
+#include <libavutil/error.h>
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
 #include <libswscale/swscale.h>
 }
+
+// Pin the FFmpeg-free mirrors in FFmpegError.h against the real AVERROR_* values, so a
+// future libav change (or a typo in a mirror) is a compile error here rather than a
+// silent misclassification at runtime. ENOENT/EACCES use the errno convention AVERROR(e).
+static_assert(kAvErrInvalidData == AVERROR_INVALIDDATA, "AVERROR_INVALIDDATA mirror drifted");
+static_assert(kAvErrEof == AVERROR_EOF, "AVERROR_EOF mirror drifted");
+static_assert(kAvErrDemuxerNotFound == AVERROR_DEMUXER_NOT_FOUND, "AVERROR_DEMUXER_NOT_FOUND mirror drifted");
+static_assert(kAvErrDecoderNotFound == AVERROR_DECODER_NOT_FOUND, "AVERROR_DECODER_NOT_FOUND mirror drifted");
+static_assert(kAvErrProtocolNotFound == AVERROR_PROTOCOL_NOT_FOUND, "AVERROR_PROTOCOL_NOT_FOUND mirror drifted");
+static_assert(kAvErrStreamNotFound == AVERROR_STREAM_NOT_FOUND, "AVERROR_STREAM_NOT_FOUND mirror drifted");
+static_assert(kAvErrBsfNotFound == AVERROR_BSF_NOT_FOUND, "AVERROR_BSF_NOT_FOUND mirror drifted");
+static_assert(kAvErrNoEnt == AVERROR(ENOENT), "AVERROR(ENOENT) mirror drifted");
+static_assert(kAvErrAccess == AVERROR(EACCES), "AVERROR(EACCES) mirror drifted");
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -72,6 +88,17 @@ MediaEvent MakeEndFile(EndFileReason reason)
     e.type = MediaEventType::EndFile;
     e.endReason = reason;
     return e;
+}
+
+// A packet failed to decode: bump the counter and warn, but throttle the log so a
+// badly corrupt stream can't flood it (first error, then every 100th).
+void CountDecodeError(std::atomic<int64_t>& counter, const AVCodecContext* dec)
+{
+    const int64_t n = counter.fetch_add(1) + 1;
+    if (n == 1 || n % 100 == 0)
+    {
+        Log::Warn("FFmpegPlayer: {} decode error (total {})", av_get_media_type_string(dec->codec_type), n);
+    }
 }
 
 // Presentation timestamp of a decoded frame in seconds (0 when unknown).
@@ -205,6 +232,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     paused_ = false;
     droppedFrames_ = 0;
     mistimedFrames_ = 0;
+    decodeErrors_ = 0;
     displayWidth_ = 0;
     displayHeight_ = 0;
     seekSkipPts_ = -1e18; // no carry-over skip from a prior file's seek
@@ -232,17 +260,17 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     UpdateCoreIdle();
 
     AVFormatContext* fmt = nullptr;
-    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0)
+    if (const int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr); ret < 0)
     {
         Log::Error("FFmpegPlayer: failed to open {}", path);
-        QueueEvent(MakeEndFile(EndFileReason::Error));
+        QueueEvent(MakeEndFile(ClassifyAvError(ret)));
         return;
     }
-    if (avformat_find_stream_info(fmt, nullptr) < 0)
+    if (const int ret = avformat_find_stream_info(fmt, nullptr); ret < 0)
     {
         Log::Error("FFmpegPlayer: failed to read stream info for {}", path);
         avformat_close_input(&fmt);
-        QueueEvent(MakeEndFile(EndFileReason::Error));
+        QueueEvent(MakeEndFile(ClassifyAvError(ret)));
         return;
     }
 
@@ -311,7 +339,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         OpenAudioBinding(-1, fmt, aud); // tears down any partial audio binding
         OpenSubtitleBinding(-1, path, fmt, subIdx, sDec, sStream);
         avformat_close_input(&fmt);
-        QueueEvent(MakeEndFile(EndFileReason::Error));
+        QueueEvent(MakeEndFile(EndFileReason::NoStream));
         return;
     }
 
@@ -748,6 +776,10 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         {
             feedFrames();
         }
+        else
+        {
+            CountDecodeError(decodeErrors_, dec);
+        }
         av_packet_unref(pkt);
     }
     // Drain the decoder on a clean EOF (skip when the queue was aborted).
@@ -1027,6 +1059,10 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         if (avcodec_send_packet(dec, pkt) == 0)
         {
             interrupted = drain();
+        }
+        else
+        {
+            CountDecodeError(decodeErrors_, dec);
         }
         av_packet_unref(pkt);
     }
@@ -2078,6 +2114,9 @@ void FFmpegPlayer::GetInt64Async(PlayerProperty prop, void (*cb)(int64_t, bool, 
         return;
     case PlayerProperty::MistimedFrames:
         cb(mistimedFrames_.load(), true, ud);
+        return;
+    case PlayerProperty::DecodeErrors:
+        cb(decodeErrors_.load(), true, ud);
         return;
     case PlayerProperty::CacheUsed:
         cb(cache_.UsedKB(), true, ud);
