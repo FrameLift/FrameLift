@@ -74,6 +74,7 @@ set(FRAMELIFT_SDK_TEST_SOURCES
         "${FRAMELIFT_ROOT}/sdk/src/ModuleBase.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Panel.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Widgets.cpp"
+        "${FRAMELIFT_ROOT}/sdk/src/Window.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
 )
