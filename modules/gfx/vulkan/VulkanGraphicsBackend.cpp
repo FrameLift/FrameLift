@@ -676,7 +676,10 @@ bool VulkanGraphicsBackend::CreateRenderPass()
     VkAttachmentDescription color{};
     color.format = swapchainFormat_;
     color.samples = VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // clear to black each frame (letterbox bars)
+    // No clear: the opaque video blit in RecordComposite covers every pixel before the UI
+    // draws over it (the video layer is swapchain-sized and letterboxed over black), so
+    // the previous contents need not be loaded or cleared.
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -775,10 +778,10 @@ bool VulkanGraphicsBackend::CreateLayerRenderPass()
     return vkCreateRenderPass(device_, &rp, nullptr, &layerRenderPass_) == VK_SUCCESS;
 }
 
-// One fullscreen-triangle pipeline that samples a layer into the swapchain render pass.
-// blend=false: opaque copy (the video layer, already letterboxed over black). blend=true:
-// straight-alpha over (the UI layer, transparent except where ImGui drew).
-bool VulkanGraphicsBackend::CreateCompositePipeline(bool blend, VkPipeline& out)
+// Fullscreen-triangle pipeline that samples the video layer into the swapchain render
+// pass as an opaque copy (the layer is already letterboxed over black). The UI is no
+// longer a composited layer — ImGui draws straight into this pass in RecordComposite.
+bool VulkanGraphicsBackend::CreateCompositePipeline(VkPipeline& out)
 {
     VkShaderModuleCreateInfo vci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     vci.codeSize = sizeof(kVideoVertSpv);
@@ -820,12 +823,9 @@ bool VulkanGraphicsBackend::CreateCompositePipeline(bool blend, VkPipeline& out)
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // The UI layer holds PREMULTIPLIED alpha: ImGui rendered onto a transparent target
-    // with its SRC_ALPHA/ONE_MINUS_SRC_ALPHA blend, which leaves color = rgb*a. So
-    // composite it premultiplied-over the video: out = src + dst*(1 - srcA). The video
-    // layer is opaque, so its pipeline disables blending and copies straight.
+    // The video layer is opaque, so the pipeline disables blending and copies straight.
     VkPipelineColorBlendAttachmentState cba{};
-    cba.blendEnable = blend ? VK_TRUE : VK_FALSE;
+    cba.blendEnable = VK_FALSE;
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cba.colorBlendOp = VK_BLEND_OP_ADD;
@@ -898,27 +898,23 @@ bool VulkanGraphicsBackend::CreateCompositeResources()
         return false;
     }
 
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.maxSets = 2;
+    pi.maxSets = 1;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(device_, &pi, nullptr, &compositeDescPool_) != VK_SUCCESS)
     {
         return false;
     }
-    VkDescriptorSetLayout layouts[2] = {compositeSetLayout_, compositeSetLayout_};
-    VkDescriptorSet sets[2]{};
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dai.descriptorPool = compositeDescPool_;
-    dai.descriptorSetCount = 2;
-    dai.pSetLayouts = layouts;
-    if (vkAllocateDescriptorSets(device_, &dai, sets) != VK_SUCCESS)
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &compositeSetLayout_;
+    if (vkAllocateDescriptorSets(device_, &dai, &videoSet_) != VK_SUCCESS)
     {
         return false;
     }
-    videoSet_ = sets[0];
-    uiSet_ = sets[1];
 
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1;
@@ -928,12 +924,11 @@ bool VulkanGraphicsBackend::CreateCompositeResources()
         return false;
     }
 
-    return CreateCompositePipeline(false, compositeVideoPipeline_) &&
-           CreateCompositePipeline(true, compositeUiPipeline_);
+    return CreateCompositePipeline(compositeVideoPipeline_);
 }
 
-// The two offscreen layer targets (swapchain-sized). Recreated with the swapchain; the
-// composite descriptor sets are re-pointed at the fresh views here.
+// The offscreen video-layer target (swapchain-sized). Recreated with the swapchain; the
+// composite descriptor set is re-pointed at the fresh view here.
 bool VulkanGraphicsBackend::CreateLayerTargets()
 {
     auto makeLayer = [&](LayerTarget& t) -> bool
@@ -972,64 +967,58 @@ bool VulkanGraphicsBackend::CreateLayerTargets()
         fb.layers = 1;
         return vkCreateFramebuffer(device_, &fb, nullptr, &t.framebuffer) == VK_SUCCESS;
     };
-    if (!makeLayer(videoLayer_) || !makeLayer(uiLayer_))
+    if (!makeLayer(videoLayer_))
     {
         Log::Error("VulkanGraphicsBackend: layer target creation failed");
         return false;
     }
 
     VkDescriptorImageInfo vInfo{compositeSampler_, videoLayer_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo uInfo{compositeSampler_, uiLayer_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[2]{};
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writes[0].dstSet = videoSet_;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo = &vInfo;
-    writes[1] = writes[0];
-    writes[1].dstSet = uiSet_;
-    writes[1].pImageInfo = &uInfo;
-    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = videoSet_;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &vInfo;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
 
-    // Fresh images hold no content — force both layers to render before the first composite.
+    // A fresh image holds no content — force the video layer to render before the first composite.
     videoLayerValid_ = false;
-    uiLayerValid_ = false;
     return true;
 }
 
 void VulkanGraphicsBackend::DestroyLayerTargets()
 {
-    for (LayerTarget* t : {&videoLayer_, &uiLayer_})
+    LayerTarget* t = &videoLayer_;
+    if (t->framebuffer != VK_NULL_HANDLE)
     {
-        if (t->framebuffer != VK_NULL_HANDLE)
-        {
-            vkDestroyFramebuffer(device_, t->framebuffer, nullptr);
-        }
-        if (t->view != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(device_, t->view, nullptr);
-        }
-        if (t->image != VK_NULL_HANDLE)
-        {
-            vmaDestroyImage(allocator_, t->image, t->alloc);
-        }
-        *t = {};
+        vkDestroyFramebuffer(device_, t->framebuffer, nullptr);
     }
+    if (t->view != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(device_, t->view, nullptr);
+    }
+    if (t->image != VK_NULL_HANDLE)
+    {
+        vmaDestroyImage(allocator_, t->image, t->alloc);
+    }
+    *t = {};
 }
 
-// Composite the video + UI layers onto the acquired swapchain image (called from
-// SwapBuffers): video first as an opaque copy, then the UI alpha-blended over it.
+// Composite onto the acquired swapchain image (called from SwapBuffers): blit the video
+// layer as an opaque copy, then record the ImGui draw data straight over it in the same
+// pass. Drawing ImGui here — instead of into a separate full-screen UI layer that is then
+// alpha-composited — keeps the UI cost to the pixels ImGui actually touches, matching the
+// OpenGL backend. The video blit is opaque and covers every pixel, so the pass needs no
+// colour clear (renderPass_ uses LOAD_OP_DONT_CARE).
 void VulkanGraphicsBackend::RecordComposite()
 {
-    VkClearValue clear{};
-    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rp.renderPass = renderPass_;
     rp.framebuffer = framebuffers_[imageIndex_];
     rp.renderArea.extent = swapchainExtent_;
-    rp.clearValueCount = 1;
-    rp.pClearValues = &clear;
+    rp.clearValueCount = 0;
+    rp.pClearValues = nullptr;
     vkCmdBeginRenderPass(currentCmd_, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport vp{};
@@ -1048,10 +1037,10 @@ void VulkanGraphicsBackend::RecordComposite()
                             nullptr);
     vkCmdDraw(currentCmd_, 3, 1, 0, 0);
 
-    vkCmdBindPipeline(currentCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, compositeUiPipeline_);
-    vkCmdBindDescriptorSets(currentCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout_, 0, 1, &uiSet_, 0,
-                            nullptr);
-    vkCmdDraw(currentCmd_, 3, 1, 0, 0);
+    // ImGui draws over the opaque video with its own per-vertex alpha blending; its
+    // pipeline was built against renderPass_ (this swapchain pass) at init. GetDrawData()
+    // stays valid from the host's ImGui::Render() until the next NewFrame.
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd_);
 
     vkCmdEndRenderPass(currentCmd_);
 }
@@ -1251,10 +1240,9 @@ bool VulkanGraphicsBackend::BeginFrame()
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     vkBeginCommandBuffer(currentCmd_, &begin);
 
-    // Resolve which layers to (re-)render this frame. A layer with no content yet (first
-    // frame / after a resize) must render regardless of the dirty hint.
+    // Resolve whether to (re-)render the video layer this frame. A layer with no content
+    // yet (first frame / after a resize) must render regardless of the dirty hint.
     frameRenderVideo_ = videoDirty_ || !videoLayerValid_;
-    frameRenderUi_ = uiDirty_ || !uiLayerValid_;
 
     // Open the video-layer pass now so player_->RenderFrame() records into it. When the
     // video is reused (cached), we skip the pass and the video renderer — seeing
@@ -1277,10 +1265,12 @@ bool VulkanGraphicsBackend::BeginFrame()
     return true;
 }
 
-void VulkanGraphicsBackend::SetFrameDirty(bool videoDirty, bool uiDirty)
+void VulkanGraphicsBackend::SetFrameDirty(bool videoDirty, bool /*uiDirty*/)
 {
+    // uiDirty is ignored: the UI is recorded into the swapchain composite pass every frame
+    // (RecordComposite) rather than cached in an offscreen layer. Only the video layer is
+    // cached, so only videoDirty gates work here.
     videoDirty_ = videoDirty;
-    uiDirty_ = uiDirty;
 }
 
 void VulkanGraphicsBackend::SwapBuffers()
@@ -1551,7 +1541,7 @@ void VulkanGraphicsBackend::ImGuiShutdownBackends()
 void VulkanGraphicsBackend::ImGuiNewFrame()
 {
     // Close the video-layer pass (opened in BeginFrame) before ImGui starts a new frame;
-    // the UI is recorded into its own pass in ImGuiRenderDrawData().
+    // the UI is recorded straight into the swapchain composite pass in RecordComposite().
     if (recordingVideoLayer_)
     {
         vkCmdEndRenderPass(currentCmd_);
@@ -1564,24 +1554,10 @@ void VulkanGraphicsBackend::ImGuiNewFrame()
 
 void VulkanGraphicsBackend::ImGuiRenderDrawData()
 {
-    if (!frameRenderUi_)
-    {
-        return; // UI unchanged this frame — the composite reuses the cached uiLayer_.
-    }
-    // Render the main-viewport draw data into the UI layer, cleared transparent so only
-    // the pixels ImGui actually drew composite over the video.
-    VkClearValue clear{};
-    clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    rp.renderPass = layerRenderPass_;
-    rp.framebuffer = uiLayer_.framebuffer;
-    rp.renderArea.extent = swapchainExtent_;
-    rp.clearValueCount = 1;
-    rp.pClearValues = &clear;
-    vkCmdBeginRenderPass(currentCmd_, &rp, VK_SUBPASS_CONTENTS_INLINE);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd_);
-    vkCmdEndRenderPass(currentCmd_);
-    uiLayerValid_ = true;
+    // No-op: the main-viewport ImGui draw data is recorded directly into the swapchain
+    // composite pass in RecordComposite() (called from SwapBuffers), so the UI draws over
+    // the video with no separate offscreen layer. ImGui::GetDrawData() stays valid until
+    // the next frame, so deferring the record to SwapBuffers is safe.
 }
 
 void VulkanGraphicsBackend::ImGuiRenderPlatformWindows()
@@ -1636,10 +1612,6 @@ void VulkanGraphicsBackend::Shutdown()
     if (compositeVideoPipeline_ != VK_NULL_HANDLE)
     {
         vkDestroyPipeline(device_, compositeVideoPipeline_, nullptr);
-    }
-    if (compositeUiPipeline_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipeline(device_, compositeUiPipeline_, nullptr);
     }
     if (compositePipelineLayout_ != VK_NULL_HANDLE)
     {
