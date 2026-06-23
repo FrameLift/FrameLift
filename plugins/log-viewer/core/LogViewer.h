@@ -43,7 +43,8 @@ private:
 
     // ILogBuffer::Visitor trampoline — `ud` is the LogViewer instance.
     static void OnEntry(void* ud, unsigned long long seq, long long tsMillis, int level, const char* msg);
-    void Pull();
+    // Drain newly-appended lines from the ring buffer; returns true iff ≥1 entry was added.
+    bool Pull();
     [[nodiscard]] bool Passes(const Entry& e) const;
 
     ILogBuffer* logs_ = nullptr;

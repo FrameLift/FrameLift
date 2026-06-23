@@ -46,13 +46,15 @@ void LogViewer::OnEntry(void* ud, const unsigned long long seq, const long long 
     }
 }
 
-void LogViewer::Pull()
+bool LogViewer::Pull()
 {
     if (!logs_)
     {
-        return;
+        return false;
     }
+    const unsigned long long before = lastSeq_;
     lastSeq_ = logs_->ReadSince(lastSeq_, &OnEntry, this);
+    return lastSeq_ != before;
 }
 
 // ── Filtering ─────────────────────────────────────────────────────────────────
@@ -174,9 +176,13 @@ void LogViewer::OnRender(UIContext& ctx)
         return;
     }
 
-    // Live view: keep pulling new lines and repainting while the window is open.
-    ctx.RequestRedraw();
-    Pull();
+    // Live tail: keep painting only while new lines are actually arriving from the async
+    // ring buffer (it posts no wake event of its own). An open-but-quiet log view requests
+    // no redraw, so the demand-driven loop sleeps instead of spinning.
+    if (Pull())
+    {
+        ctx.RequestRedraw();
+    }
 
     ctx.SetNextWindowSize({760.f, 420.f}, UI::Cond::FirstUseEver);
     if (!ctx.Begin("Log Viewer", &open_, UI::WindowFlags::None))

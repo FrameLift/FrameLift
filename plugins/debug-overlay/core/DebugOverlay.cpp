@@ -161,9 +161,14 @@ void DebugOverlay::OnRender(UIContext& ctx)
         return;
     }
 
-    // The overlay refreshes its readouts on a timer (below), so while it is open it must
-    // keep repainting even with no input — request the next frame from the loop.
-    ctx.RequestRedraw();
+    // Live readouts only advance while the video is playing — media events (new frame,
+    // position) already wake the demand-driven loop then. Paused/idle, the polled stats
+    // (dropped/mistimed/cache) can't change either, so the panel is static: don't request
+    // a redraw and let the loop sleep instead of spinning at ~60 fps over nothing.
+    if (!isPaused_ && !isIdle_)
+    {
+        ctx.RequestRedraw();
+    }
 
     const auto now = std::chrono::steady_clock::now();
     const double elapsed = std::chrono::duration<double>(now - lastRefresh_).count();
