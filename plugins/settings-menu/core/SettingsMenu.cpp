@@ -2,6 +2,7 @@
 #include "KeybindList.h"
 #include <QtCore/QSet>
 #include <QtCore/QVariantMap>
+#include <QtGui/QFontDatabase>
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
@@ -880,30 +881,28 @@ void SettingsMenu::RenderPageSubtitles(UIContext& ctx)
     );
 
     EnsureFontsQueried();
-    // Font family combo (index 0 = keep the file's font). fontNames_[0] is the UI
-    // default label; reuse the rest as candidate family names for libass.
     int familyIdx = 0;
-    for (std::size_t i = 1; i < fontNames_.size(); ++i)
+    for (std::size_t i = 0; i < fontNames_.size(); ++i)
     {
         if (fontNames_[i] == model_.Str("subtitles.fontFamily"))
         {
-            familyIdx = static_cast<int>(i);
+            familyIdx = static_cast<int>(i + 1);
             break;
         }
     }
     std::vector<const char*> families;
-    families.reserve(fontNames_.size());
+    families.reserve(fontNames_.size() + 1);
     families.push_back("Default (file's font)");
-    for (std::size_t i = 1; i < fontNames_.size(); ++i)
+    for (const auto& fontName : fontNames_)
     {
-        families.push_back(fontNames_[i].c_str());
+        families.push_back(fontName.c_str());
     }
     if (Widgets::Combo(
             ctx, "Font", "Font family for subtitles. Default keeps the font chosen by the file.", families.data(),
             static_cast<int>(families.size()), familyIdx
         ))
     {
-        model_.Str("subtitles.fontFamily") = familyIdx == 0 ? "" : fontNames_[familyIdx];
+        model_.Str("subtitles.fontFamily") = familyIdx == 0 ? "" : fontNames_[static_cast<std::size_t>(familyIdx - 1)];
         dirty_ = true;
     }
 
@@ -1001,32 +1000,18 @@ void SettingsMenu::RenderPageUI(UIContext& ctx)
 
 void SettingsMenu::EnsureFontsQueried()
 {
-    if (fontsQueried_ || !ctx_)
+    if (fontsQueried_)
     {
         return;
     }
     fontsQueried_ = true;
 
-    // Index 0 is always the bundled default (empty path = embedded Roboto).
-    fontNames_.emplace_back("Default (Roboto)");
-    fontPaths_.emplace_back("");
-
-    struct Lists
+    const QStringList families = QFontDatabase::families();
+    fontNames_.reserve(static_cast<std::size_t>(families.size()));
+    for (const QString& family : families)
     {
-        std::vector<std::string>* names;
-        std::vector<std::string>* paths;
-    };
-
-    Lists lists{&fontNames_, &fontPaths_};
-    FontCatalog()->EnumerateSystemFonts(
-        [](const char* name, const char* path, void* ud)
-        {
-            auto& l = *static_cast<Lists*>(ud);
-            l.names->emplace_back(name ? name : "");
-            l.paths->emplace_back(path ? path : "");
-        },
-        &lists
-    );
+        fontNames_.push_back(family.toStdString());
+    }
 }
 
 void SettingsMenu::RenderPageTheme(UIContext& ctx)
@@ -1056,54 +1041,8 @@ void SettingsMenu::RenderPageTheme(UIContext& ctx)
         dirty_ = true;
     }
 
-    Widgets::SectionHeader(ctx, "Font");
-
-    EnsureFontsQueried();
-
-    // Resolve the current font's index by matching the stored path.
-    int fontIdx = 0;
-    for (std::size_t i = 0; i < fontPaths_.size(); ++i)
-    {
-        if (fontPaths_[i] == model_.Str("theme.fontFile"))
-        {
-            fontIdx = static_cast<int>(i);
-            break;
-        }
-    }
-
-    // Build a const char* view for the combo. If the stored font is no longer on
-    // disk (no match, non-empty path), show its filename so it stays visible.
-    std::vector<const char*> items;
-    items.reserve(fontNames_.size() + 1);
-    for (const auto& n : fontNames_)
-    {
-        items.push_back(n.c_str());
-    }
-    std::string staleName;
-    if (fontIdx == 0 && !model_.Str("theme.fontFile").empty())
-    {
-        staleName = model_.Str("theme.fontFile").substr(model_.Str("theme.fontFile").find_last_of("/\\") + 1);
-        items.push_back(staleName.c_str());
-        fontIdx = static_cast<int>(items.size()) - 1;
-    }
-
-    if (Widgets::Combo(
-            ctx, "Font", "Installed system fonts (.ttf/.otf).", items.data(), static_cast<int>(items.size()), fontIdx
-        ))
-    {
-        // The stale entry (if any) is the last item and maps to no path change.
-        if (fontIdx < static_cast<int>(fontPaths_.size()))
-        {
-            model_.Str("theme.fontFile") = fontPaths_[fontIdx];
-            dirty_ = true;
-        }
-    }
-
-    dirty_ |=
-        Widgets::SliderFloat(ctx, "Font size", "Glyph size in pixels.", model_.Float("theme.fontSize"), 10.f, 28.f);
-
     ctx.Dummy({0.f, 6.f});
-    ctx.TextDisabled("Theme and font changes apply when you press Save.");
+    ctx.TextDisabled("Theme changes apply when you press Save.");
 }
 
 void SettingsMenu::RenderPageFiles(UIContext& ctx)

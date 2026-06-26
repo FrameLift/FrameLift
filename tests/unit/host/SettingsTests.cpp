@@ -34,8 +34,6 @@ TEST(SettingsTest, ThemeDefaults)
     const Settings s;
     EXPECT_EQ(s.Get<ThemeSettings>().preset, "dark");
     EXPECT_EQ(s.Get<ThemeSettings>().accentColor, "#4296FA");
-    EXPECT_TRUE(s.Get<ThemeSettings>().fontFile.empty());
-    EXPECT_FLOAT_EQ(s.Get<ThemeSettings>().fontSize, 16.0f);
 }
 
 TEST(SettingsTest, ThemeLoadSaveRoundTrip)
@@ -43,8 +41,6 @@ TEST(SettingsTest, ThemeLoadSaveRoundTrip)
     const char* content = R"([theme]
 preset=light
 accentColor=#AABBCC
-fontFile=/fonts/Roboto.ttf
-fontSize=18
 )";
     const TempFile f(content);
 
@@ -52,8 +48,6 @@ fontSize=18
     s.Load(f.str());
     EXPECT_EQ(s.Get<ThemeSettings>().preset, "light");
     EXPECT_EQ(s.Get<ThemeSettings>().accentColor, "#AABBCC");
-    EXPECT_EQ(s.Get<ThemeSettings>().fontFile, "/fonts/Roboto.ttf");
-    EXPECT_FLOAT_EQ(s.Get<ThemeSettings>().fontSize, 18.f);
 
     // Round-trip: Save then Load into a fresh Settings.
     const TempFile out;
@@ -62,8 +56,6 @@ fontSize=18
     s2.Load(out.str());
     EXPECT_EQ(s2.Get<ThemeSettings>().preset, "light");
     EXPECT_EQ(s2.Get<ThemeSettings>().accentColor, "#AABBCC");
-    EXPECT_EQ(s2.Get<ThemeSettings>().fontFile, "/fonts/Roboto.ttf");
-    EXPECT_FLOAT_EQ(s2.Get<ThemeSettings>().fontSize, 18.f);
 }
 
 TEST(SettingsTest, LoadOverridesFields)

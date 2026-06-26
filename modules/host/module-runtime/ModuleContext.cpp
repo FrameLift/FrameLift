@@ -34,7 +34,6 @@ ModuleContext::ModuleContext(
     RegisterServiceRaw(ISettingsStore::InterfaceId, static_cast<ISettingsStore*>(this));
     RegisterServiceRaw(ISettingsRegistry::InterfaceId, static_cast<ISettingsRegistry*>(this));
     RegisterServiceRaw(IPackageCatalog::InterfaceId, static_cast<IPackageCatalog*>(this));
-    RegisterServiceRaw(IFontCatalog::InterfaceId, static_cast<IFontCatalog*>(this));
     RegisterServiceRaw(IAppPaths::InterfaceId, static_cast<IAppPaths*>(this));
 }
 
@@ -146,23 +145,6 @@ void ModuleContext::SetModuleEnabled(const char* moduleId, bool enabled) noexcep
     {
         packageConfig_->Set(moduleId, enabled);
         packageConfig_->Save(packagesPath_);
-    }
-}
-
-void ModuleContext::EnumerateSystemFonts(void (*visit)(const char*, const char*, void*), void* visitUd) const noexcept
-{
-    if (!visit)
-    {
-        return;
-    }
-    if (!fontsScanned_)
-    {
-        fontCache_ = ScanFontDirs(SystemFontDirs());
-        fontsScanned_ = true;
-    }
-    for (const auto& f : fontCache_)
-    {
-        visit(f.name.c_str(), f.path.c_str(), visitUd);
     }
 }
 

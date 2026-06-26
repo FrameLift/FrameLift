@@ -65,11 +65,6 @@ set(_FRAMELIFT_HOST_AUDIO_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/audio/FFmpegAudioOutput.h"
 )
 
-set(_FRAMELIFT_HOST_FONTS_SOURCES
-        "${CMAKE_SOURCE_DIR}/modules/host/fonts/FontScan.cpp"
-        "${CMAKE_SOURCE_DIR}/modules/host/fonts/FontScan.h"
-)
-
 set(_FRAMELIFT_HOST_READ_AHEAD_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/read-ahead/CacheSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/read-ahead/ReadAheadCache.h"
@@ -174,7 +169,6 @@ set(FRAMELIFT_HOST_SOURCES
         ${_FRAMELIFT_HOST_CONTROLS_SOURCES}
         ${_FRAMELIFT_HOST_LOGGING_SOURCES}
         ${_FRAMELIFT_HOST_AUDIO_SOURCES}
-        ${_FRAMELIFT_HOST_FONTS_SOURCES}
         ${_FRAMELIFT_HOST_READ_AHEAD_SOURCES}
         ${_FRAMELIFT_HOST_UI_SOURCES}
         ${_FRAMELIFT_HOST_WINDOW_SOURCES}

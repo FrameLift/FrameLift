@@ -26,7 +26,7 @@ FetchContent_MakeAvailable(googletest)
 
 # JSON — backs the host JsonServiceImpl (Qt6::Core QJson), compiled into the History
 # test so its persistence round-trips exercise the real backend.
-find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui)
 
 enable_testing()
 include(GoogleTest)
@@ -45,7 +45,6 @@ set(FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS
         "${FRAMELIFT_ROOT}/modules/host/logging"
         "${FRAMELIFT_ROOT}/modules/host/audio"
         "${FRAMELIFT_ROOT}/modules/host/playback"
-        "${FRAMELIFT_ROOT}/modules/host/fonts"
         "${FRAMELIFT_ROOT}/modules/host/read-ahead"
         "${FRAMELIFT_ROOT}/modules/host/ui"
         "${FRAMELIFT_ROOT}/modules/platform/window-sdl"
@@ -93,7 +92,6 @@ add_executable(framelift_tests
         unit/host/SettingsMappingTests.cpp
         unit/host/ReadAheadCacheTests.cpp
         unit/misc/ThemeUtilTests.cpp
-        unit/host/FontScanTests.cpp
         unit/media/FFmpegClockTests.cpp
         unit/media/FFmpegErrorTests.cpp
         unit/media/FFmpegHwDecodeTests.cpp
@@ -106,7 +104,6 @@ add_executable(framelift_tests
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PackageConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PackageResolver.cpp"
-        "${FRAMELIFT_ROOT}/modules/host/fonts/FontScan.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/HotkeysImpl.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
@@ -122,7 +119,7 @@ target_include_directories(framelift_tests PRIVATE
         "${FRAMELIFT_ROOT}/plugins/updater/core"
         "${FRAMELIFT_ROOT}/plugins/playlist/core"
 )
-target_link_libraries(framelift_tests PRIVATE GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core)
+target_link_libraries(framelift_tests PRIVATE GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core Qt6::Gui)
 framelift_apply_coverage(framelift_tests)
 gtest_discover_tests(framelift_tests)
 
@@ -175,7 +172,7 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/remote-stream/core"
     )
     target_link_libraries(${name} PRIVATE
-            GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core)
+            GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core Qt6::Gui)
     framelift_apply_coverage(${name})
     gtest_discover_tests(${name})
 endfunction()
@@ -214,7 +211,6 @@ add_framelift_plugin_test(framelift_test_playlist
         "${FRAMELIFT_ROOT}/plugins/playlist/core/Playlist.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PackageConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
-        "${FRAMELIFT_ROOT}/modules/host/fonts/FontScan.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 
 add_framelift_plugin_test(framelift_test_settingsmenu
@@ -222,7 +218,6 @@ add_framelift_plugin_test(framelift_test_settingsmenu
         "${FRAMELIFT_ROOT}/plugins/settings-menu/core/SettingsMenu.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PackageConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
-        "${FRAMELIFT_ROOT}/modules/host/fonts/FontScan.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 
 add_framelift_plugin_test(framelift_test_overlay

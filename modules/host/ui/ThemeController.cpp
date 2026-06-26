@@ -7,13 +7,12 @@
 
 ThemeController::Snapshot ThemeController::Take(const ThemeSettings& s)
 {
-    return {s.preset, s.accentColor, s.fontFile, s.fontSize};
+    return {s.preset, s.accentColor};
 }
 
 void ThemeController::ApplyInitial(const ThemeSettings& s)
 {
     Theme::ApplyStyle(s);
-    Theme::RebuildFonts(s);
     applied_ = Take(s);
 }
 
@@ -29,10 +28,6 @@ void ThemeController::OnSettingsChanged(const ThemeSettings& s)
     {
         styleDirty_ = true;
     }
-    if (next.fontFile != applied_.fontFile || next.fontSize != applied_.fontSize)
-    {
-        fontAtlasDirty_ = true;
-    }
     applied_ = next;
 }
 
@@ -42,10 +37,5 @@ void ThemeController::ApplyPending(const ThemeSettings& s)
     {
         styleDirty_ = false;
         Theme::ApplyStyle(s);
-    }
-    if (fontAtlasDirty_)
-    {
-        fontAtlasDirty_ = false;
-        Theme::RebuildFonts(s);
     }
 }

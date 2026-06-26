@@ -36,14 +36,14 @@ list(APPEND CMAKE_AUTOMOC_MACRO_NAMES "FRAMELIFT_MODULE_ENTRY" "FRAMELIFT_PACKAG
 # QPluginLoader + Q_PLUGIN_METADATA pull in QtCore. The SDK is no longer dependency-free
 # (the historical imgui/stb/json-free rule); plugins build against Qt6::Core.
 if (NOT TARGET Qt6::Quick)
-    find_package(Qt6 REQUIRED COMPONENTS Core Qml Quick QuickControls2)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 endif ()
 
 # ── Public plugin SDK (headers + QtCore) ──────────────────────────────────────
 if (NOT TARGET FrameLiftSdk)
     add_library(FrameLiftSdk INTERFACE)
     target_include_directories(FrameLiftSdk INTERFACE "${_framelift_sdk_include}")
-    target_link_libraries(FrameLiftSdk INTERFACE Qt6::Core Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    target_link_libraries(FrameLiftSdk INTERFACE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
     if (NOT FRAMELIFT_SDK_STANDALONE)
         # In-tree plugins (Overlay, Updater) consume the generated Version.h.
         target_include_directories(FrameLiftSdk INTERFACE "${CMAKE_BINARY_DIR}")

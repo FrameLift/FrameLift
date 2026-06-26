@@ -39,7 +39,6 @@ TEST(SettingsMenuTest, SeedsThemeFieldsFromContextOnInstall)
     Settings settings;
     settings.Get<ThemeSettings>().preset = "light";
     settings.Get<ThemeSettings>().accentColor = "#112233";
-    settings.Get<ThemeSettings>().fontSize = 20.f;
 
     const TempFile ini;
     ModuleContext ctx("pref/", &settings, ini.str());
@@ -49,7 +48,6 @@ TEST(SettingsMenuTest, SeedsThemeFieldsFromContextOnInstall)
 
     EXPECT_EQ(sm.SettingString("theme.preset"), "light");
     EXPECT_EQ(sm.SettingString("theme.accentColor"), "#112233");
-    EXPECT_FLOAT_EQ(sm.SettingFloat("theme.fontSize"), 20.f);
 }
 
 TEST(SettingsMenuTest, RegistersVisibleThemePage)

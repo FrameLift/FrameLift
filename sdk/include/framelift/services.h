@@ -5,7 +5,6 @@
 // catalogue, fonts, paths). Adding a service never bumps FRAMELIFT_ABI_VERSION.
 #pragma once
 #include <framelift/services/IAppPaths.h>
-#include <framelift/services/IFontCatalog.h>
 #include <framelift/services/IHistory.h>
 #include <framelift/services/IJson.h>
 #include <framelift/services/ILogBuffer.h>

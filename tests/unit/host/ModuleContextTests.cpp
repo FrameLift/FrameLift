@@ -42,39 +42,6 @@ TEST(ModuleContextTest, ReadsDefaultsThroughTypedGetters)
     EXPECT_EQ(GetStr(c.ctx, "files.videoExtensions").rfind("mp4", 0), 0u);
 }
 
-TEST(ModuleContextTest, EnumerateSystemFontsIsCachedAndStable)
-{
-    Ctx c;
-
-    struct Collector
-    {
-        int count = 0;
-        bool allNonEmpty = true;
-    };
-
-    auto visit = [](const char* name, const char* path, void* ud)
-    {
-        auto& col = *static_cast<Collector*>(ud);
-        ++col.count;
-        if (!name || !name[0] || !path || !path[0])
-        {
-            col.allNonEmpty = false;
-        }
-    };
-
-    Collector first;
-    c.ctx.EnumerateSystemFonts(visit, &first);
-
-    Collector second;
-    c.ctx.EnumerateSystemFonts(visit, &second);
-
-    // Same count on repeat calls (the scan is cached for the session).
-    EXPECT_EQ(first.count, second.count);
-    // Whatever was found has both a name and a path. (Count may be 0 on a CI box
-    // with no fonts — that's fine; the contract is "doesn't crash, stays stable".)
-    EXPECT_TRUE(first.allNonEmpty);
-}
-
 TEST(ModuleContextTest, CommitRoundTripsPerType)
 {
     Ctx c;

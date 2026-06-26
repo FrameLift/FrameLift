@@ -58,7 +58,6 @@ set(FRAMELIFT_HOST_MODULE_INCLUDE_DIRS
         "${CMAKE_SOURCE_DIR}/modules/host/logging"
         "${CMAKE_SOURCE_DIR}/modules/host/audio"
         "${CMAKE_SOURCE_DIR}/modules/host/playback"
-        "${CMAKE_SOURCE_DIR}/modules/host/fonts"
         "${CMAKE_SOURCE_DIR}/modules/host/read-ahead"
         "${CMAKE_SOURCE_DIR}/modules/host/ui"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt"
@@ -87,16 +86,6 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/IconData.h"
         "// Auto-generated from assets/img/Icon.png — do not edit\n"
         "inline constexpr unsigned char kIconData[] = {${ICON_C_ARRAY}};\n"
         "inline constexpr unsigned int kIconDataSize = sizeof(kIconData);\n")
-
-# ── Embed Roboto-Regular.ttf as a C byte array (default UI font) ──────────────
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/assets/fonts/Roboto-Regular.ttf")
-file(READ "${CMAKE_SOURCE_DIR}/assets/fonts/Roboto-Regular.ttf" FONT_HEX HEX)
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," FONT_C_ARRAY "${FONT_HEX}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/FontData.h"
-        "// Auto-generated from assets/fonts/Roboto-Regular.ttf — do not edit\n"
-        "inline constexpr unsigned char kDefaultFontData[] = {${FONT_C_ARRAY}};\n"
-        "inline constexpr unsigned int kDefaultFontDataSize = sizeof(kDefaultFontData);\n")
 
 # ── Public plugin SDK ────────────────────────────────────────────────────────
 # Defines FrameLiftSdk (headers + Qt), add_framelift_plugin(), and helper sources.

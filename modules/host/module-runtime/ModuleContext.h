@@ -1,10 +1,8 @@
 #pragma once
-#include "FontScan.h"
 #include "ModuleSettingsImpl.h"
 #include "SettingsRegistry.h"
 #include <framelift/IModuleContext.h>
 #include <framelift/services/IAppPaths.h>
-#include <framelift/services/IFontCatalog.h>
 #include <framelift/services/IPackageCatalog.h>
 #include <framelift/services/ISettingsRegistry.h>
 #include <framelift/services/ISettingsStore.h>
@@ -60,7 +58,6 @@ class ModuleContext final : public IModuleContext,
                             public ISettingsStore,
                             public ISettingsRegistry,
                             public IPackageCatalog,
-                            public IFontCatalog,
                             public IAppPaths
 {
 public:
@@ -86,8 +83,6 @@ public:
     ) const noexcept override;
 
     void SetModuleEnabled(const char* moduleId, bool enabled) noexcept override;
-
-    void EnumerateSystemFonts(void (*visit)(const char*, const char*, void*), void* visitUd) const noexcept override;
 
     // One module within a catalogue package. Owned copies so the entry survives after
     // the discovering DLL is closed.
@@ -224,7 +219,4 @@ private:
 
     std::vector<PackageCatalogRec> packageCatalog_;
 
-    // System font catalogue — scanned lazily on first EnumerateSystemFonts call.
-    mutable std::vector<FontEntry> fontCache_;
-    mutable bool fontsScanned_ = false;
 };

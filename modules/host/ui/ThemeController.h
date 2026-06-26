@@ -7,9 +7,9 @@
 class IModuleContext;
 class Settings;
 
-// Owns the deferred theme-apply state machine. Theme::ApplyStyle / RebuildFonts
-// touch global ImGui state and MUST run outside any NewFrame()..Render() pair, but
-// settings changes arrive mid-frame (during SettingsMenu's Save inside Render). So
+// Owns the deferred theme-apply state machine. Theme::ApplyStyle touches global
+// ImGui state and MUST run outside any NewFrame()..Render() pair, but settings
+// changes arrive mid-frame (during SettingsMenu's Save inside Render). So
 // OnSettingsChanged only flags what changed, and ApplyPending does the work at the
 // top of the next frame.
 class ThemeController
@@ -22,11 +22,11 @@ public:
     // via ApplyPending). settings must outlive this controller.
     void Connect(IModuleContext& ctx, const Settings& settings);
 
-    // Diff against the last-applied snapshot and flag style/font rebuilds. Safe to
-    // call mid-frame.
+    // Diff against the last-applied snapshot and flag style rebuilds. Safe to call
+    // mid-frame.
     void OnSettingsChanged(const ThemeSettings& s);
 
-    // Apply any pending style/font rebuild. Call at the top of the frame, before
+    // Apply any pending style rebuild. Call at the top of the frame, before
     // UIBeginFrame.
     void ApplyPending(const ThemeSettings& s);
 
@@ -35,12 +35,9 @@ private:
     {
         std::string preset;
         std::string accentColor;
-        std::string fontFile;
-        float fontSize = 0.f;
     };
     static Snapshot Take(const ThemeSettings& s);
 
     Snapshot applied_;
     bool styleDirty_ = false;
-    bool fontAtlasDirty_ = false;
 };

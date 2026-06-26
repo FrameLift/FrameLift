@@ -199,11 +199,6 @@ private:
         return ctx_ ? ctx_->GetService<IPackageCatalog>() : nullptr;
     }
 
-    [[nodiscard]] IFontCatalog* FontCatalog() const
-    {
-        return ctx_ ? ctx_->GetService<IFontCatalog>() : nullptr;
-    }
-
     void RegisterCorePages(IModuleContext& ctx);
 
     void RenderSidebar(UIContext& ctx);
@@ -231,7 +226,7 @@ private:
     // editor; truncates with a flag if the file exceeds the buffer.
     void LoadConfigText();
 
-    // Lazily fetch the system font catalogue from the host (once per session).
+    // Lazily fetch Qt's system font families once per session.
     void EnsureFontsQueried();
 
     void Save();
@@ -251,11 +246,9 @@ private:
 
     std::string openSettingsKey_ = "Ctrl+Comma";
 
-    // System font catalogue for the Theme page, fetched once via the host ABI.
-    // Index 0 is always the "Default" entry (empty path = ImGui default font).
+    // System font families for subtitle selection.
     bool fontsQueried_ = false;
     std::vector<std::string> fontNames_;
-    std::vector<std::string> fontPaths_;
 
     // Editing model: every host settings field discovered over the ABI, plus the
     // live edited values keyed by "section.name".

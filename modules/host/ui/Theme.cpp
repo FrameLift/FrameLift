@@ -2,14 +2,7 @@
 
 #include "ThemeUtil.h"
 
-#include "FontData.h"
-
 #include "imgui.h"
-
-#include <framelift/Log.h>
-
-#include <algorithm>
-#include <filesystem>
 
 namespace
 {
@@ -75,39 +68,11 @@ void Theme::ApplyStyle(const ThemeSettings& s)
 
 void Theme::RebuildFonts(const ThemeSettings& s)
 {
+    (void)s;
+
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
-
-    const float size = std::clamp(s.fontSize, 8.f, 64.f);
-    ImFont* font = nullptr;
-
-    if (!s.fontFile.empty())
-    {
-        std::error_code ec;
-        // exists() pre-check avoids the debug-build IM_ASSERT inside
-        // AddFontFromFileTTF when the path is missing.
-        if (std::filesystem::exists(s.fontFile, ec) && !ec)
-        {
-            font = io.Fonts->AddFontFromFileTTF(s.fontFile.c_str(), size);
-        }
-        if (!font)
-        {
-            Log::Warn("Theme: could not load font '{}', falling back to the default", s.fontFile);
-        }
-    }
-
-    if (!font)
-    {
-        // Bundled Roboto (assets/fonts/Roboto-Regular.ttf, embedded via FontData.h) —
-        // a readable default that renders identically on Windows and Linux, replacing
-        // ImGui's blocky ProggyClean. FontDataOwnedByAtlas=false: the buffer is static
-        // constexpr memory, so ImGui must NOT free() it on atlas teardown.
-        ImFontConfig cfg;
-        cfg.FontDataOwnedByAtlas = false;
-        io.Fonts->AddFontFromMemoryTTF(
-            const_cast<unsigned char*>(kDefaultFontData), static_cast<int>(kDefaultFontDataSize), size, &cfg
-        );
-    }
+    io.Fonts->AddFontDefault();
 
     // ImGui 1.92+ manages font textures dynamically: the OpenGL3 backend declares
     // ImGuiBackendFlags_RendererHasTextures and re-uploads the atlas automatically

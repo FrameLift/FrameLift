@@ -12,9 +12,7 @@ namespace Theme
 // from s.accentColor. Cheap; safe to call every time the style changes.
 void ApplyStyle(const ThemeSettings& s);
 
-// Rebuild the font atlas from s.fontFile/fontSize and re-upload the GPU font
-// texture. Falls back to the embedded default font (at the requested size) when
-// no/invalid font file is set. Relatively expensive — call only when the font
-// settings actually change.
+// Rebuild the font atlas using Dear ImGui's default font. This legacy ImGui path
+// is dormant during the Qt migration.
 void RebuildFonts(const ThemeSettings& s);
 } // namespace Theme

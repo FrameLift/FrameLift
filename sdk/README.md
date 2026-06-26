@@ -149,7 +149,7 @@ module id in `packages.ini`. Artifact names are lowercase: a multi-module packag
 |--------|----------|
 | `<framelift/core.h>`     | module entry macro, module lifecycle, `ModuleBase`, context, ABI, events, hotkeys, `Log` |
 | Qt/QML                   | QObject view models and package-embedded Qt Quick components |
-| `<framelift/services.h>` | host + cross-plugin service interfaces (`IHistory`, `ISettingsStore`, `ISettingsRegistry`, `IPackageCatalog`, `IFontCatalog`, `IAppPaths`) |
+| `<framelift/services.h>` | host + cross-plugin service interfaces (`IHistory`, `ISettingsStore`, `ISettingsRegistry`, `IPackageCatalog`, `IAppPaths`) |
 | `<framelift/platform.h>` | media playback family (`IMediaPlayback`, `IMediaProperties`, `IVideoOutput`, `IAudioControl`, `ISubtitleControl`), window family (`IAppWindow`, `IGraphicsSurface`, `IEventPump`), `IDirWatcher`, `IFileDialog` |
 
 ### Module Entry
