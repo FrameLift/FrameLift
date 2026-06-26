@@ -1,7 +1,7 @@
 #pragma once
 
-// Host-provided native file picker. Plugins cannot open OS dialogs directly
-// (the picker is SDL/host-only), so the host exposes this thin service.
+// Host-provided native file picker. Plugins cannot open OS dialogs directly,
+// so the host exposes this thin service.
 // Updates and side effects (history, playlist) are NOT implied — the caller
 // decides what to do with the picked path.
 class IFileDialog

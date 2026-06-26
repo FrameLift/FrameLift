@@ -161,7 +161,7 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<IVideoOutput>(player_.get());
     moduleCtx_->RegisterService<IAudioControl>(player_.get());
     moduleCtx_->RegisterService<ISubtitleControl>(player_.get());
-    // The one SdlAppWindow is registered under each window facet it implements.
+    // The one QtAppWindow is registered under each window facet it implements.
     moduleCtx_->RegisterService<IAppWindow>(appWindow_.get());
     moduleCtx_->RegisterService<IGraphicsSurface>(appWindow_.get());
     moduleCtx_->RegisterService<IEventPump>(appWindow_.get());

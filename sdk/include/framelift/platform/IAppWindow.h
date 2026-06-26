@@ -11,14 +11,13 @@ struct Rect
 
 // The platform window is exposed to plugins as a family of small, independently
 // discovered capability interfaces rather than one god-interface. One host object
-// (SdlAppWindow) implements them all and registers under each id; a consumer fetches
+// (QtAppWindow) implements them all and registers under each id; a consumer fetches
 // only the facets it uses via ctx.GetService<T>(). Adding a new window capability is
 // a NEW interface here, never an append to an existing one, so the ABI version and
 // the vtable layout of every interface below stay frozen.
 //
-// SdlAppWindow is the ONLY file allowed to #include <SDL3/SDL.h> or imgui_impl_*.h.
-// Its host-only surface — ImGui lifecycle and pref/base path resolution — is not on
-// any interface here; only the host (which owns the concrete object) calls it.
+// QtAppWindow owns the host-only window/event-loop surface; only the host (which
+// owns the concrete object) calls methods outside the ABI interfaces here.
 
 // Window geometry, title, icon and fullscreen state.
 class IAppWindow

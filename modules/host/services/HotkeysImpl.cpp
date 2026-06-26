@@ -74,7 +74,7 @@ const std::unordered_map<std::string, Key>& KeyMap()
         {"z", Keys::Z},
         {"space", Keys::Space},
         {"return", Keys::Return},
-        {"enter", Keys::Return},
+        {"enter", Keys::Enter},
         {"tab", Keys::Tab},
         {"backspace", Keys::Backspace},
         {"escape", Keys::Escape},

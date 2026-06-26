@@ -2,7 +2,7 @@
   "fileVersion": 1,
   "id": "framelift.host.ui",
   "name": "Host UI",
-  "description": "Dear ImGui host UI services and theme.",
+  "description": "Qt/QML host UI services and theme.",
   "enabled": true,
   "required": true,
   "provides": {

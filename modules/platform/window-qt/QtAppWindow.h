@@ -14,12 +14,11 @@ class QQuickWindow;
 class QEvent;
 class VideoItem;
 
-// Concrete window backed by Qt6 (Qt Quick) — the replacement for the SDL3 + Dear ImGui
-// SdlAppWindow. Implements the window/graphics/event interface family (IAppWindow /
+// Concrete window backed by Qt6 (Qt Quick). Implements the window/graphics/event interface family (IAppWindow /
 // IGraphicsSurface / IEventPump) and, host-only, pref/base path resolution. Owns one
 // QQuickWindow with a VideoItem (QQuickItem → QSGRenderNode) that draws the video inside
-// the scene-graph render pass, delegating the GL draw to an IGraphicsBackend that adopts
-// Qt's scene-graph GL context.
+// the scene-graph render pass, delegating the draw to an IGraphicsBackend that adopts
+// Qt's scene-graph graphics context.
 //
 // This file, VideoItem, and VideoRenderNode are the only window-layer files that may
 // #include <QtGui/...>/<QtQuick/...>. QObject is the first base so AUTOMOC can wire the

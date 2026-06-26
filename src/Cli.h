@@ -3,7 +3,7 @@
 #include <string>
 
 // Pure command-line parsing for the host. Extracted so it can be unit-tested
-// without pulling in SDL/FFmpeg. The host only needs one thing from argv: the
+// without pulling in FFmpeg. The host only needs one thing from argv: the
 // file/URL to open on startup. The full argument vector is handed to plugins via
 // CliCommandEvent, so anything richer (subcommands, flags) is their concern.
 

@@ -8,7 +8,7 @@
 #include <vector>
 
 // Pure-logic tests for the shared read-ahead budget + metrics. No
-// SDL/FFmpeg — the queues that own AVPackets only feed bytes into this type.
+// FFmpeg — the queues that own AVPackets only feed bytes into this type.
 
 TEST(ReadAheadCacheTest, DisabledAdmitsEverything)
 {

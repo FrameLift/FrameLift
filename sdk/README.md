@@ -222,7 +222,7 @@ raw, bypassing the scaffolding, keeps terminate-on-throw semantics.
 The curated interfaces cover the common cases; for anything beyond them the raw
 platform objects are reachable — bring the matching headers/libraries yourself:
 
-- `IAppWindow::GetNativeHandle()` — the raw `SDL_Window*`.
+- `IAppWindow::GetNativeHandle()` — the raw Qt window object pointer.
 
 (The graphics API behind the window — OpenGL or Vulkan — is an internal detail and is
 no longer exposed to plugins; the host owns all video/UI rendering.)

@@ -52,7 +52,7 @@ jobs:
           path: build-tests/junit.xml
 
   # ── Windows build (MinGW cross-compile) ─────────────────────────────────────
-  # Produces FrameLift-win64.zip. SDL3, FFmpeg, and libass all come from the vcpkg
+  # Produces FrameLift-win64.zip. Qt, FFmpeg, and libass all come from the vcpkg
   # manifest (vcpkg.json), built for the x64-mingw-dynamic triplet so they
   # cross-compile in this Linux container.
   build-windows:
@@ -160,7 +160,7 @@ jobs:
         run: |
           cmake --build "$BUILD_DIR" --parallel
           # vcpkg's app-local DLL deployment is MSVC-only, so stage the mingw-dynamic
-          # runtime DLLs (SDL3.dll, avcodec-*.dll, ass-*.dll + transitive deps) next to the exe.
+          # runtime DLLs (Qt6*.dll, avcodec-*.dll, ass-*.dll + transitive deps) next to the exe.
           cp "$BUILD_DIR"/vcpkg_installed/x64-mingw-dynamic/bin/*.dll "$BUILD_DIR"/
           # The vcpkg-built DLLs (x64-mingw-dynamic) dynamically link the MinGW toolchain
           # runtimes (libgcc_s_seh-1, libstdc++-6, libwinpthread-1). These aren't in
@@ -179,11 +179,11 @@ jobs:
           path: ${{ env.BUILD_DIR }}/FrameLift-win64.zip
 
   # ── Native Linux build ──────────────────────────────────────────────────────
-  # Builds the host + cross-platform plugins natively against system SDL3/FFmpeg.
+  # Builds the host + cross-platform plugins natively against system Qt/FFmpeg.
   # Windows-only plugins are disabled by module platform metadata.
   # Produces FrameLift-linux-x64.tar.gz.
   #
-  # ubuntu:25.04 because libsdl3-dev first ships there (24.04 LTS has only SDL2).
+  # ubuntu:25.04 carries the Qt 6 development stack used by the native build.
   build-linux:
     needs: test
     runs-on: ubuntu-latest

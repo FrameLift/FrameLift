@@ -1,7 +1,7 @@
 # Unit-test project for FrameLift's platform-independent logic.
 #
 # Dual-mode:
-#   • Standalone (CI):   cmake -S tests -B build-tests   — native compiler, no SDL/FFmpeg.
+#   • Standalone (CI):   cmake -S tests -B build-tests   — native compiler, no FFmpeg.
 #   • In-tree (IDE/dev): the root CMakeLists `add_subdirectory(tests)` when
 #     FRAMELIFT_BUILD_TESTS is ON, so the suite shows up in the solution/CMake view.
 #
@@ -47,7 +47,7 @@ set(FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS
         "${FRAMELIFT_ROOT}/modules/host/playback"
         "${FRAMELIFT_ROOT}/modules/host/read-ahead"
         "${FRAMELIFT_ROOT}/modules/host/ui"
-        "${FRAMELIFT_ROOT}/modules/platform/window-sdl"
+        "${FRAMELIFT_ROOT}/modules/platform/window-qt"
         "${FRAMELIFT_ROOT}/modules/platform/win-shell"
 )
 

@@ -12,7 +12,7 @@
 #include <cstring>
 
 // Pure mappers from the media/ffmpeg settings sub-structs to the POD player option
-// structs. Header-only so they can be unit-tested without pulling in SDL/FFmpeg.
+// structs. Header-only so they can be unit-tested without pulling in FFmpeg.
 
 inline AudioNormalizeParams ToAudioNormalizeParams(const AudioSettings& s)
 {

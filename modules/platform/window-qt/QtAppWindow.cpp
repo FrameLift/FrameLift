@@ -35,16 +35,16 @@ int CopyOut(const std::string& s, char* buf, int cap) noexcept
     return len;
 }
 
-// Qt::Key → framelift Key. framelift Key values equal SDL keycodes (printable chars are
-// their Unicode codepoint, navigation/function keys are ScancodeBase | SDL_Scancode), so
-// the printable ASCII range maps directly and the rest is an explicit table.
+// Qt::Key -> framelift Key. The public key contract mirrors Qt's numeric key
+// values, so the Qt window layer can preserve the incoming key code directly.
 Key TranslateKey(int qtKey)
 {
     switch (qtKey)
     {
     case Qt::Key_Return:
-    case Qt::Key_Enter:
         return Keys::Return;
+    case Qt::Key_Enter:
+        return Keys::Enter;
     case Qt::Key_Escape:
         return Keys::Escape;
     case Qt::Key_Tab:
@@ -100,17 +100,7 @@ Key TranslateKey(int qtKey)
     default:
         break;
     }
-    // Letters: Qt uses uppercase (Key_A=0x41); framelift uses lowercase ASCII.
-    if (qtKey >= Qt::Key_A && qtKey <= Qt::Key_Z)
-    {
-        return static_cast<Key>('a' + (qtKey - Qt::Key_A));
-    }
-    // Remaining printable ASCII (digits, punctuation) maps 1:1.
-    if (qtKey >= 0x20 && qtKey < 0x7F)
-    {
-        return static_cast<Key>(qtKey);
-    }
-    return Keys::Unknown;
+    return qtKey > 0 ? static_cast<Key>(qtKey) : Keys::Unknown;
 }
 
 Mod TranslateMods(Qt::KeyboardModifiers m)
@@ -571,7 +561,7 @@ void QtAppWindow::SetFrameDirty(bool videoDirty, bool uiDirty) noexcept
 
 int QtAppWindow::ResolvePrefPath(const char* org, const char* app, char* buf, int cap) noexcept
 {
-    // Mirror SDL_GetPrefPath layout: <user config>/<org>/<app>/. Built from the generic
+    // Keep FrameLift's historical pref-dir layout: <user config>/<org>/<app>/. Built from the generic
     // config location so it works before QGuiApplication org/app names are set. Always
     // ends with a separator.
     QString base = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);

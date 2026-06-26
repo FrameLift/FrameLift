@@ -1,5 +1,5 @@
 // Unit tests for graphics-backend selection parsing.
-// GraphicsApi.h is free of SDL/GL so it builds in the standalone native suite.
+// GraphicsApi.h is free of window-system and GL types so it builds in the standalone native suite.
 
 #include "GraphicsApi.h"
 

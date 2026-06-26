@@ -1,6 +1,6 @@
 name: Native Linux setup
 description: >-
-  Install the system SDL3/FFmpeg/libass/GL dev stack plus a Kitware CMake build
+  Install the system Qt/FFmpeg/libass/GL dev stack plus a Kitware CMake build
   (newer than the distro package).
 
 inputs:
@@ -22,7 +22,6 @@ runs:
           curl \
           ca-certificates \
           pkg-config \
-          libsdl3-dev \
           libavformat-dev \
           libavcodec-dev \
           libavutil-dev \

@@ -1,6 +1,6 @@
 # FrameLift
 
-An **extensible** video player built on Dear ImGui, SDL3, FFmpeg, and libass — where user-facing
+An **extensible** Qt/QML video player built on Qt 6, FFmpeg, and libass — where user-facing
 features are runtime-loaded plugins. The host application has no compile-time knowledge of any of
 them: playback controls, playlists, history, settings, network streaming, and updates are all plugin
 DLLs loaded at startup over a stable, versioned binary ABI; the window, decode/playback engine, and
@@ -35,12 +35,13 @@ dropping a DLL in or out of the `packages/` folder.
 Download the latest release archive from the [Releases](../../releases) page, extract, and run
 `FrameLift`. No installer needed — the archive is self-contained.
 
-**Platforms:** Windows (x86_64) and Linux (X11/Wayland via SDL3).
+**Platforms:** Windows (x86_64) and Linux (X11/Wayland via Qt).
 
 **Requirements:** a GPU supporting **Vulkan 1.1+** *or* **OpenGL 3.3** (FrameLift auto-selects Vulkan
 and falls back to OpenGL when needed; zero-copy GPU decode additionally needs a Vulkan 1.3 video-decode
-capable GPU). On Linux, install SDL3, FFmpeg, and libass from your distribution (e.g. `libsdl3-0`,
-`libavcodec`, `libavformat`, `libavfilter`, `libass9`) plus a Vulkan loader (`libvulkan1`).
+capable GPU). On Linux, install Qt 6, FFmpeg, and libass from your distribution (e.g. `qt6-base`,
+`qt6-declarative`, `qt6-multimedia`, `libavcodec`, `libavformat`, `libavfilter`, `libass9`) plus a
+Vulkan loader (`libvulkan1`).
 
 ## Configuration
 
@@ -121,7 +122,7 @@ FrameLift/
 │   └── context-menu/       # Shared right-click context-menu service
 │
 ├── cmake/                  # Dependency fetch, shader compile, and SDK packaging modules
-├── vcpkg.json              # Windows native libs (SDL3, FFmpeg, libass) — vcpkg manifest
+├── vcpkg.json              # Windows native libs (Qt, FFmpeg, libass) — vcpkg manifest
 └── CMakeLists.txt
 ```
 
@@ -140,11 +141,12 @@ enabled).
 - `glslang` on PATH (the `glslang-tools` package) — compiles the GLSL shaders to SPIR-V at build time.
   CMake fetches and builds glslang as a fallback only when it isn't found on PATH.
 - `clang-format` on PATH (for the pre-commit hook)
-- **Linux only:** development packages for SDL3, FFmpeg, libass, Vulkan, and OpenGL
-  (e.g. on Ubuntu 25.04+: `sudo apt install libsdl3-dev libavformat-dev libavcodec-dev libavutil-dev
+- **Linux only:** development packages for Qt 6, FFmpeg, libass, Vulkan, and OpenGL
+  (e.g. on Ubuntu 25.04+: `sudo apt install qt6-base-dev qt6-declarative-dev qml6-module-qtquick
+  qml6-module-qtquick-controls qt6-multimedia-dev libavformat-dev libavcodec-dev libavutil-dev
   libswscale-dev libswresample-dev libavfilter-dev libass-dev libvulkan-dev libgl1-mesa-dev
   glslang-tools pkg-config`).
-- **Windows only:** [vcpkg](https://vcpkg.io) (`VCPKG_ROOT` set) — SDL3, FFmpeg, and libass are
+- **Windows only:** [vcpkg](https://vcpkg.io) (`VCPKG_ROOT` set) — Qt, FFmpeg, and libass are
   resolved from the manifest in `vcpkg.json`. Configure with the vcpkg preset (`CMakePresets.json`).
 
 ### Steps
@@ -162,7 +164,7 @@ cmake --build build --config Debug
 ```
 
 Output: `cmake-build-debug/framelift` (`.exe` on Windows). On Windows the required shared libraries
-are copied next to the executable; on Linux SDL3/FFmpeg/libass are resolved from the system. Package
+are copied next to the executable; on Linux Qt/FFmpeg/libass are resolved from the system. Package
 DLLs are placed under `cmake-build-debug/packages/` (`.dll` on Windows, `.so` on Linux).
 The Vulkan backend links the official Vulkan loader when enabled; a Vulkan runtime
 (`libvulkan.so.1` / `vulkan-1.dll`) is required for Vulkan-enabled builds.
@@ -188,10 +190,9 @@ CMake via `FetchContent`.
 
 | Library          | Version           | Source        |
 |------------------|-------------------|---------------|
-| SDL3             | vcpkg / system    | vcpkg/system  |
+| Qt 6             | vcpkg / system    | vcpkg/system  |
 | FFmpeg           | vcpkg / system    | vcpkg/system  |
 | libass           | vcpkg / system    | vcpkg/system  |
-| Dear ImGui       | 1.92.8-docking    | FetchContent  |
 | nlohmann/json    | 3.11.3            | FetchContent  |
 | Vulkan-Headers   | 1.4.354           | FetchContent  |
 | VulkanMemoryAllocator | 3.4.0        | FetchContent  |

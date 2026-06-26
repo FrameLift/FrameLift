@@ -430,7 +430,7 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
         impl_->Disable(GL_BLEND);
     }
 
-    // Restore neutral state so the host's ImGui pass starts clean.
+    // Restore neutral state before returning control to Qt Quick.
     impl_->BindVertexArray(0);
     impl_->BindTexture(GL_TEXTURE_2D, 0);
     impl_->UseProgram(0);

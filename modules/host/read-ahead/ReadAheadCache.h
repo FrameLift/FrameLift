@@ -15,7 +15,7 @@
 //
 // This type is deliberately FFmpeg-free (no AVPacket / libav includes) so the
 // bounding and hit/miss logic can be unit-tested in framelift_tests without
-// pulling in SDL/FFmpeg. The queues touch the libav types; this only sees bytes.
+// pulling in FFmpeg. The queues touch the libav types; this only sees bytes.
 class ReadAheadCache
 {
 public:

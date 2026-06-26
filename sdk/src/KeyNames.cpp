@@ -39,6 +39,7 @@ const std::unordered_map<Key, const char*>& CanonicalKeyNames()
         {Keys::Z, "Z"},
         {Keys::Space, "Space"},
         {Keys::Return, "Return"},
+        {Keys::Enter, "Enter"},
         {Keys::Tab, "Tab"},
         {Keys::Backspace, "Backspace"},
         {Keys::Escape, "Escape"},
