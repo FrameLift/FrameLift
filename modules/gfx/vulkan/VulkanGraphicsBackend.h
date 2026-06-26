@@ -1,6 +1,19 @@
 #pragma once
 
-#include <volk.h>
+#if defined(_WIN32)
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
+#elif defined(__linux__)
+#ifndef VK_USE_PLATFORM_WAYLAND_KHR
+#define VK_USE_PLATFORM_WAYLAND_KHR
+#endif
+#ifndef VK_USE_PLATFORM_XCB_KHR
+#define VK_USE_PLATFORM_XCB_KHR
+#endif
+#endif
+
+#include <vulkan/vulkan.h>
 
 #include <cstdint>
 #include <memory>

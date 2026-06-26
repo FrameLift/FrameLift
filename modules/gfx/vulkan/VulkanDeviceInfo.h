@@ -1,16 +1,14 @@
 #pragma once
 #include <cstdint>
 
-// Neutral hand-off PODs between the volk-based Vulkan renderer/backend and the
-// FFmpeg-based Vulkan hwaccel bridge.
+// Neutral hand-off PODs between the Vulkan renderer/backend and the FFmpeg-based
+// Vulkan hwaccel bridge.
 //
-// WHY void*/uint64_t instead of Vulkan types: volk.h (VK_NO_PROTOTYPES, function-
-// pointer dispatch) and FFmpeg's <libavutil/hwcontext_vulkan.h> (which pulls
-// <vulkan/vulkan.h> WITH prototypes) are mutually exclusive within one translation
-// unit. The backend/renderer see only volk; the bridge sees only the prototyped
-// headers. These structs carry raw handle bits across that boundary so neither side
-// includes the other's Vulkan headers. Each side reinterpret_casts back to its own
-// Vulkan typedefs. (x64 only: dispatchable + non-dispatchable handles are pointers.)
+// WHY void*/uint64_t instead of Vulkan types: this header is shared by the renderer,
+// the playback bridge, and graphics-core interfaces. Keeping it Vulkan/FFmpeg-free
+// prevents public host interfaces from inheriting either dependency. Each side
+// reinterpret_casts raw handle bits back to its own Vulkan typedefs. (x64 only:
+// dispatchable + non-dispatchable handles are pointers.)
 
 // Snapshot of the renderer's live Vulkan device, handed to the FFmpeg Vulkan hwaccel
 // so it WRAPS this device (AVVulkanDeviceContext) instead of creating its own. Built
@@ -20,7 +18,7 @@ struct VulkanDeviceInfo
     void* instance = nullptr;            // VkInstance
     void* physicalDevice = nullptr;      // VkPhysicalDevice
     void* device = nullptr;              // VkDevice
-    void* getInstanceProcAddr = nullptr; // PFN_vkGetInstanceProcAddr (volk's loaded global)
+    void* getInstanceProcAddr = nullptr; // PFN_vkGetInstanceProcAddr
     const void* featuresChain = nullptr; // const VkPhysicalDeviceFeatures2* (lifetime: backend)
 
     const char* const* deviceExtensions = nullptr; // enabled device-extension names (lifetime: backend)

@@ -35,6 +35,11 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftPlatformLibs.cmake")
 # ── OpenGL (opengl32 on Windows, libGL on Linux) ──────────────────────────────
 find_package(OpenGL REQUIRED)
 
+# ── Host third-party dependencies (stb/Vulkan stack — NOT in the SDK) ─────────
+# Run before finding Qt so Qt's WrapVulkanHeaders helper can see FrameLift's
+# fetched Vulkan-Headers when the system does not provide Vulkan_INCLUDE_DIR.
+include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
+
 # ── Qt6 (window / events / raw PCM audio / UI) ────────────────────────────────
 # Gui+Quick drive the QQuickWindow and scene graph (video is a QSGRenderNode);
 # Multimedia is linked only for QAudioSink/QMediaDevices raw PCM output. Do not
@@ -82,9 +87,6 @@ endforeach ()
 unset(_audit_text)
 unset(_audit_file)
 unset(_forbidden_api)
-
-# ── Host third-party dependencies (stb/Vulkan stack — NOT in the SDK) ─────────
-include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 
 set(FRAMELIFT_GRAPHICS_INCLUDE_DIRS
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core"
@@ -185,13 +187,11 @@ target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk OpenGL::GL
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets)
 
-# Vulkan graphics backend (OpenGL→Vulkan migration, #17). volk is the meta-loader
-# (compiled here exactly once — imgui only takes volk_headers); VMA is single-source.
-# Instance/device/swapchain setup is hand-rolled. No link-time
-# libvulkan: volk loads it at runtime.
+# Vulkan graphics backend (OpenGL→Vulkan migration, #17). FrameLift owns the
+# instance/device setup and links the official Vulkan loader; VMA is header-only.
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     target_link_libraries(FrameLift PRIVATE
-            volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+            Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
 endif ()
 
 # Compile the video shaders to embedded SPIR-V headers and make the host depend on

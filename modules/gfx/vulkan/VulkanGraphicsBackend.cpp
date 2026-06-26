@@ -3,12 +3,13 @@
 #include "VulkanVideoRenderer.h"
 
 #define VMA_IMPLEMENTATION
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #include <vk_mem_alloc.h>
 
 #include <QtCore/QByteArray>
 #include <QtCore/QVersionNumber>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QVulkanInstance>
 #include <QtQuick/QQuickGraphicsConfiguration>
 #include <QtQuick/QQuickGraphicsDevice>
@@ -33,6 +34,14 @@ bool HasExtension(const std::vector<VkExtensionProperties>& extensions, const ch
             return std::strcmp(ext.extensionName, name) == 0;
         }
     );
+}
+
+void AddUniqueExtension(std::vector<std::string>& extensions, const char* name)
+{
+    if (std::ranges::find(extensions, name) == extensions.end())
+    {
+        extensions.emplace_back(name);
+    }
 }
 
 std::string VersionString(uint32_t version)
@@ -72,11 +81,6 @@ bool VulkanGraphicsBackend::IsSupported()
 
 void VulkanGraphicsBackend::CreateInstance()
 {
-    if (volkInitialize() != VK_SUCCESS)
-    {
-        throw std::runtime_error("Vulkan loader not found");
-    }
-
     uint32_t loaderVersion = VK_API_VERSION_1_0;
     if (vkEnumerateInstanceVersion)
     {
@@ -89,14 +93,25 @@ void VulkanGraphicsBackend::CreateInstance()
     instanceApiVersion_ = std::min(loaderVersion, VK_API_VERSION_1_4);
 
     const QByteArrayList preferredExtensions = QQuickGraphicsConfiguration::preferredInstanceExtensions();
-    instanceExtNames_.reserve(static_cast<std::size_t>(preferredExtensions.size()) + 1);
+    instanceExtNames_.reserve(static_cast<std::size_t>(preferredExtensions.size()) + 2);
     for (const QByteArray& extension : preferredExtensions)
     {
-        instanceExtNames_.push_back(extension.toStdString());
+        AddUniqueExtension(instanceExtNames_, extension.constData());
     }
-    if (std::ranges::find(instanceExtNames_, VK_KHR_SURFACE_EXTENSION_NAME) == instanceExtNames_.end())
+    AddUniqueExtension(instanceExtNames_, VK_KHR_SURFACE_EXTENSION_NAME);
+
+    const QString platform = QGuiApplication::platformName();
+    if (platform.contains("wayland", Qt::CaseInsensitive))
     {
-        instanceExtNames_.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        AddUniqueExtension(instanceExtNames_, "VK_KHR_wayland_surface");
+    }
+    else if (platform.contains("xcb", Qt::CaseInsensitive))
+    {
+        AddUniqueExtension(instanceExtNames_, "VK_KHR_xcb_surface");
+    }
+    else if (platform.contains("windows", Qt::CaseInsensitive))
+    {
+        AddUniqueExtension(instanceExtNames_, "VK_KHR_win32_surface");
     }
 
     uint32_t availableCount = 0;
@@ -115,21 +130,33 @@ void VulkanGraphicsBackend::CreateInstance()
         extensions.push_back(extension.c_str());
     }
 
-    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "FrameLift";
-    app.apiVersion = instanceApiVersion_;
-
-    VkInstanceCreateInfo createInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-    createInfo.pApplicationInfo = &app;
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    createInfo.ppEnabledExtensionNames = extensions.data();
-    const VkResult result = vkCreateInstance(&createInfo, nullptr, &instance_);
-    if (result != VK_SUCCESS)
+    qtInstance_ = std::make_unique<QVulkanInstance>();
+    QByteArrayList qtExtensions;
+    qtExtensions.reserve(static_cast<qsizetype>(instanceExtNames_.size()));
+    for (const std::string& extension : instanceExtNames_)
     {
-        ThrowVk("Vulkan instance creation failed", result);
+        qtExtensions.push_back(QByteArray::fromStdString(extension));
     }
-    volkLoadInstance(instance_);
-    Log::Info("Vulkan: loader {}, instance API {}", VersionString(loaderVersion), VersionString(instanceApiVersion_));
+    qtInstance_->setExtensions(qtExtensions);
+    qtInstance_->setApiVersion(
+        QVersionNumber(VK_API_VERSION_MAJOR(instanceApiVersion_), VK_API_VERSION_MINOR(instanceApiVersion_))
+    );
+    if (!qtInstance_->create())
+    {
+        ThrowVk("Qt Vulkan instance creation failed", qtInstance_->errorCode());
+    }
+    instance_ = qtInstance_->vkInstance();
+    if (platform.contains("wayland", Qt::CaseInsensitive))
+    {
+        const bool rawWaylandSurface =
+            vkGetInstanceProcAddr(instance_, "vkCreateWaylandSurfaceKHR") != nullptr;
+        const bool qtWaylandSurface = qtInstance_->getInstanceProcAddr("vkCreateWaylandSurfaceKHR") != nullptr;
+        Log::Debug(
+            "Vulkan: Wayland surface proc lookup raw={}, qt={}", rawWaylandSurface ? "available" : "missing",
+            qtWaylandSurface ? "available" : "missing"
+        );
+    }
+    Log::Debug("Vulkan: loader {}, instance API {}", VersionString(loaderVersion), VersionString(instanceApiVersion_));
 }
 
 void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
@@ -139,15 +166,6 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
         return;
     }
 
-    qtInstance_ = std::make_unique<QVulkanInstance>();
-    qtInstance_->setVkInstance(instance_);
-    qtInstance_->setApiVersion(
-        QVersionNumber(VK_API_VERSION_MAJOR(instanceApiVersion_), VK_API_VERSION_MINOR(instanceApiVersion_))
-    );
-    if (!qtInstance_->create())
-    {
-        throw std::runtime_error("Qt could not adopt FrameLift's Vulkan instance");
-    }
     window->setVulkanInstance(qtInstance_.get());
 
     CreateDevice(window);
@@ -370,7 +388,6 @@ void VulkanGraphicsBackend::CreateDevice(QQuickWindow* window)
     {
         ThrowVk("Vulkan device creation failed", result);
     }
-    volkLoadDevice(device_);
     qtGraphicsQueueIndex_ = chosenQueues[graphicsQueueFamily_].queueCount >= 2 ? 1u : 0u;
     vkGetDeviceQueue(device_, graphicsQueueFamily_, qtGraphicsQueueIndex_, &graphicsQueue_);
 
@@ -383,15 +400,11 @@ void VulkanGraphicsBackend::CreateDevice(QQuickWindow* window)
         );
     }
 
-    VmaVulkanFunctions functions{};
-    functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-    functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
     VmaAllocatorCreateInfo allocatorInfo{};
     allocatorInfo.instance = instance_;
     allocatorInfo.physicalDevice = physicalDevice_;
     allocatorInfo.device = device_;
     allocatorInfo.vulkanApiVersion = deviceApiVersion_;
-    allocatorInfo.pVulkanFunctions = &functions;
     if (vmaCreateAllocator(&allocatorInfo, &allocator_) != VK_SUCCESS)
     {
         throw std::runtime_error("Vulkan memory allocator creation failed");
@@ -671,11 +684,7 @@ void VulkanGraphicsBackend::Shutdown()
     currentCmd_ = VK_NULL_HANDLE;
     renderPass_ = VK_NULL_HANDLE;
     pendingFrameSignals_.clear();
-    qtInstance_.reset();
     DestroyDevice();
-    if (instance_ != VK_NULL_HANDLE)
-    {
-        vkDestroyInstance(instance_, nullptr);
-        instance_ = VK_NULL_HANDLE;
-    }
+    qtInstance_.reset();
+    instance_ = VK_NULL_HANDLE;
 }

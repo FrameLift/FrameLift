@@ -6,13 +6,6 @@
 
 #include <cstdint>
 
-// Suppress Vulkan prototype declarations: this TU calls NO vkXxx functions (only av_*),
-// so we want the types/enums/structs from <vulkan/vulkan.h> without the function symbols,
-// which would otherwise collide with volk's function-pointer globals elsewhere in the exe.
-#ifndef VK_NO_PROTOTYPES
-#define VK_NO_PROTOTYPES
-#endif
-
 extern "C"
 {
 #include <libavutil/hwcontext.h>

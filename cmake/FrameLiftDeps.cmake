@@ -12,49 +12,63 @@
 include(FetchContent)
 
 # ── Vulkan stack (second graphics backend — OpenGL→Vulkan migration, #17) ───────
-# Resolved via FetchContent rather than vcpkg so the SAME setup works identically on
-# the Windows MinGW cross-build and the native-Linux build (vcpkg only runs on
-# Windows here). volk and VMA are single-source / header-only and
-# compile in-tree. Crucially, volk loads the Vulkan
-# loader dynamically at runtime (volkInitialize), so there is NO link-time dependency
-# on libvulkan — sidestepping the brittle MinGW loader-import path. The runtime loader
-# (vulkan-1.dll / libvulkan.so.1) only needs to be present at run time, which it is
-# wherever a GPU driver is installed.
+# Resolved here so the SAME setup works identically on the Windows MinGW cross-build
+# and the native-Linux build (vcpkg only runs on Windows here). FrameLift links the
+# official Vulkan loader when the Vulkan backend is enabled, while VMA compiles
+# in-tree as a header-only allocator.
 #
-# Tags are a coherent ~1.3.x set; bump together if a tag ever 404s.
+# Keep Vulkan-Headers and VMA tags coherent with the Vulkan API level FrameLift
+# prefers; bump together if a tag ever 404s.
 
-# Vulkan-Headers — the API headers + the Vulkan::Headers interface target that volk
-# and VMA consume. Declared first so the others detect and reuse it.
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
-if (NOT TARGET Vulkan::Headers)
+    # Vulkan-Headers — the API headers + the Vulkan::Headers interface target that VMA
+    # consumes. Qt may have already provided this target through FindVulkan; fetch the
+    # headers only when no system/SDK target exists.
+    if (NOT TARGET Vulkan::Headers)
+        FetchContent_Declare(
+                vulkan_headers
+                GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+                GIT_TAG v1.4.354
+                GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(vulkan_headers)
+    endif ()
+    if (NOT Vulkan_INCLUDE_DIR OR Vulkan_INCLUDE_DIR MATCHES "-NOTFOUND$")
+        get_target_property(_framelift_vulkan_header_dirs Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
+        list(GET _framelift_vulkan_header_dirs 0 _framelift_vulkan_include_dir)
+        set(Vulkan_INCLUDE_DIR "${_framelift_vulkan_include_dir}" CACHE PATH "Vulkan headers include directory" FORCE)
+        set(Vulkan_INCLUDE_DIRS "${Vulkan_INCLUDE_DIR}")
+        unset(_framelift_vulkan_include_dir)
+        unset(_framelift_vulkan_header_dirs)
+    endif ()
+
+    find_package(Vulkan QUIET)
+    if (NOT TARGET Vulkan::Vulkan)
+        find_library(
+                FRAMELIFT_VULKAN_LOADER_LIBRARY
+                NAMES vulkan vulkan-1 vulkan.so.1 libvulkan.so.1
+        )
+        if (NOT FRAMELIFT_VULKAN_LOADER_LIBRARY)
+            message(FATAL_ERROR
+                    "The Vulkan backend links the official Vulkan loader, but CMake could not find "
+                    "libvulkan/vulkan-1. Install the Vulkan loader development package or disable "
+                    "the backend with -DFRAMELIFT_MODULE_GRAPHICS_VULKAN=OFF.")
+        endif ()
+
+        add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+                IMPORTED_LOCATION "${FRAMELIFT_VULKAN_LOADER_LIBRARY}"
+                INTERFACE_LINK_LIBRARIES Vulkan::Headers)
+    endif ()
+
+    # VMA — header-only GPU allocator. A single host TU defines VMA_IMPLEMENTATION.
     FetchContent_Declare(
-            vulkan_headers
-            GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-            GIT_TAG v1.4.354
+            vma
+            GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+            GIT_TAG v3.4.0
             GIT_SHALLOW TRUE
     )
-    FetchContent_MakeAvailable(vulkan_headers)
-endif ()
-
-# volk — Vulkan meta-loader. Builds the `volk` static lib (the global entry-point
-# pointers, linked once into the exe) and the `volk_headers` interface (include-only,
-# linked into imgui so imgui_impl_vulkan can call through the same pointers).
-FetchContent_Declare(
-        volk
-        GIT_REPOSITORY https://github.com/zeux/volk.git
-        GIT_TAG 1.4.350
-        GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(volk)
-
-# VMA — header-only GPU allocator. A single host TU defines VMA_IMPLEMENTATION.
-FetchContent_Declare(
-        vma
-        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-        GIT_TAG v3.4.0
-        GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(vma)
+    FetchContent_MakeAvailable(vma)
 endif ()
 
 # ── stb (header-only) ─────────────────────────────────────────────────────────

@@ -166,8 +166,8 @@ Output: `cmake-build-debug/framelift` (`.exe` on Windows). On Windows the requir
 are copied next to the executable; on Linux SDL3/FFmpeg/libass are resolved from the system. Package
 DLLs are placed under `cmake-build-debug/packages/` (`.dll` on Windows, `.so` on Linux).
 The auto-updater package declares Windows-only platform support and is disabled automatically elsewhere.
-The Vulkan and OpenGL loaders are resolved at
-runtime (no link-time `libvulkan` dependency), so only a GPU driver is needed to run.
+The Vulkan backend links the official Vulkan loader when enabled; a Vulkan runtime
+(`libvulkan.so.1` / `vulkan-1.dll`) is required for Vulkan-enabled builds.
 
 #### Lean builds
 
@@ -197,7 +197,6 @@ CMake via `FetchContent`.
 | nlohmann/json    | 3.11.3            | FetchContent  |
 | stb              | master            | FetchContent  |
 | Vulkan-Headers   | 1.4.354           | FetchContent  |
-| volk             | 1.4.350           | FetchContent  |
 | VulkanMemoryAllocator | 3.4.0        | FetchContent  |
 | glslang          | 15.0.0 (build-time, fallback) | PATH / FetchContent |
 

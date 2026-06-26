@@ -66,8 +66,8 @@ public:
     // Fill `out` with the live Vulkan instance/device/queues so the FFmpeg Vulkan
     // hwaccel can WRAP this device for zero-copy decode (Phase 3, #18). Returns false
     // for non-Vulkan backends (the default) — the caller then uses the CPU-RGBA8 path.
-    // Stays Vulkan-type-free (VulkanDeviceInfo is a neutral POD) so the FFmpeg side can
-    // call it without pulling in volk.
+    // Stays Vulkan-type-free (VulkanDeviceInfo is a neutral POD) so graphics-core
+    // does not inherit Vulkan or FFmpeg headers.
     [[nodiscard]] virtual bool GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noexcept
     {
         (void)out;
