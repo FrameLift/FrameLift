@@ -1,7 +1,7 @@
 # Resolves the host's external platform libraries — FFmpeg (decode/filter) and
 # libass (subtitles) — and defines the link targets the host uses: `ffmpeg` and
-# `libass`. Qt6 (window/audio/UI, replacing SDL3) is resolved in the root
-# CMakeLists.txt via find_package(Qt6 ...).
+# `libass`. This is FrameLift's compressed-media pipeline; Qt Multimedia is
+# resolved separately only for raw PCM output through QAudioSink.
 #
 #  • Linux: system dev packages (libavcodec-dev, libass-dev, ...) via
 #    find_package / pkg-config.

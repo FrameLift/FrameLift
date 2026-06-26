@@ -132,7 +132,7 @@ struct AudioTrack
 // A playback output device reported by the platform backend.
 struct AudioOutputDevice
 {
-    char name[256] = {};   // stable user-facing SDL device name; empty means system default
+    char name[256] = {};    // stable user-facing platform device name; empty means system default
     bool isDefault = false; // true for the synthetic "System default" entry
     bool selected = false;  // true when this is the active/preferred device
 };
@@ -156,7 +156,7 @@ enum class AudioDuckingTrigger : int
 struct AudioPreferences
 {
     char preferredLang[8] = {};  // ISO 639 audio language to auto-select; empty = file/default
-    char outputDevice[256] = {}; // SDL playback device name; empty = system default
+    char outputDevice[256] = {}; // platform playback device name; empty = system default
     int defaultVolume = 100;     // 0-100
     int syncOffsetMs = 0;        // positive delays audio relative to video
     AudioChannelMode channelMode = AudioChannelMode::Auto;
@@ -204,10 +204,10 @@ struct ReadAheadCacheOptions
 // Subtitle edge (border) style.
 enum class SubtitleEdgeStyle : int
 {
-    None = 0,      // no outline or shadow
-    Outline = 1,   // outline around the glyphs
+    None = 0,       // no outline or shadow
+    Outline = 1,    // outline around the glyphs
     DropShadow = 2, // outline + drop shadow
-    OpaqueBox = 3, // text drawn over an opaque box (BackColour)
+    OpaqueBox = 3,  // text drawn over an opaque box (BackColour)
 };
 
 // User-configurable subtitle appearance + track-selection behavior. Pushed into the
@@ -222,21 +222,21 @@ struct SubtitleStyle
     bool overrideEnabled = false; // master switch — when false the file's own style is used verbatim
 
     // ── Appearance ───────────────────────────────────────────────────────────
-    float fontScale = 1.0f;       // global font-size multiplier (1.0 = file default)
-    char fontFamily[128] = {};    // override font family; empty = keep the file's font
+    float fontScale = 1.0f;              // global font-size multiplier (1.0 = file default)
+    char fontFamily[128] = {};           // override font family; empty = keep the file's font
     uint32_t textColor = 0x00000000u;    // primary fill colour (0xRRGGBBAA)
     uint32_t outlineColor = 0x00000000u; // outline/border colour
     uint32_t backColor = 0x00000080u;    // shadow / opaque-box colour (alpha = transparency)
     SubtitleEdgeStyle edgeStyle = SubtitleEdgeStyle::Outline;
-    float outlineWidth = 2.0f;    // outline thickness in pixels
-    float shadowDepth = 0.0f;     // drop-shadow offset in pixels
-    int alignment = 0;            // numpad 1-9 (\an); 0 = keep the file's alignment
-    float lineSpacing = 0.0f;     // extra space between lines, pixels
-    float letterSpacing = 0.0f;   // extra space between glyphs, pixels
+    float outlineWidth = 2.0f;  // outline thickness in pixels
+    float shadowDepth = 0.0f;   // drop-shadow offset in pixels
+    int alignment = 0;          // numpad 1-9 (\an); 0 = keep the file's alignment
+    float lineSpacing = 0.0f;   // extra space between lines, pixels
+    float letterSpacing = 0.0f; // extra space between glyphs, pixels
 
     // ── Track-selection behavior ─────────────────────────────────────────────
-    char preferredLang[8] = {};   // ISO 639 language to auto-select; empty = no preference
-    bool preferForced = false;    // prefer a "forced" subtitle track when present
+    char preferredLang[8] = {}; // ISO 639 language to auto-select; empty = no preference
+    bool preferForced = false;  // prefer a "forced" subtitle track when present
 };
 
 // The media playback backend is exposed to plugins as a family of small,

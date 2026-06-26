@@ -17,19 +17,20 @@ extern "C"
 
 struct AVFrame;
 struct SwrContext;
-struct AudioSink; // Qt backend (QAudioSink + ring buffer + audio thread); defined in the .cpp
+struct AudioSink; // Qt PCM backend (QAudioSink + ring buffer + audio thread); defined in the .cpp
 
 // Audio output for the FFmpeg backend (issue #8, Phase 3): resamples decoded
 // audio to the device format and feeds a playback stream, while exposing the
 // playback position as the master clock that video is synced against.
 //
-// Qt6 backend (Step 4): a QAudioSink driven in PULL mode from a thread-safe ring buffer.
-// The QAudioSink lives on its OWN QThread with an event loop (it needs one to pump audio,
-// which the FFmpeg worker threads don't have), so device lifecycle/gain/suspend are
-// marshalled onto that thread; Feed() (audio worker) and MasterClock()/QueuedBytes()
-// (video/other workers) only touch the lock-protected ring + atomics, never Qt. The
-// master clock keeps ComputeMasterClock(); only the `queued` source changed from SDL's
-// stream queue to the ring fill plus the sink's internal buffer.
+// Qt6 PCM backend: a QAudioSink driven in PULL mode from a thread-safe ring buffer.
+// Qt Multimedia is used only for raw audio output/device enumeration here; demux,
+// decode, filtering, subtitles, and video presentation stay in FFmpegPlayer and the
+// external FFmpeg/libass stack. The QAudioSink lives on its OWN QThread with an event
+// loop (it needs one to pump audio, which the FFmpeg worker threads don't have), so
+// device lifecycle/gain/suspend are marshalled onto that thread; Feed() (audio worker)
+// and MasterClock()/QueuedBytes() (video/other workers) only touch the lock-protected
+// ring + atomics, never Qt playback classes.
 //
 // Lifetime: Open()/Close() run on the decode thread with no decode workers live;
 // the audio worker calls Feed() and the video worker calls MasterClock() while a
@@ -85,7 +86,7 @@ private:
     [[nodiscard]] int64_t QueuedBytesLocked() const;   // unheard bytes (ring + sink buffer)
 
     mutable std::mutex mutex_; // serialises swr + clock + sink lifecycle access
-    std::unique_ptr<AudioSink> sink_; // Qt QAudioSink backend (own thread + ring buffer)
+    std::unique_ptr<AudioSink> sink_; // Qt QAudioSink PCM backend (own thread + ring buffer)
     SwrContext* swr_ = nullptr;
     std::vector<uint8_t> buffer_; // scratch for one resampled chunk (Feed only)
 

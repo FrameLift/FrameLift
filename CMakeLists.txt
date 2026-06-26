@@ -24,23 +24,64 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftBuiltinModules.cmake")
 framelift_load_builtin_modules("${CMAKE_SOURCE_DIR}/modules")
 framelift_report_builtin_modules()
 
-# ── Platform libraries (FFmpeg + libass) ──────────────────────────────────────
+# ── Platform media libraries (external FFmpeg + libass) ───────────────────────
 # Defines the `ffmpeg` and `libass` targets: Linux uses system dev packages
 # (libav*-dev / libass-dev); Windows resolves them from the vcpkg manifest
-# (vcpkg.json). Qt6 (the window/audio/UI toolkit, replacing SDL3) is resolved
-# separately via find_package(Qt6 ...) below.
+# (vcpkg.json). This is FrameLift's media playback stack: demux, decode,
+# filtering, subtitles, and hardware decode all go through this external FFmpeg
+# target, not through Qt Multimedia's media playback backend.
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftPlatformLibs.cmake")
 
 # ── OpenGL (opengl32 on Windows, libGL on Linux) ──────────────────────────────
 find_package(OpenGL REQUIRED)
 
-# ── Qt6 (window / events / audio / UI — replaces SDL3 + Dear ImGui) ───────────
+# ── Qt6 (window / events / raw PCM audio / UI) ────────────────────────────────
 # Gui+Quick drive the QQuickWindow and scene graph (video is a QSGRenderNode);
-# Multimedia provides QAudioSink (replacing the SDL3 audio device). Widgets
-# provides the native QFileDialog open-file picker (replacing SDL_ShowOpenFileDialog).
+# Multimedia is linked only for QAudioSink/QMediaDevices raw PCM output. Do not
+# use Qt media playback classes here: compressed media stays on FFmpegPlayer and
+# the external `ffmpeg` target above. Widgets provides the native QFileDialog
+# open-file picker (replacing SDL_ShowOpenFileDialog).
 # AUTOMOC is required for the Q_OBJECT types in the window-qt module.
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets)
 set(CMAKE_AUTOMOC ON)
+
+set(_FRAMELIFT_FORBIDDEN_QT_MEDIA_PLAYBACK_APIS
+        "QMediaPlayer"
+        "QVideoSink"
+        "QMediaCaptureSession"
+        "QMediaRecorder"
+        "QCamera"
+        "QImageCapture"
+        "QAudioOutput")
+file(GLOB_RECURSE _FRAMELIFT_QT_MEDIA_AUDIT_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/*.[ch]pp"
+        "${CMAKE_SOURCE_DIR}/src/*.h"
+        "${CMAKE_SOURCE_DIR}/modules/*.[ch]pp"
+        "${CMAKE_SOURCE_DIR}/modules/*.h"
+        "${CMAKE_SOURCE_DIR}/plugins/*.[ch]pp"
+        "${CMAKE_SOURCE_DIR}/plugins/*.h"
+        "${CMAKE_SOURCE_DIR}/qml/*.qml"
+        "${CMAKE_SOURCE_DIR}/plugins/*.qml")
+foreach (_audit_file IN LISTS _FRAMELIFT_QT_MEDIA_AUDIT_FILES)
+    file(READ "${_audit_file}" _audit_text)
+    foreach (_forbidden_api IN LISTS _FRAMELIFT_FORBIDDEN_QT_MEDIA_PLAYBACK_APIS)
+        if (_audit_text MATCHES "${_forbidden_api}")
+            message(FATAL_ERROR
+                    "FrameLift uses external FFmpeg for media playback; ${_audit_file} "
+                    "references forbidden Qt media playback API ${_forbidden_api}. "
+                    "Qt Multimedia is allowed only for QAudioSink/QMediaDevices audio output.")
+        endif ()
+    endforeach ()
+    if (_audit_file MATCHES "\\.qml$" AND _audit_text MATCHES "import[ \t]+QtMultimedia")
+        message(FATAL_ERROR
+                "FrameLift uses external FFmpeg for media playback; ${_audit_file} "
+                "imports QtMultimedia QML. Qt Multimedia is allowed only for "
+                "QAudioSink/QMediaDevices audio output in C++.")
+    endif ()
+endforeach ()
+unset(_audit_text)
+unset(_audit_file)
+unset(_forbidden_api)
 
 # ── Host third-party dependencies (stb/Vulkan stack — NOT in the SDK) ─────────
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
@@ -162,8 +203,10 @@ if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     target_include_directories(FrameLift PRIVATE "${FRAMELIFT_SHADER_GEN_DIR}")
 endif ()
 
-# The FFmpeg + libass playback backend (the only backend; App.cpp constructs
-# FFmpegPlayer unconditionally).
+# The external FFmpeg + libass playback backend. This is the only compressed
+# media path: App.cpp constructs FFmpegPlayer unconditionally. Qt Multimedia may
+# log its own backend discovery (including qt.multimedia.ffmpeg) because we link
+# it for QAudioSink, but FrameLift does not route media files through Qt.
 target_link_libraries(FrameLift PRIVATE ffmpeg libass)
 
 # Packages load via Qt's QPluginLoader (which uses dlopen on POSIX internally);

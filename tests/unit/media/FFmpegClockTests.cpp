@@ -1,6 +1,6 @@
 // Unit tests for the FFmpeg backend's pure A/V-sync math (issue #8, Phase 3).
-// FFmpegClock.h is deliberately free of libav/SDL so it builds in the standalone
-// native test suite that has neither dependency.
+// FFmpegClock.h is deliberately free of libav/platform-audio includes so it builds
+// in the standalone native test suite that has neither dependency.
 
 #include "FFmpegClock.h"
 

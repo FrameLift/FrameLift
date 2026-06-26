@@ -5,9 +5,9 @@
 # not need stb/Vulkan dependencies. JSON is a host capability too: Qt's QJson backs
 # the host IJson service (modules/host/services/JsonServiceImpl), and plugins reach
 # it via ctx.GetService<IJson>() — no plugin links a JSON library.
-# FFmpeg and libass are set up by FrameLiftPlatformLibs.cmake; Qt6 (the UI/window
-# toolkit that replaced SDL3 + Dear ImGui, and now also the JSON backend) is
-# resolved in the root CMakeLists.txt.
+# FFmpeg and libass are set up by FrameLiftPlatformLibs.cmake as the external
+# playback stack; Qt6 (window/QML/raw PCM audio, and QJson for the JSON backend)
+# is resolved in the root CMakeLists.txt.
 
 include(FetchContent)
 

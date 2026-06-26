@@ -32,15 +32,16 @@ class FFmpegPacketQueue;
 class FFmpegHwDecode;
 class Settings;
 
-// Concrete FFmpeg + libass implementation of the media playback interface family
-// (IMediaPlayback / IMediaProperties / IVideoOutput / IAudioControl / ISubtitleControl).
+// Concrete external FFmpeg + libass implementation of the media playback interface
+// family (IMediaPlayback / IMediaProperties / IVideoOutput / IAudioControl /
+// ISubtitleControl).
 //
 // This and FFmpeg* siblings are the ONLY files that may #include <libav*/...> or
 // <ass/...> headers.
 //
-// Phase 4 status: audio + A/V sync + seeking. Per file, a demux thread fans
-// packets into bounded audio/video queues and spawns an audio worker (resamples
-// to an SDL3 device — the master clock) and a video worker (swscale → present,
+// Per file, a demux thread fans packets into bounded audio/video queues and
+// spawns an audio worker (resamples to Qt's raw PCM sink — the master clock) and
+// a video worker (swscale → present,
 // synced to the clock). A session loop performs keyframe/exact seeks between
 // worker spawns, holds the last frame on EOF (still seekable), and handles still
 // images / slideshows. Pause, volume/mute and the full host-consumed property set
@@ -269,7 +270,7 @@ private:
     void* videoWakeEvent_ = nullptr;
 
     // Audio output + per-file packet queues (forward-declared; defined in the .cpp
-    // so libav/SDL stay out of this header).
+    // so libav stays out of this header).
     // Shared memory-bounded read-ahead budget + hit/miss metrics for the three
     // queues. Declared before the queues so it outlives them: their
     // destructors Flush() and touch this via their budget_ pointer.

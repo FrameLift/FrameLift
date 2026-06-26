@@ -15,7 +15,7 @@ int main(int argc, char* argv[])
 
     // QApplication (not QGuiApplication) so the native QFileDialog open-file picker —
     // a QWidget — has the widgets application it requires. QApplication is a
-    // QGuiApplication, so Qt Quick / Multimedia are unaffected.
+    // QGuiApplication, so Qt Quick / raw PCM audio are unaffected.
     QApplication qtApp(argc, argv);
     QApplication::setOrganizationName("FrameLift");
     QApplication::setApplicationName("FrameLift");
