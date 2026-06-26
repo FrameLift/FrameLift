@@ -235,6 +235,7 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
 
 QtAppWindow::~QtAppWindow()
 {
+    qmlCompositor_.reset();
     delete window_; // deletes the content-item tree (videoItem_) with it
     window_ = nullptr;
     if (backend_)

@@ -66,9 +66,13 @@ App::~App()
 
     if (appWindow_)
     {
+        appWindow_->SetEventSink({});
+        appWindow_->SetPlayerWakeupHandler({});
         appWindow_->SetGraphicsInvalidatedHandler({});
+        appWindow_->SetVideoRenderCallbacks({}, {});
     }
-    player_.reset(); // destroy the player's render context before the GL context is torn down
+    player_.reset();    // destroy the player's render context before the GL context is torn down
+    appWindow_.reset(); // destroy QML roots before packageLoader_ unloads plugin DLLs/view models
 }
 
 // ── Construction phases ─────────────────────────────────────────────────────────

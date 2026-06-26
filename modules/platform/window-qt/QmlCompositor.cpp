@@ -17,15 +17,23 @@ QmlCompositor::QmlCompositor(QQuickItem* root) : root_(root), engine_(std::make_
 
 QmlCompositor::~QmlCompositor()
 {
+    Clear();
+}
+
+void QmlCompositor::Clear()
+{
     for (auto& view : views_)
     {
         delete view.item;
         view.item = nullptr;
     }
+    views_.clear();
 }
 
 void QmlCompositor::Load(std::vector<QmlViewSpec> views)
 {
+    Clear();
+
     std::stable_sort(
         views.begin(), views.end(),
         [](const QmlViewSpec& a, const QmlViewSpec& b)

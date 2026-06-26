@@ -26,6 +26,7 @@ public:
     explicit QmlCompositor(QQuickItem* root);
     ~QmlCompositor();
 
+    void Clear();
     void Load(std::vector<QmlViewSpec> views);
 
 private:
