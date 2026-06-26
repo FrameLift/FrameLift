@@ -42,7 +42,7 @@ find_package(OpenGL REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets)
 set(CMAKE_AUTOMOC ON)
 
-# ── Host third-party dependencies (spdlog/stb — NOT in the SDK) ───────────────
+# ── Host third-party dependencies (stb/Vulkan stack — NOT in the SDK) ─────────
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 
 set(FRAMELIFT_GRAPHICS_INCLUDE_DIRS
@@ -145,17 +145,15 @@ set_target_properties(FrameLift PROPERTIES
         OUTPUT_NAME "framelift"
 )
 
-# FrameLiftSdk now carries only the public headers; the host links the third-party
-# libraries (Qt/spdlog) and stb headers directly, since they no longer
-# cross the plugin boundary.
+# FrameLiftSdk now carries only the public headers; the host links Qt and uses
+# stb headers directly, since they no longer cross the plugin boundary.
 target_include_directories(FrameLift PRIVATE "${CMAKE_SOURCE_DIR}/src" "${stb_SOURCE_DIR}")
 target_include_directories(FrameLift PRIVATE
         ${FRAMELIFT_GRAPHICS_INCLUDE_DIRS}
         ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
 target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk OpenGL::GL
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets
-        spdlog::spdlog)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets)
 
 # Vulkan graphics backend (OpenGL→Vulkan migration, #17). volk is the meta-loader
 # (compiled here exactly once — imgui only takes volk_headers); VMA is single-source.

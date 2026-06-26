@@ -1,35 +1,33 @@
 #include <framelift/Log.h>
-#include <memory>
-#include <utility>
 
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/spdlog.h>
+#include <QtCore/QDebug>
 
 #include "LogBuffer.h"
 
 namespace
 {
 // Host sink: receives formatted lines from the SDK (host + every plugin) and
-// routes them to spdlog. Installed into the host TU by Init() and into each
-// plugin DLL by the loader via framelift_set_log_sink.
-void SpdlogSink(const int level, const char* msg)
+// routes them to Qt logging. Installed into the host TU by Init() and into each
+// plugin DLL by the loader via IPackage::SetLogSink.
+void QtLogSink(const int level, const char* msg)
 {
     // Keep an in-memory copy for the Log Viewer plugin (read back via ILogBuffer).
     HostLogBuffer().Push(level, msg);
 
+    const char* line = msg ? msg : "";
     switch (static_cast<Log::Level>(level))
     {
     case Log::Level::Debug:
-        spdlog::debug("{}", msg);
+        qDebug().noquote() << line;
         break;
     case Log::Level::Info:
-        spdlog::info("{}", msg);
+        qInfo().noquote() << line;
         break;
     case Log::Level::Warn:
-        spdlog::warn("{}", msg);
+        qWarning().noquote() << line;
         break;
     case Log::Level::Error:
-        spdlog::error("{}", msg);
+        qCritical().noquote() << line;
         break;
     }
 }
@@ -37,17 +35,16 @@ void SpdlogSink(const int level, const char* msg)
 
 Log::SinkFn HostLogSink()
 {
-    return &SpdlogSink;
+    return &QtLogSink;
 }
 
 void Log::Init()
 {
-    auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    auto logger = std::make_shared<spdlog::logger>("framelift", std::move(sink));
-    logger->set_level(spdlog::level::debug);
-    logger->set_pattern("[%H:%M:%S.%e] [%^%-5l%$] %v");
-    spdlog::set_default_logger(std::move(logger));
+    qSetMessagePattern(
+        "[%{time hh:mm:ss.zzz}] [%{if-debug}DEBUG%{endif}%{if-info}INFO %{endif}%{if-warning}WARN %{endif}"
+        "%{if-critical}ERROR%{endif}%{if-fatal}FATAL%{endif}] %{message}"
+    );
 
-    // Route the host's own Log::* calls into spdlog.
-    SetSink(&SpdlogSink);
+    // Route the host's own Log::* calls into Qt logging.
+    SetSink(&QtLogSink);
 }

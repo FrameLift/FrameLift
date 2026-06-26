@@ -9,7 +9,7 @@
 #       core/MyPlugin.cpp ${FRAMELIFT_SDK_SOURCES})
 #
 # A package DLL is a Qt plugin (QPluginLoader + Q_PLUGIN_METADATA via IPackage), so
-# the SDK requires Qt6::Core — the historical imgui/spdlog/stb/json-free rule no longer
+# the SDK requires Qt6::Core — the historical imgui/stb/json-free rule no longer
 # implies Qt-free. find_package compatibility is gated on the ABI version via the
 # accompanying FrameLiftSdkConfigVersion.cmake (ExactVersion); the runtime loader
 # enforces the same exact-version match before instantiating a plugin.

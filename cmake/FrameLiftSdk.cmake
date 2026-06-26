@@ -9,7 +9,7 @@
 #     packages land in <build>/packages.
 #
 # The public SDK target exposes the SDK include path and Qt Core/QML/Quick. The host
-# still owns spdlog, stb, FFmpeg, and other implementation dependencies.
+# still owns stb, FFmpeg, and other implementation dependencies.
 
 if (NOT DEFINED FRAMELIFT_SDK_STANDALONE)
     set(FRAMELIFT_SDK_STANDALONE OFF)
@@ -34,7 +34,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPackageMetadata.cmake")
 list(APPEND CMAKE_AUTOMOC_MACRO_NAMES "FRAMELIFT_MODULE_ENTRY" "FRAMELIFT_PACKAGE_BEGIN")
 
 # QPluginLoader + Q_PLUGIN_METADATA pull in QtCore. The SDK is no longer dependency-free
-# (the historical imgui/spdlog/stb/json-free rule); plugins build against Qt6::Core.
+# (the historical imgui/stb/json-free rule); plugins build against Qt6::Core.
 if (NOT TARGET Qt6::Quick)
     find_package(Qt6 REQUIRED COMPONENTS Core Qml Quick QuickControls2)
 endif ()

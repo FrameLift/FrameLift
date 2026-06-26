@@ -108,7 +108,7 @@ FrameLift/
 ├── src/                    # Host entry point (framelift.exe): App, CLI, main — owns only the loop
 │
 ├── modules/                # Built-in modules compiled into the host (not shipped as DLLs)
-│   ├── host/               # playback, audio, settings, services, controls, fonts, read-ahead, ui, logging, module-runtime
+│   ├── host/               # playback, audio, settings, services, controls, fonts, read-ahead, ui, module-runtime
 │   ├── gfx/                # Graphics backends (graphics-core, opengl, vulkan) and video renderers
 │   └── platform/           # SDL3 window (window-sdl) and per-OS dir watchers (dir-watch)
 │
@@ -196,7 +196,6 @@ CMake via `FetchContent`.
 | FFmpeg           | vcpkg / system    | vcpkg/system  |
 | libass           | vcpkg / system    | vcpkg/system  |
 | Dear ImGui       | 1.92.8-docking    | FetchContent  |
-| spdlog           | 1.17.0            | FetchContent  |
 | nlohmann/json    | 3.11.3            | FetchContent  |
 | stb              | master            | FetchContent  |
 | Vulkan-Headers   | 1.4.354           | FetchContent  |

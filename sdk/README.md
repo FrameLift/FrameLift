@@ -5,7 +5,7 @@ plugin ships as a **package**: one runtime-loaded DLL that bundles one or more *
 JSON-authored package/module metadata compiled in by CMake.
 
 The SDK is **dependency-free**: building a plugin needs only a C++23 compiler and
-CMake. No imgui, spdlog, stb, or JSON libraries are required — the host↔plugin
+CMake. No imgui, stb, or JSON libraries are required — the host↔plugin
 boundary is a COM-like binary ABI (pure abstract interfaces, POD-only signatures,
 C entry points), so a plugin built with any compatible Windows compiler
 interoperates with the host regardless of how the host was built.

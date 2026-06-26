@@ -122,7 +122,7 @@ target_include_directories(framelift_tests PRIVATE
         "${FRAMELIFT_ROOT}/plugins/updater/core"
         "${FRAMELIFT_ROOT}/plugins/playlist/core"
 )
-target_link_libraries(framelift_tests PRIVATE GTest::gtest_main GTest::gmock Threads::Threads)
+target_link_libraries(framelift_tests PRIVATE GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core)
 framelift_apply_coverage(framelift_tests)
 gtest_discover_tests(framelift_tests)
 
@@ -139,7 +139,7 @@ target_include_directories(framelift_tests_vulkan_off PRIVATE
         ${FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS}
         ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
 )
-target_link_libraries(framelift_tests_vulkan_off PRIVATE GTest::gtest_main Threads::Threads)
+target_link_libraries(framelift_tests_vulkan_off PRIVATE GTest::gtest_main Threads::Threads Qt6::Core)
 framelift_apply_coverage(framelift_tests_vulkan_off)
 gtest_discover_tests(framelift_tests_vulkan_off)
 
@@ -175,7 +175,7 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/remote-stream/core"
     )
     target_link_libraries(${name} PRIVATE
-            GTest::gtest_main GTest::gmock Threads::Threads)
+            GTest::gtest_main GTest::gmock Threads::Threads Qt6::Core)
     framelift_apply_coverage(${name})
     gtest_discover_tests(${name})
 endfunction()

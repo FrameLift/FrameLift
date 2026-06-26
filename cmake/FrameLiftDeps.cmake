@@ -2,29 +2,20 @@
 #
 # These are NOT part of the public plugin SDK — after the COM-like ABI redesign,
 # nothing crosses the host↔plugin boundary as a third-party type, so plugins do
-# not need spdlog/stb. JSON is a host capability too: Qt's QJson backs the
-# host IJson service (modules/host/services/JsonServiceImpl), and plugins reach it
-# via ctx.GetService<IJson>() — no plugin links a JSON library.
+# not need stb/Vulkan dependencies. JSON is a host capability too: Qt's QJson backs
+# the host IJson service (modules/host/services/JsonServiceImpl), and plugins reach
+# it via ctx.GetService<IJson>() — no plugin links a JSON library.
 # FFmpeg and libass are set up by FrameLiftPlatformLibs.cmake; Qt6 (the UI/window
 # toolkit that replaced SDL3 + Dear ImGui, and now also the JSON backend) is
 # resolved in the root CMakeLists.txt.
 
 include(FetchContent)
 
-# ── spdlog ────────────────────────────────────────────────────────────────────
-FetchContent_Declare(
-        spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.17.0
-        GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(spdlog)
-
 # ── Vulkan stack (second graphics backend — OpenGL→Vulkan migration, #17) ───────
 # Resolved via FetchContent rather than vcpkg so the SAME setup works identically on
 # the Windows MinGW cross-build and the native-Linux build (vcpkg only runs on
 # Windows here). volk and VMA are single-source / header-only and
-# compile in-tree, exactly like imgui/spdlog above. Crucially, volk loads the Vulkan
+# compile in-tree. Crucially, volk loads the Vulkan
 # loader dynamically at runtime (volkInitialize), so there is NO link-time dependency
 # on libvulkan — sidestepping the brittle MinGW loader-import path. The runtime loader
 # (vulkan-1.dll / libvulkan.so.1) only needs to be present at run time, which it is
