@@ -45,12 +45,12 @@ struct OpenNetworkStreamRequestEvent
     static constexpr const char* EventId = "framelift.OpenNetworkStreamRequestEvent";
 };
 
-// Published by Panel whenever its animated visible width changes; consumers
+// Published by side drawers whenever their animated visible width changes; consumers
 // (e.g. Overlay's controls-bar inset) cache the latest value per side.
 struct PanelLayoutEvent
 {
     static constexpr const char* EventId = "framelift.PanelLayoutEvent";
-    int side = 0; // 0 = left, 1 = right (mirrors Panel::Side)
+    int side = 0; // 0 = left, 1 = right
     float visibleWidth = 0.f;
 };
 

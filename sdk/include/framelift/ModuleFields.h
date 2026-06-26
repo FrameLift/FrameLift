@@ -1,6 +1,6 @@
 #pragma once
-#include <functional>
 #include <framelift/IModuleSettings.h>
+#include <functional>
 #include <span>
 #include <string>
 
@@ -18,6 +18,14 @@ namespace framelift
 class SettingsField
 {
 public:
+    enum class Type : unsigned char
+    {
+        Bool,
+        Int,
+        Float,
+        String
+    };
+
     SettingsField(const char* key, bool* p, const bool def) noexcept
         : key_(key), type_(Type::Bool), ptr_(p), defBool_(def)
     {
@@ -77,15 +85,74 @@ public:
         }
     }
 
-private:
-    enum class Type : unsigned char
+    [[nodiscard]] const char* Key() const noexcept
     {
-        Bool,
-        Int,
-        Float,
-        String
-    };
+        return key_;
+    }
 
+    [[nodiscard]] Type FieldType() const noexcept
+    {
+        return type_;
+    }
+
+    [[nodiscard]] int TypeId() const noexcept
+    {
+        return static_cast<int>(type_);
+    }
+
+    [[nodiscard]] std::string DefaultValue() const
+    {
+        switch (type_)
+        {
+        case Type::Bool:
+            return defBool_ ? "1" : "0";
+        case Type::Int:
+            return std::to_string(defInt_);
+        case Type::Float:
+            return std::to_string(defFloat_);
+        case Type::String:
+            return defStr_ ? defStr_ : "";
+        }
+        return {};
+    }
+
+    [[nodiscard]] std::string CurrentValue() const
+    {
+        switch (type_)
+        {
+        case Type::Bool:
+            return *static_cast<const bool*>(ptr_) ? "1" : "0";
+        case Type::Int:
+            return std::to_string(*static_cast<const int*>(ptr_));
+        case Type::Float:
+            return std::to_string(*static_cast<const float*>(ptr_));
+        case Type::String:
+            return *static_cast<const std::string*>(ptr_);
+        }
+        return {};
+    }
+
+    void SetFromString(const char* value) const
+    {
+        const std::string v = value ? value : "";
+        switch (type_)
+        {
+        case Type::Bool:
+            *static_cast<bool*>(ptr_) = (v == "1" || v == "true" || v == "on");
+            break;
+        case Type::Int:
+            *static_cast<int*>(ptr_) = std::stoi(v);
+            break;
+        case Type::Float:
+            *static_cast<float*>(ptr_) = std::stof(v);
+            break;
+        case Type::String:
+            *static_cast<std::string*>(ptr_) = v;
+            break;
+        }
+    }
+
+private:
     const char* key_;
     Type type_;
     void* ptr_;

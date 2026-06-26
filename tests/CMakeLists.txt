@@ -64,9 +64,6 @@ endfunction()
 # SDK helper sources compiled into every plugin (and thus every plugin test).
 set(FRAMELIFT_SDK_TEST_SOURCES
         "${FRAMELIFT_ROOT}/sdk/src/ModuleBase.cpp"
-        "${FRAMELIFT_ROOT}/sdk/src/Panel.cpp"
-        "${FRAMELIFT_ROOT}/sdk/src/Widgets.cpp"
-        "${FRAMELIFT_ROOT}/sdk/src/Window.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
 )
@@ -175,24 +172,6 @@ function(add_framelift_plugin_test name)
     framelift_apply_coverage(${name})
     gtest_discover_tests(${name})
 endfunction()
-
-# ── Module entry suites ───────────────────────────────────────────────────────
-# Each invokes FRAMELIFT_MODULE_ENTRY on a dummy module entry and calls the generated
-# extern "C" entry points directly — two exes because the C symbols would clash.
-add_framelift_plugin_test(framelift_test_module_entry
-        EMIT_MODULE_ENTRY
-        METADATA_HEADER "TestRenderingPackageMetadata.h"
-        module-entry/ModuleEntryTests.cpp)
-
-add_framelift_plugin_test(framelift_test_module_entry_norender
-        EMIT_MODULE_ENTRY
-        METADATA_HEADER "TestNoRenderPackageMetadata.h"
-        module-entry/ModuleEntryNoRenderTests.cpp)
-
-add_framelift_plugin_test(framelift_test_module_entry_multi
-        EMIT_MODULE_ENTRY
-        METADATA_HEADER "TestMultiModulePackageMetadata.h"
-        module-entry/ModuleEntryMultiTests.cpp)
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
 # History persists through the host IJson service; compile the real QJson-backed

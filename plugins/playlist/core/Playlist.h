@@ -3,7 +3,6 @@
 #include <framelift/core.h>
 #include <framelift/platform.h>
 #include <framelift/services.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
@@ -16,7 +15,7 @@
 // Slide-in panel (left edge) that lists and navigates the files in the current
 // directory. Automatically populated when a file is opened via OpenFile().
 // Driven via OpenFileRequestEvent — there is no service interface.
-class Playlist : public QObject, public Panel, public ModuleBase
+class Playlist : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY panelStateChanged)
@@ -26,10 +25,6 @@ class Playlist : public QObject, public Panel, public ModuleBase
     Q_PROPERTY(QVariantList entries READ QmlEntries NOTIFY playlistChanged)
 
 public:
-    Playlist() : Panel(Side::Left, 320.f, "Playlist")
-    {
-    }
-
     ~Playlist();
 
     // ── IModule ───────────────────────────────────────────────
@@ -100,6 +95,11 @@ public:
         return shuffleEnabled_;
     }
 
+    [[nodiscard]] bool IsOpen() const
+    {
+        return open_;
+    }
+
     // ── Keyboard navigation (called when panel is open) ────────────────────────
     void CursorUp();
     void CursorDown();
@@ -116,11 +116,6 @@ protected:
     std::vector<framelift::SettingsField> SettingsFields() override;
     std::vector<framelift::Keybind> Keybinds() override;
     void OnInstall(IModuleContext& ctx) override;
-    void RenderSettings(UIContext& ctx) override;
-
-    // Reset cursor to the currently playing entry when the panel opens.
-    void OnOpened() override;
-    void RenderContent(float panelW, float panelH, UIContext& ctx) override;
 
 Q_SIGNALS:
     void playlistChanged();
@@ -202,6 +197,7 @@ private:
     bool imageSlideshow_ = false;
     float slideshowDuration_ = 5.0f;
     bool autoReload_ = true;
+    bool open_ = false;
 
     std::string togglePlaylistKey_ = "L";
     std::string nextTrackKey_ = "Ctrl+Right";
@@ -216,7 +212,7 @@ private:
         IEventPump* events;
     } watchCbCtx_{};
 
-    void RenderSettingsContent(UIContext& ctx);
+    void SetOpen(bool value);
 };
 
 FRAMELIFT_MODULE_ENTRY(

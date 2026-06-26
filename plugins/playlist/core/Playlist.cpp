@@ -8,7 +8,6 @@
 #include "Version.h"
 #include <framelift/core.h>
 #include <framelift/platform.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QVariantMap>
 #include <algorithm>
@@ -153,9 +152,6 @@ void Playlist::OnInstall(IModuleContext& ctx)
         scanShared_->doneEventType = scanDoneEventType_;
     }
 
-    SetContext(&ctx);
-    SetFocusManager(ctx.GetService<FocusManager>(), this);
-
     framelift::Subscribe<OpenFileRequestEvent>(
         ctx,
         [this](const OpenFileRequestEvent& e)
@@ -192,8 +188,6 @@ void Playlist::OnInstall(IModuleContext& ctx)
         }
     );
 
-    SetupSettingsPage(ctx);
-
     if (auto* menu = ctx.GetService<ContextMenu>())
     {
         framelift::AddSection(
@@ -210,11 +204,6 @@ void Playlist::OnInstall(IModuleContext& ctx)
             }
         );
     }
-}
-
-void Playlist::RenderSettings(UIContext& ctx)
-{
-    RenderSettingsContent(ctx);
 }
 
 // ── IModule ──────────────────────────────────────────────────────────────────
@@ -724,12 +713,6 @@ void Playlist::ApplyShuffleToEntries()
 
 // ── Keyboard navigation ───────────────────────────────────────────────────────
 
-void Playlist::OnOpened()
-{
-    cursor_ = current_ >= 0 ? current_ : 0;
-    Q_EMIT playlistChanged();
-}
-
 void Playlist::CursorUp()
 {
     if (entries_.empty())
@@ -785,7 +768,7 @@ QVariantList Playlist::QmlEntries() const
 
 void Playlist::togglePanel()
 {
-    Toggle();
+    SetOpen(!open_);
     Q_EMIT panelStateChanged();
 }
 
@@ -802,109 +785,31 @@ void Playlist::publishVisibleWidth(const qreal width)
     }
 }
 
-// ── Panel content ─────────────────────────────────────────────────────────────
-
-void Playlist::RenderContent(const float panelW, float /*panelH*/, UIContext& ctx)
+void Playlist::SetOpen(const bool value)
 {
-    constexpr float rowH = 44.f;
-    constexpr float headerH = 36.f;
-
-    // ── Header ───────────────────────────────────────────────────────────────
-    // Refresh the cached counter string only when the indices actually change.
-    const char* counter = nullptr;
-    if (!entries_.empty())
+    if (open_ == value)
     {
-        if (current_ != counterCur_ || entries_.size() != counterTotal_)
-        {
-            counterCur_ = current_;
-            counterTotal_ = entries_.size();
-            counterText_ =
-                (current_ >= 0 ? std::to_string(current_ + 1) : "-") + " / " + std::to_string(entries_.size());
-        }
-        counter = counterText_.c_str();
+        return;
     }
-
-    Widgets::PanelHeader(ctx, panelW, headerH, "Playlist", IsPoppedOut(), counter);
-
-    // ─ Shuffle button (S) ──────────────────────────────────────────────────────
-    ctx.SetCursorPosY(8.f);
-    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 1));
-    if (shuffleEnabled_)
+    open_ = value;
+    if (open_)
     {
-        ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.45f, 0.20f, 0.75f, 0.90f));
-        ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.55f, 0.30f, 0.85f, 1.0f));
+        cursor_ = current_ >= 0 ? current_ : 0;
+        if (auto* focus = ctx_ ? ctx_->GetService<FocusManager>() : nullptr)
+        {
+            focus->Acquire(this);
+        }
     }
     else
     {
-        ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
-        ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.25f, 0.20f, 0.40f, 0.85f));
+        if (auto* focus = ctx_ ? ctx_->GetService<FocusManager>() : nullptr)
+        {
+            focus->Release(this);
+        }
+        if (ctx_)
+        {
+            ctx_->Publish<PanelLayoutEvent>({0, 0.f});
+        }
     }
-    if (ctx.Button("S", {22.f, 20.f}))
-    {
-        ToggleShuffle();
-    }
-    ctx.PopStyleColor(2);
-
-    // ─ Reload button (R) ───────────────────────────────────────────────────────
-    ctx.SetCursorPosY(8.f);
-    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 0));
-    ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
-    ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.25f, 0.20f, 0.40f, 0.85f));
-    if (ctx.Button("R", {22.f, 20.f}))
-    {
-        Reload();
-    }
-    ctx.PopStyleColor(2);
-
-    ctx.SetCursorPosY(headerH); // restore cursor below the header before the list
-
-    // ── Items ────────────────────────────────────────────────────────────────
-    const int clicked =
-        framelift::ListView("##plitems", rowH)
-            .Selected(cursor_)
-            .Highlighted(current_)
-            .EmptyText("No items. Open a file to begin.")
-            .Render(
-                ctx, panelW, static_cast<int>(entries_.size()),
-                [&](UIContext& c, const framelift::ListRow& row)
-                {
-                    const UI::Color4f nameCol = row.highlighted ? UI::Color4f(1.f, 0.4f, 0.4f, 1.f)
-                                                : row.selected  ? UI::Color4f(1.f, 1.f, 1.f, 1.f)
-                                                                : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
-                    row.TextLine(c, 6.f, nameCol, entries_[row.index].label.c_str());
-                    row.TextLine(c, 24.f, UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[row.index].path.c_str());
-                }
-            );
-    if (clicked >= 0)
-    {
-        cursor_ = clicked;
-        Activate(clicked);
-    }
-}
-
-// ── Plugin settings page ──────────────────────────────────────────────────────
-
-void Playlist::RenderSettingsContent(UIContext& ctx)
-{
-    Widgets::SectionHeader(ctx, "Scanning");
-    Widgets::Checkbox(
-        ctx, "Automatically reload playlist when directory changes",
-        "Re-scans the directory for new or removed files whenever the OS reports a change.", autoReload_
-    );
-    Widgets::Checkbox(ctx, "Populate playlist from subdirectories", nullptr, scanSubdirs_);
-    Widgets::SliderInt(
-        ctx, "Subdirectory scan depth", "How many directory levels deep the scanner descends.", scanMaxDepth_, 0, 10
-    );
-    Widgets::Checkbox(
-        ctx, "Allow mixed video+image playlist",
-        "When enabled, opening any file scans the directory for both video and image files.", mixedPlaylist_
-    );
-    Widgets::SectionHeader(ctx, "Slideshow");
-    Widgets::Checkbox(
-        ctx, "Image slideshow (auto-advance)", "Automatically advance to the next image after the set duration.",
-        imageSlideshow_
-    );
-    Widgets::SliderFloat(
-        ctx, "Slideshow duration", "Seconds to display each image before advancing.", slideshowDuration_, 1.0f, 60.0f
-    );
+    Q_EMIT playlistChanged();
 }

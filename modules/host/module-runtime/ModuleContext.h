@@ -13,18 +13,6 @@
 
 class Settings;
 class PackageConfig;
-class UIContext;
-
-// Host-side settings page and keybind entry (STL types OK — host-internal only).
-struct SettingsPageEntry
-{
-    std::string title;
-    void (*renderFn)(void*, UIContext&) = nullptr;
-    void (*applyFn)(void*) = nullptr;
-    void* ud = nullptr;
-    bool visible = true;
-    void (*cleanup)(void*) = nullptr;
-};
 
 struct KeybindEntryRec
 {
@@ -32,6 +20,17 @@ struct KeybindEntryRec
     std::string actionName;
     const char* (*getStr)(void*) = nullptr;
     void (*setStr)(void*, const char*) = nullptr;
+    void* ud = nullptr;
+};
+
+struct ModuleSettingRec
+{
+    std::string key;
+    int type = 0;
+    std::string desc;
+    std::string defaultValue;
+    const char* (*getValue)(void*) = nullptr;
+    void (*setValue)(void*, const char*) = nullptr;
     void* ud = nullptr;
 };
 
@@ -135,13 +134,10 @@ public:
 
     IModuleSettings& GetModuleSettings(const char* sectionName) noexcept override;
 
-    void RegisterSettingsPage(
-        const char* title, void (*renderFn)(void*, UIContext&), void (*applyFn)(void*), void* ud, bool visible,
-        void (*cleanup)(void*)
-    ) noexcept override;
+    void RegisterModuleSetting(const FrameLiftModuleSettingDesc* desc) noexcept override;
 
-    void EnumerateSettingsPages(
-        void (*visit)(const char*, void (*)(void*, UIContext&), void (*)(void*), void*, bool, void*), void* visitUd
+    void EnumerateModuleSettings(
+        void (*visit)(const FrameLiftModuleSettingDesc*, void*), void* visitUd
     ) const noexcept override;
 
     void RegisterKeybindEntry(
@@ -189,8 +185,8 @@ private:
     std::vector<ChangeCallbackRec> changeCallbacks_;
     std::vector<SubscriptionRec> subscriptions_;
     std::unordered_map<std::string, std::unique_ptr<ModuleSettingsImpl>> moduleSettings_;
-    std::vector<SettingsPageEntry> settingsPages_;
     std::vector<KeybindEntryRec> keybindEntries_;
+    std::vector<ModuleSettingRec> moduleSettingEntries_;
 
     // One catalogue entry per available package (loaded or merely present); each owns
     // the modules it carries. loadFailed (a module enabled at startup yet not loaded)

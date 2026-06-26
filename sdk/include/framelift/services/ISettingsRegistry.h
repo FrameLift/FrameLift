@@ -1,7 +1,5 @@
 #pragma once
 
-class UIContext;
-
 // POD descriptor for one registered settings field, surfaced by EnumerateSettings.
 // All pointers are valid only for the duration of the visit() call.
 //   key          — "section.name" (e.g. "audio.defaultLanguage").
@@ -16,6 +14,19 @@ struct FrameLiftSettingDesc
     const char* defaultValue;
 };
 
+// Runtime field registered by a module. `getValue` returns the current value as
+// text, and `setValue` updates and persists it through the owning module.
+struct FrameLiftModuleSettingDesc
+{
+    const char* key;
+    int type;
+    const char* desc;
+    const char* defaultValue;
+    const char* (*getValue)(void* ud);
+    void (*setValue)(void* ud, const char* value);
+    void* ud;
+};
+
 // UI registration surface: settings pages, keybind entries, and field enumeration
 // other plugins (SettingsMenu) render without compile-time knowledge of the source.
 // A capability service — discover it with ctx.GetService<ISettingsRegistry>().
@@ -24,23 +35,6 @@ class ISettingsRegistry
 public:
     static constexpr const char* InterfaceId = "framelift.ISettingsRegistry";
     virtual ~ISettingsRegistry() = default;
-
-    // renderFn(ud, ctx): called each frame while the page is visible.
-    // applyFn(ud):       called when the user presses Save.
-    // cleanup(ud):       called on plugin unload (may be nullptr).
-    // visible=false:     applyFn still runs on Save but the page is not shown.
-    virtual void RegisterSettingsPage(
-        const char* title, void (*renderFn)(void* ud, UIContext& ctx), void (*applyFn)(void* ud), void* ud,
-        bool visible = true, void (*cleanup)(void* ud) = nullptr
-    ) noexcept = 0;
-
-    virtual void EnumerateSettingsPages(
-        void (*visit)(
-            const char* title, void (*renderFn)(void*, UIContext&), void (*applyFn)(void*), void* ud, bool visible,
-            void* visitUd
-        ),
-        void* visitUd
-    ) const noexcept = 0;
 
     // getStr(ud): returns a const char* to the current binding string (plugin-owned).
     // setStr(ud, val): updates the binding string in the plugin.
@@ -61,5 +55,11 @@ public:
     // its strings are valid only for the duration of each visit() call.
     virtual void EnumerateSettings(
         void (*visit)(const FrameLiftSettingDesc* desc, void* visitUd), void* visitUd
+    ) const noexcept = 0;
+
+    virtual void RegisterModuleSetting(const FrameLiftModuleSettingDesc* desc) noexcept = 0;
+
+    virtual void EnumerateModuleSettings(
+        void (*visit)(const FrameLiftModuleSettingDesc* desc, void* visitUd), void* visitUd
     ) const noexcept = 0;
 };

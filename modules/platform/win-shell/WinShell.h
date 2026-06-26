@@ -7,7 +7,6 @@
 
 class IModuleContext;
 class ISettingsStore;
-class UIContext;
 class ToastNotifier;
 
 // Windows-only host integration: raises a Qt-backed system notification when a
@@ -23,22 +22,21 @@ public:
     WinShell(const WinShell&) = delete;
     WinShell& operator=(const WinShell&) = delete;
 
-    // Load the notifications toggle and register the "Notifications" settings page.
+    // Load the notifications toggle and register its data-driven setting.
     void Connect(IModuleContext& ctx);
 
     // Called from App::DrainMediaEvents for every media event. Updates the snapshot
     // and raises an error notification on EndFile/Error.
     void OnMediaEvent(const MediaEvent& e);
 
-    // Settings page hooks (registered via ISettingsRegistry).
-    void RenderSettings(UIContext& ctx);
-    void ApplySettings();
-
 private:
+    void SaveSettings();
+
     std::unique_ptr<ToastNotifier> toast_;
     ISettingsStore* store_ = nullptr;
 
     bool notifyEnabled_ = true; // mirror of settings key "winshell.notifications"
+    std::string notifyValue_;
 
     // Latest opened file (from FileOpenedEvent), used as the toast body text.
     std::string currentFile_;

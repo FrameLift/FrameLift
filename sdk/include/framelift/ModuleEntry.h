@@ -23,7 +23,7 @@
 //
 // Single-module package — the common case:
 //
-//   FRAMELIFT_MODULE_ENTRY(MyPanel, {
+//   FRAMELIFT_MODULE_ENTRY(MyModule, {
 //       .renderOrder = 50,
 //   })
 //
@@ -38,7 +38,7 @@
 //
 //   FRAMELIFT_PACKAGE_BEGIN()
 //     FRAMELIFT_MODULE("framelift.overlay.core",     OverlayCore,     { .renderOrder = 0 })
-//     FRAMELIFT_MODULE("framelift.overlay.settings", OverlaySettings, { .render = false })
+//     FRAMELIFT_MODULE("framelift.overlay.settings", OverlaySettings, { .qml = false })
 //   FRAMELIFT_PACKAGE_END()
 
 #ifndef FRAMELIFT_PACKAGE_METADATA_JSON
@@ -90,7 +90,7 @@ IModule* CreateModule()
 }
 
 // One row per module the package carries: the module id (the dispatch key) plus the
-// type-erased factory and renderable cast for that module's concrete entry type. A
+// type-erased factory and QObject view-model cast for that module's concrete entry type. A
 // single-module package leaves id null and relies on the count==1 fallback below.
 struct ModuleTableEntry
 {

@@ -4,6 +4,8 @@
 #include <framelift/Abi.h>
 #include <framelift/AppEvent.h>
 #include <framelift/ContextHelpers.h>
+#include <framelift/ContextMenu.h>
+#include <framelift/ContextMenuHelpers.h>
 #include <framelift/Events.h>
 #include <framelift/FocusManager.h>
 #include <framelift/Guard.h>
@@ -12,7 +14,6 @@
 #include <framelift/IModule.h>
 #include <framelift/IModuleContext.h>
 #include <framelift/IModuleSettings.h>
-#include <framelift/IRenderable.h>
 #include <framelift/Log.h>
 #include <framelift/ModuleABI.h>
 #include <framelift/ModuleBase.h>

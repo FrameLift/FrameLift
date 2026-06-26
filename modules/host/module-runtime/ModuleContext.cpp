@@ -309,23 +309,45 @@ IModuleSettings& ModuleContext::GetModuleSettings(const char* sectionName) noexc
     return *ptr;
 }
 
-// ── Settings pages ────────────────────────────────────────────────────────────
+// ── Module settings ───────────────────────────────────────────────────────────
 
-void ModuleContext::RegisterSettingsPage(
-    const char* title, void (*renderFn)(void*, UIContext&), void (*applyFn)(void*), void* ud, bool visible,
-    void (*cleanup)(void*)
-) noexcept
+void ModuleContext::RegisterModuleSetting(const FrameLiftModuleSettingDesc* desc) noexcept
 {
-    settingsPages_.push_back({title, renderFn, applyFn, ud, visible, cleanup});
+    if (!desc || !desc->key || !desc->getValue || !desc->setValue)
+    {
+        return;
+    }
+    moduleSettingEntries_.push_back(
+        {desc->key,
+         desc->type,
+         desc->desc ? desc->desc : "",
+         desc->defaultValue ? desc->defaultValue : "",
+         desc->getValue,
+         desc->setValue,
+         desc->ud}
+    );
 }
 
-void ModuleContext::EnumerateSettingsPages(
-    void (*visit)(const char*, void (*)(void*, UIContext&), void (*)(void*), void*, bool, void*), void* visitUd
+void ModuleContext::EnumerateModuleSettings(
+    void (*visit)(const FrameLiftModuleSettingDesc*, void*), void* visitUd
 ) const noexcept
 {
-    for (const auto& p : settingsPages_)
+    if (!visit)
     {
-        visit(p.title.c_str(), p.renderFn, p.applyFn, p.ud, p.visible, visitUd);
+        return;
+    }
+    for (const auto& rec : moduleSettingEntries_)
+    {
+        const FrameLiftModuleSettingDesc desc{
+            rec.key.c_str(),
+            rec.type,
+            rec.desc.c_str(),
+            rec.defaultValue.c_str(),
+            rec.getValue,
+            rec.setValue,
+            rec.ud
+        };
+        visit(&desc, visitUd);
     }
 }
 
@@ -413,14 +435,6 @@ void ModuleContext::ClearSubscriptions()
     }
     changeCallbacks_.clear();
 
-    for (const auto& p : settingsPages_)
-    {
-        if (p.cleanup)
-        {
-            p.cleanup(p.ud);
-        }
-    }
-    settingsPages_.clear();
-
     keybindEntries_.clear();
+    moduleSettingEntries_.clear();
 }

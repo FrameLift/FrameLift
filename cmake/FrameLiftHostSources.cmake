@@ -70,12 +70,9 @@ set(_FRAMELIFT_HOST_READ_AHEAD_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/read-ahead/ReadAheadCache.h"
 )
 
-# Qt migration (Phase 1): the Dear ImGui host-UI translation units — Theme.cpp,
-# ThemeController.cpp, UIContextImpl.cpp — are dropped from the build (no ImGui, no
-# plugins/renderables this phase; App no longer drives a UI pass). Their headers stay so
-# the still-compiled, ImGui-free helpers remain reachable: ThemeUtil.h (color helpers used
-# by FFmpegSettingsMapping.h) and ThemeSettings.h / UiSettings.h (the settings structs read
-# by Settings.cpp). Revisit (gut vs delete) when the UI is rebuilt in QML.
+# The legacy Dear ImGui host UI translation units were removed during the Qt/QML
+# migration. Keep only the ImGui-free settings/theme headers still consumed by
+# Qt-era settings code.
 set(_FRAMELIFT_HOST_UI_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/ui/ThemeSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/ui/ThemeUtil.h"

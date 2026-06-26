@@ -2,22 +2,14 @@
 
 #include <framelift/core.h>
 #include <framelift/platform.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <memory>
 #include <string>
 
-// Combined idle-screen + HUD overlay.
-//
-//  • When the player is idle – draws the 4-corner gradient welcome screen.
-//  • When playing           – on ShowCommand(), fades in a command label
-//                             (top-left) and a seek bar (center), then fades out.
-//
-// Uses GetBackgroundDrawList() for the idle gradient so panels still render
-// on top, and GetForegroundDrawList() for the HUD so it sits above panels.
-// Route every MediaEvent through HandleMediaEvent().
-class Overlay final : public QObject, public SafeRenderable, public ModuleBase
+// Combined idle-screen + HUD overlay. QML owns presentation; C++ exposes playback
+// state, commands, and panel/settings insets.
+class Overlay final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool idle READ IsIdle NOTIFY playbackStateChanged)
@@ -82,8 +74,6 @@ public:
     bool HandleEvent(const AppEvent& e) override;
     void HandleMediaEvent(const MediaEvent& event) override;
 
-    void OnRender(UIContext& ctx) override;
-
 protected:
     const char* ModuleName() const override
     {
@@ -99,13 +89,8 @@ Q_SIGNALS:
     void layoutChanged();
 
 private:
-    // Draw the seek bar and playback controls centred at the bottom of the window.
-    void RenderControlsBar(float w, float h, UIContext& ctx);
-
     IMediaPlayback* playback_ = nullptr; // transport (pause/seek), from ctx_ in OnInstall()
     IMediaProperties* props_ = nullptr;  // property observation, from ctx_ in OnInstall()
-    uintptr_t iconTex_ = 0;              // GPU handle for the icon texture (0 = not loaded)
-    bool iconLoadAttempted_ = false;     // prevents repeated load attempts after failure
 
     bool isIdle_ = true; // true when no file is loaded (player is in idle state)
     bool isPaused_ = false;
@@ -119,13 +104,6 @@ private:
     bool settingsOpen_ = false;
 
     std::string commandLabel_;
-    // HUD command label: held 2.0s after ShowCommand(), then fades out over 0.4s.
-    framelift::Animation hud_{0.4f /*fade*/, 2.0f /*hold*/};
-    // Controls bar: shown on mouse activity, held 1.5s, then fades out over 0.25s. While
-    // either animation is running its Value(ctx) requests the next frame, so the loop
-    // animates exactly as long as the fade lasts and then sleeps (no host-side keep-alive).
-    framelift::Animation bar_{0.25f /*fade*/, 1.5f /*hold*/};
-    bool isDraggingSeek_ = false; // true while the user drags the seek bar thumb
 };
 
 FRAMELIFT_MODULE_ENTRY(

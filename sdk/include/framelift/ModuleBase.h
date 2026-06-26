@@ -1,14 +1,13 @@
 #pragma once
+#include <cctype>
 #include <framelift/IModule.h>
 #include <framelift/IModuleContext.h>
 #include <framelift/IModuleSettings.h>
 #include <framelift/ModuleFields.h>
-#include <cctype>
 #include <string>
 #include <vector>
 
 class Hotkeys;
-class UIContext;
 
 // Convenience base class for app modules. IModule itself is intentionally tiny;
 // ModuleBase opts into the common host dispatch surfaces and guards/forwards
@@ -73,10 +72,6 @@ protected:
     {
     }
 
-    virtual void RenderSettings(UIContext& ctx)
-    {
-    }
-
     virtual void SaveSettings(IModuleSettings& ps);
     virtual void LoadKeybinds(IModuleSettings& kps);
     virtual void SaveKeybinds(IModuleSettings& kps);
@@ -102,11 +97,23 @@ protected:
         return SettingsSection() + ".keybinds";
     }
 
-    void SetupSettingsPage(IModuleContext& ctx, bool visible = true);
-
     IModuleContext* ctx_ = nullptr;
 
 private:
+    struct RegisteredSettingField
+    {
+        ModuleBase* owner = nullptr;
+        framelift::SettingsField* field = nullptr;
+        std::string key;
+        std::string desc;
+        std::string defaultValue;
+        std::string currentValue;
+    };
+
+    void RegisterSettingsFields(IModuleContext& ctx);
+    void PersistSettings();
+
     std::vector<framelift::SettingsField> fields_;
     std::vector<framelift::Keybind> keybinds_;
+    std::vector<RegisteredSettingField> registeredFields_;
 };

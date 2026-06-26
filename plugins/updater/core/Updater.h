@@ -1,7 +1,6 @@
 #pragma once
 
 #include <framelift/core.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <atomic>
@@ -27,7 +26,7 @@ enum class UpdaterState : std::uint8_t
 };
 
 // Call ApplyUpdate() just before app exit to swap all binaries into place.
-class Updater final : public QObject, public ModuleBase, public SafeRenderable
+class Updater final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(QString statusText READ StatusText NOTIFY changed)
@@ -75,8 +74,6 @@ public:
     // Write a replacement batch script and launch it; call just before app exit.
     void ApplyUpdate() const;
 
-    void OnRender(UIContext& ctx) override;
-
 protected:
     const char* ModuleName() const override
     {
@@ -85,7 +82,6 @@ protected:
 
     std::vector<framelift::SettingsField> SettingsFields() override;
     void OnInstall(IModuleContext& ctx) override;
-    void RenderSettings(UIContext& ctx) override;
 
 Q_SIGNALS:
     void changed();

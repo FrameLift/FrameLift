@@ -3,7 +3,6 @@
 #include <framelift/core.h>
 #include <framelift/platform.h>
 #include <framelift/services.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <string>
@@ -19,7 +18,7 @@
 //    fetch + decryption scheme — nothing else in the app needs to change.
 //
 // UI: an "Open Network Stream…" context-menu entry opens a modal with a URL field.
-class RemoteStream final : public QObject, public SafeRenderable, public ModuleBase
+class RemoteStream final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool dialogOpen READ DialogOpen NOTIFY dialogChanged)
@@ -32,9 +31,6 @@ public:
     // Returns "" on failure. Public so it can be unit-tested; this is the
     // replaceable custom-decryption hook.
     [[nodiscard]] std::string ResolveStream(const std::string& url) noexcept;
-
-    // ── IRenderable (via SafeRenderable) ──────────────────────────────────────
-    void OnRender(UIContext& ctx) override;
 
     [[nodiscard]] bool DialogOpen() const
     {

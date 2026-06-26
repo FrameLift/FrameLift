@@ -50,7 +50,7 @@ TEST(SettingsMenuTest, SeedsThemeFieldsFromContextOnInstall)
     EXPECT_EQ(sm.SettingString("theme.accentColor"), "#112233");
 }
 
-TEST(SettingsMenuTest, RegistersVisibleThemePage)
+TEST(SettingsMenuTest, ExposesThemePageToQml)
 {
     Settings settings;
     const TempFile ini;
@@ -59,23 +59,7 @@ TEST(SettingsMenuTest, RegistersVisibleThemePage)
     SettingsMenu sm;
     sm.Install(ctx);
 
-    struct Finder
-    {
-        bool found = false;
-    };
-
-    Finder f;
-    ctx.EnumerateSettingsPages(
-        [](const char* title, void (*)(void*, UIContext&), void (*)(void*), void*, bool visible, void* ud)
-        {
-            if (visible && title && std::strcmp(title, "Theme") == 0)
-            {
-                static_cast<Finder*>(ud)->found = true;
-            }
-        },
-        &f);
-
-    EXPECT_TRUE(f.found);
+    EXPECT_TRUE(sm.QmlPages().contains("theme"));
 }
 
 TEST(SettingsMenuTest, OpenSetsVisible)

@@ -2,7 +2,6 @@
 
 #include <framelift/core.h>
 #include <framelift/services.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
@@ -16,7 +15,7 @@ class QTimer;
 // host's in-memory ring buffer via the ILogBuffer service and shows them in a
 // scrolling, filterable window. Performance measurements are emitted by the host
 // as "[perf] …" log lines; the "Perf only" toggle isolates them.
-class LogViewer final : public QObject, public SafeRenderable, public ModuleBase
+class LogViewer final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY changed)
@@ -74,8 +73,6 @@ public:
             Toggle();
         }
     }
-
-    void OnRender(UIContext& ctx) override;
 
 protected:
     std::vector<framelift::Keybind> Keybinds() override;

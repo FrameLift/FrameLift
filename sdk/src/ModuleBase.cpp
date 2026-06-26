@@ -1,17 +1,14 @@
+#include <cstring>
 #include <framelift/ContextHelpers.h>
 #include <framelift/Guard.h>
 #include <framelift/HotkeyHelpers.h>
 #include <framelift/ModuleBase.h>
 #include <framelift/services/ISettingsRegistry.h>
 #include <framelift/services/ISettingsStore.h>
-#include <framelift/ui/UIContext.h>
-#include <cstring>
 
 void ModuleBase::Install(IModuleContext& ctx) noexcept
 {
     ctx_ = &ctx;
-    // Note: ImGui context is now managed by the host-side UIContextImpl.
-    // No SetImGuiContext call needed here.
 
     framelift::Guard(
         ModuleName(), "Install",
@@ -43,6 +40,7 @@ void ModuleBase::Install(IModuleContext& ctx) noexcept
                 }
             }
 
+            RegisterSettingsFields(ctx);
             RegisterKeybinds(ctx);
             OnInstall(ctx);
         }
@@ -188,44 +186,64 @@ void ModuleBase::OnBindHotkeys(Hotkeys& keys)
     }
 }
 
-void ModuleBase::SetupSettingsPage(IModuleContext& ctx, const bool visible)
+void ModuleBase::RegisterSettingsFields(IModuleContext& ctx)
 {
     auto* registry = ctx.GetService<ISettingsRegistry>();
     if (!registry)
     {
         return;
     }
-    registry->RegisterSettingsPage(
-        ModuleName(),
-        [](void* ud, UIContext& uiCtx)
-        {
-            framelift::Guard(
-                "settings page render",
-                [&]
-                {
-                    static_cast<ModuleBase*>(ud)->RenderSettings(uiCtx);
-                }
-            );
-        },
-        [](void* ud)
-        {
-            framelift::Guard(
-                "settings page apply",
-                [&]
-                {
-                    auto* fp = static_cast<ModuleBase*>(ud);
-                    auto* store = fp->ctx_ ? fp->ctx_->GetService<ISettingsStore>() : nullptr;
-                    if (!store)
+    registeredFields_.clear();
+    registeredFields_.reserve(fields_.size());
+    for (auto& field : fields_)
+    {
+        auto& rec = registeredFields_.emplace_back();
+        rec.owner = this;
+        rec.field = &field;
+        rec.key = SettingsSection() + "." + field.Key();
+        rec.defaultValue = field.DefaultValue();
+
+        FrameLiftModuleSettingDesc desc{
+            rec.key.c_str(),
+            field.TypeId(),
+            rec.desc.c_str(),
+            rec.defaultValue.c_str(),
+            [](void* ud) -> const char*
+            {
+                auto* rec = static_cast<RegisteredSettingField*>(ud);
+                rec->currentValue = rec->field->CurrentValue();
+                return rec->currentValue.c_str();
+            },
+            [](void* ud, const char* value)
+            {
+                framelift::Guard(
+                    "module setting update",
+                    [&]
                     {
-                        return;
+                        auto* rec = static_cast<RegisteredSettingField*>(ud);
+                        rec->field->SetFromString(value);
+                        rec->owner->PersistSettings();
                     }
-                    IModuleSettings& ps = store->GetModuleSettings(fp->SettingsSection().c_str());
-                    fp->SaveSettings(ps);
-                    IModuleSettings& kps = store->GetModuleSettings(fp->KeybindsSection().c_str());
-                    fp->SaveKeybinds(kps);
-                }
-            );
-        },
-        this, visible, nullptr
-    );
+                );
+            },
+            &rec
+        };
+        registry->RegisterModuleSetting(&desc);
+    }
+}
+
+void ModuleBase::PersistSettings()
+{
+    auto* store = ctx_ ? ctx_->GetService<ISettingsStore>() : nullptr;
+    if (!store)
+    {
+        return;
+    }
+    IModuleSettings& ps = store->GetModuleSettings(SettingsSection().c_str());
+    SaveSettings(ps);
+    ps.Save();
+
+    IModuleSettings& kps = store->GetModuleSettings(KeybindsSection().c_str());
+    SaveKeybinds(kps);
+    kps.Save();
 }

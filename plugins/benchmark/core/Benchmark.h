@@ -1,7 +1,6 @@
 #pragma once
 
 #include <framelift/core.h>
-#include <framelift/ui.h>
 
 #include "SysStats.h"
 
@@ -51,7 +50,7 @@ struct Stat
 // results once playback reaches the configured length. Frame timing is sampled
 // every frame; the polled process/player stats refresh once per second; idle
 // state is pushed via OnMediaEvent.
-class Benchmark final : public QObject, public SafeRenderable, public ModuleBase
+class Benchmark final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY changed)
@@ -68,10 +67,6 @@ public:
     void Toggle()
     {
         open_ = !open_;
-        if (open_)
-        {
-            justSeeded_ = true; // seed the window beside the app on this open
-        }
         Q_EMIT changed();
     }
 
@@ -105,13 +100,10 @@ public:
 
     void HandleMediaEvent(const MediaEvent& event) override;
 
-    void OnRender(UIContext& ctx) override;
-
 protected:
     std::vector<framelift::SettingsField> SettingsFields() override;
     std::vector<framelift::Keybind> Keybinds() override;
     void OnInstall(IModuleContext& ctx) override;
-    void RenderSettings(UIContext& ctx) override;
 
 Q_SIGNALS:
     void changed();
@@ -122,7 +114,6 @@ private:
     void ResetStats();
 
     bool open_ = false;
-    bool justSeeded_ = false; // seed window pos/size beside the app on the next open frame
     std::string toggleBenchmarkKey_ = "F10";
 
     SysSampler sampler_;

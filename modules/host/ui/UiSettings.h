@@ -13,5 +13,5 @@ struct UiSettings
 inline void RegisterUiSettings(SettingsRegistry& reg, UiSettings& s)
 {
     reg.AddFloat("ui.panelWidth", s.panelWidth, "Width in pixels of the side panels (playlist, etc.).");
-    reg.AddFloat("ui.slideSpeed", s.slideSpeed, "Panel slide-in/out animation speed.");
+    reg.AddFloat("ui.slideSpeed", s.slideSpeed, "Side drawer slide-in/out animation speed.");
 }

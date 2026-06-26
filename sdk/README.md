@@ -67,7 +67,7 @@ protected:
 };
 
 FRAMELIFT_MODULE_ENTRY(MyPlugin, {
-    .render = false,
+    .qml = false,
 })
 ```
 
@@ -134,7 +134,7 @@ each entry type against its module id (the ids must match the JSON):
 ```cpp
 FRAMELIFT_PACKAGE_BEGIN()
   FRAMELIFT_MODULE("example.my_plugin.core",  MyPluginCore,  { .renderOrder = 50 })
-  FRAMELIFT_MODULE("example.my_plugin.tools", MyPluginTools, { .render = false })
+  FRAMELIFT_MODULE("example.my_plugin.tools", MyPluginTools, { .qml = false })
 FRAMELIFT_PACKAGE_END()
 ```
 
@@ -160,19 +160,19 @@ It takes the module entry type and a small runtime
 modules, features, dependencies, and platforms come from the JSON metadata compiled by CMake:
 
 ```cpp
-FRAMELIFT_MODULE_ENTRY(MyPanel, {
-    .renderOrder = 50,                    // draw order; lower draws first / further back
+FRAMELIFT_MODULE_ENTRY(MyModule, {
+    .renderOrder = 50,                    // QML layer order; lower draws first / further back
 })
 ```
 
-`render` defaults to `true`, so a rendering module never mentions it — but a type
-that does not implement `IRenderable` fails to compile until it states
-`.render = false` (or derives `IRenderable`). `renderOrder` is ignored when
-rendering is disabled.
+QML is enabled by default, so the entry type must inherit `QObject` and the plugin
+target must pass `QML_ENTRY` to `add_framelift_plugin`. Service-only modules opt out
+with `.qml = false`; in that case `renderOrder` is ignored.
 
-The macro bakes a `framelift_module_info()` export carrying the generated package/module metadata and
-the ABI declared in JSON. The host reads it, rejects incompatible ABI versions, resolves package
-dependencies, and only then creates the module object.
+The macro emits a Qt plugin factory implementing `IPackage`. The host reads the
+embedded JSON metadata without instantiating the package, rejects incompatible ABI
+versions, resolves package dependencies, and only then creates module objects and
+their QObject/QML surfaces.
 
 ### Declarative settings & keybinds
 
@@ -183,7 +183,7 @@ hooks consume them — persistence, the Settings → Keybinds page row, and the
 hotkey binding all come from one declaration:
 
 ```cpp
-class MyPanel : public ModuleBase
+class MyModule : public QObject, public ModuleBase
 {
 protected:
     std::vector<framelift::SettingsField> SettingsFields() override
@@ -193,8 +193,8 @@ protected:
 
     std::vector<framelift::Keybind> Keybinds() override
     {
-        return {{"Toggle panel", "togglePanel", &toggleKey_, "P",
-                 [this] { Toggle(); }}};
+        return {{"Toggle surface", "toggleSurface", &toggleKey_, "P",
+                 [this] { ToggleSurface(); }}};
     }
 
 private:
@@ -239,13 +239,12 @@ void HandleMediaEvent(const MediaEvent& e) override
 The host↔plugin boundary is `noexcept` — an exception crossing it would be
 undefined behavior. The SDK scaffolding catches plugin exceptions on the plugin
 side of the boundary (`framelift::Guard` in `<framelift/Guard.h>`): a throw from a
-`ModuleBase` hook (`OnInstall`, `HandleEvent`, `HandleMediaEvent`, …), a
-`SafeRenderable`/`Panel` render, a helper-registered lambda (`framelift::Subscribe`,
-`framelift::Bind`, `framelift::AddItem`, settings pages), or the plugin constructor is
+`ModuleBase` hook (`OnInstall`, `HandleEvent`, `HandleMediaEvent`, ...), a
+helper-registered lambda (`framelift::Subscribe`, `framelift::Bind`, `framelift::AddItem`),
+or the plugin constructor is
 logged via `Log::Error` and swallowed with a safe fallback — the plugin
-misbehaves loudly instead of crashing the host. Only code that implements
-`IModule`/`IRenderable` raw, bypassing the scaffolding, keeps
-terminate-on-throw semantics.
+misbehaves loudly instead of crashing the host. Only code that implements `IModule`
+raw, bypassing the scaffolding, keeps terminate-on-throw semantics.
 
 ### Native backend access (escape hatches)
 
@@ -262,15 +261,19 @@ no longer exposed to plugins; the host owns all video/UI rendering.)
 The ABI is a single integer, `FRAMELIFT_ABI_VERSION` in `<framelift/ModuleABI.h>` — not a
 `major.minor.patch` tuple. Each plugin package declares its load-time contract with
 `"abi": N` in `[Plugin].Plugin.json`; CMake validates that value against the SDK headers and
-embeds it into `framelift_module_info()`. Before touching a vtable the host loads a plugin only
-when `plugin.abiVersion == host.abiVersion` — an exact match, because host and plugins are built
-in lockstep, so a mismatch means a stale binary to rebuild rather than a version to negotiate.
+embeds it into the Qt package metadata. Before touching a vtable the host loads a plugin only when
+`plugin.abiVersion == host.abiVersion` — an exact match, because host and plugins are built in
+lockstep, so a mismatch means a stale binary to rebuild rather than a version to negotiate.
 
-Bump the version only on a break to the core handshake: a `framelift_*` export, the
-`FrameLiftPackageInfo`/`FrameLiftModuleInfo` layout, a host-*called* interface (`IModule`,
-`IRenderable`), or the bootstrap surface of `IModuleContext`. New host capabilities are **not**
+Bump the version only on a break to the core handshake: the Qt `IPackage` factory,
+package metadata layout, a host-*called* interface (`IModule`), or the bootstrap
+surface of `IModuleContext`. New host capabilities are **not**
 breaks — they ship as new service interfaces a plugin discovers with `ctx.GetService<T>()`, so
 they never bump the version.
+
+The legacy Dear ImGui SDK surface was removed during the Qt/QML migration without
+changing the ABI integer, because FrameLift host and packages are rebuilt together
+from this tree.
 
 `find_package(FrameLiftSdk)` is gated on the ABI version (`ExactVersion`), so a mismatched SDK
 fails at configure time. Settings, logging, and all cross-plugin data are exchanged through the

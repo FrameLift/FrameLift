@@ -2,7 +2,6 @@
 
 #include <framelift/core.h>
 #include <framelift/services.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
@@ -15,7 +14,7 @@
 
 // Slide-in panel (right edge) showing recently played files with resume positions.
 // Entries are persisted to a plain-text file in the user's pref directory.
-class History : public QObject, public Panel, public ModuleBase, public IHistory
+class History : public QObject, public ModuleBase, public IHistory
 {
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY panelStateChanged)
@@ -23,8 +22,6 @@ class History : public QObject, public Panel, public ModuleBase, public IHistory
     Q_PROPERTY(QVariantList entries READ QmlEntries NOTIFY historyChanged)
 
 public:
-    History();
-
     // ── IModule ───────────────────────────────────────────────────────────────
     bool HandleKeyDownEvent(const AppEvent& e) override;
 
@@ -58,6 +55,11 @@ public:
     Q_INVOKABLE void activateIndex(int filteredIndex);
     Q_INVOKABLE void publishVisibleWidth(qreal width);
 
+    [[nodiscard]] bool IsOpen() const
+    {
+        return open_;
+    }
+
     // IHistory
     int GetMostRecent(char* buf, int cap) const noexcept override;
 
@@ -87,15 +89,6 @@ protected:
     std::vector<framelift::SettingsField> SettingsFields() override;
     std::vector<framelift::Keybind> Keybinds() override;
     void OnInstall(IModuleContext& ctx) override;
-    void RenderSettings(UIContext& ctx) override;
-
-    // Reset cursor to the top entry when the panel opens.
-    void OnOpened() override
-    {
-        cursor_ = filteredIndices_.empty() ? -1 : 0;
-    }
-
-    void RenderContent(float panelW, float panelH, UIContext& ctx) override;
 
 Q_SIGNALS:
     void historyChanged();
@@ -128,6 +121,7 @@ private:
     // ── Plugin-owned settings ─────────────────────────────────────────────────
     int maxEntries_ = 200;
     std::string toggleHistoryKey_ = "H";
+    bool open_ = false;
 
     std::deque<Entry> entries_;
     std::vector<int> filteredIndices_; // indices into entries_ matching searchQuery_
@@ -151,6 +145,8 @@ private:
 
     mutable std::atomic<unsigned> saveSeq_{0};
     std::shared_ptr<SaveCoordinator> saveCoord_ = std::make_shared<SaveCoordinator>();
+
+    void SetOpen(bool value);
 };
 
 FRAMELIFT_MODULE_ENTRY(

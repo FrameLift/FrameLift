@@ -2,7 +2,6 @@
 
 #include <framelift/core.h>
 #include <framelift/platform.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
@@ -11,13 +10,12 @@
 
 // Right-click context menu for the main video area, shipped as a plugin.
 //
-// Owns the menu container, renders it (renderOrder 30), and registers itself as
+// Owns the menu container, exposes it to QML, and registers itself as
 // the ABI `ContextMenu` service that other plugins extend via AddSection(). The
 // core playback actions (Open File, Play/Pause, Fullscreen, Audio, Subtitles,
-// Quit) are assembled from host services on the first frame — by then every other
-// plugin has installed and registered its section, so the final order is
+// Quit) live in QML. Peer plugin sections are assembled lazily, so the final order is
 // host core items → plugin sections → Quit, matching the former host-built menu.
-class ContextMenuModule final : public QObject, public ModuleBase, public SafeRenderable, public ContextMenu
+class ContextMenuModule final : public QObject, public ModuleBase, public ContextMenu
 {
     Q_OBJECT
     Q_PROPERTY(QVariantList extraItems READ QmlExtraItems NOTIFY menuChanged)
@@ -34,10 +32,6 @@ public:
     ) noexcept override;
 
     void AddSeparator() noexcept override;
-
-    void AddDynamicSubMenuRaw(
-        const char* label, void (*builder)(void*, UIContext&), void* ud, void (*cleanup)(void*)
-    ) noexcept override;
 
     void Clear() noexcept override;
 
@@ -96,7 +90,6 @@ protected:
     void OnInstall(IModuleContext& ctx) override;
     void HandleMediaEvent(const MediaEvent& e) override;
     void HandleShutdown() override;
-    void OnRender(UIContext& ctx) override;
 
 private:
     struct Item
@@ -106,8 +99,6 @@ private:
         void (*action)(void*) = nullptr;
         void* ud = nullptr;
         void (*cleanup)(void*) = nullptr;
-        void (*dynamicBuilder)(void*, UIContext&) = nullptr;
-        void* builderUd = nullptr;
         std::vector<Item> children; // for static sub-menus (not used by public API)
     };
 
@@ -122,7 +113,6 @@ private:
     // the current position — called once during Assemble(), between the core
     // items and Quit. Internal: not on the ContextMenu ABI.
     void EmitSections();
-    void RenderItems(UIContext& ctx, std::vector<Item>& items);
 
     // First-frame assembly: host core items, then plugin sections, then Quit.
     void Assemble();

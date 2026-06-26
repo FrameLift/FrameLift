@@ -1,7 +1,6 @@
 #pragma once
 
 #include <framelift/core.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QObject>
 #include <chrono>
@@ -16,7 +15,7 @@ class QTimer;
 // dark semi-transparent panel anchored to the top-left corner.
 // Polled stats refresh once per second; push-observed stats (pause, position)
 // update every frame via OnMediaEvent.
-class DebugOverlay final : public QObject, public SafeRenderable, public ModuleBase
+class DebugOverlay final : public QObject, public ModuleBase
 {
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY changed)
@@ -50,8 +49,6 @@ public:
     }
 
     void HandleMediaEvent(const MediaEvent& event) override;
-
-    void OnRender(UIContext& ctx) override;
 
 protected:
     std::vector<framelift::Keybind> Keybinds() override;

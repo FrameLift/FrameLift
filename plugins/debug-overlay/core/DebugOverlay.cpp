@@ -1,17 +1,12 @@
 #include "DebugOverlay.h"
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
-#include <algorithm>
 #include <chrono>
-#include <cstdio>
+#include <cstdint>
 #include <string>
 
 #include "Version.h"
 #include <framelift/platform.h>
-
-#include <cinttypes>
-
-// ── ModuleBase hooks ───────────────────────────────────────────────────────
 
 std::vector<framelift::Keybind> DebugOverlay::Keybinds()
 {
@@ -23,9 +18,8 @@ std::vector<framelift::Keybind> DebugOverlay::Keybinds()
     };
 }
 
-void DebugOverlay::OnInstall(IModuleContext& ctx)
+void DebugOverlay::OnInstall(IModuleContext&)
 {
-    SetupSettingsPage(ctx, false);
     refreshTimer_ = new QTimer(this);
     refreshTimer_->setInterval(1000);
     connect(
@@ -41,8 +35,6 @@ void DebugOverlay::OnInstall(IModuleContext& ctx)
     );
     refreshTimer_->start();
 }
-
-// ── Media events ──────────────────────────────────────────────────────────────
 
 void DebugOverlay::HandleMediaEvent(const MediaEvent& event)
 {
@@ -83,7 +75,6 @@ void DebugOverlay::HandleMediaEvent(const MediaEvent& event)
     if (prop == PlayerProperty::Duration && type == PropertyType::Double)
     {
         duration_ = value.dbl > 0.0 ? value.dbl : 0.0;
-        return;
     }
 }
 
@@ -99,8 +90,6 @@ QString DebugOverlay::Summary() const
     return rows.join('\n');
 }
 
-// ── Async property refresh ────────────────────────────────────────────────────
-
 void DebugOverlay::RequestRefresh()
 {
     auto* player = ctx_ ? ctx_->GetService<IMediaProperties>() : nullptr;
@@ -109,7 +98,6 @@ void DebugOverlay::RequestRefresh()
         return;
     }
 
-    // Helper types: one-shot callbacks that write a value into a member field.
     struct StrField
     {
         std::string* f;
@@ -159,134 +147,4 @@ void DebugOverlay::RequestRefresh()
     player->GetInt64Async(PlayerProperty::CacheUsed, i64Cb, new I64Field{&cacheUsed_, 0});
     player->GetInt64Async(PlayerProperty::CacheHits, i64Cb, new I64Field{&cacheHits_, 0});
     player->GetInt64Async(PlayerProperty::CacheMisses, i64Cb, new I64Field{&cacheMisses_, 0});
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-static std::string FormatTime(const double sec)
-{
-    const int t = std::max(0, static_cast<int>(sec));
-    const int s = t % 60;
-    const int m = t / 60 % 60;
-    const int h = t / 3600;
-    char buf[16];
-    if (h > 0)
-    {
-        std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, s);
-    }
-    else
-    {
-        std::snprintf(buf, sizeof(buf), "%d:%02d", m, s);
-    }
-    return buf;
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-
-void DebugOverlay::OnRender(UIContext& ctx)
-{
-    if (!open_)
-    {
-        return;
-    }
-
-    // Live readouts only advance while the video is playing — media events (new frame,
-    // position) already wake the demand-driven loop then. Paused/idle, the polled stats
-    // (dropped/mistimed/cache) can't change either, so the panel is static: don't request
-    // a redraw and let the loop sleep instead of spinning at ~60 fps over nothing.
-    if (!isPaused_ && !isIdle_)
-    {
-        ctx.RequestRedraw();
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    const double elapsed = std::chrono::duration<double>(now - lastRefresh_).count();
-    if (elapsed >= refreshInterval)
-    {
-        lastRefresh_ = now;
-        RequestRefresh();
-    }
-
-    constexpr float kPadX = 10.f;
-    constexpr float kPadY = 10.f;
-    constexpr float kW = 480.f;
-
-    ctx.SetNextWindowPos({kPadX, kPadY});
-    ctx.SetNextWindowSize({kW, 0.f});
-
-    const framelift::ScopedWindow window(
-        ctx, "##debugOverlay", framelift::WindowPreset::Hud, nullptr,
-        {.rounding = 4.f, .padding = {10.f, 8.f}, .hasBg = true, .bg = {0.04f, 0.04f, 0.04f, 0.88f}, .bgAlpha = 0.82f}
-    );
-    if (window)
-    {
-        constexpr UI::Color4f kLabel = {0.65f, 0.65f, 0.65f, 1.f};
-        constexpr UI::Color4f kValue = {1.f, 1.f, 0.f, 1.f};
-
-        char buf[512];
-
-        const auto row = [&](const char* label, const char* value)
-        {
-            ctx.TextColored(kLabel, label);
-            ctx.SameLine();
-            ctx.TextColored(kValue, value);
-        };
-
-        row("File: ", filePath_.empty() ? "(idle)" : filePath_.c_str());
-
-        if (!title_.empty() && title_ != filePath_)
-        {
-            row("Title: ", title_.c_str());
-        }
-
-        std::snprintf(buf, sizeof(buf), "%s / %s", FormatTime(timePos_).c_str(), FormatTime(duration_).c_str());
-        row("Position: ", buf);
-
-        if (videoW_ > 0 && videoH_ > 0)
-        {
-            std::snprintf(buf, sizeof(buf), "%" PRId64 "x%" PRId64, videoW_, videoH_);
-            row("Video dimensions: ", buf);
-        }
-
-        row("HwDec: ", hwDec_.c_str());
-
-        // Active graphics backend (OpenGL / Vulkan) — reflects any fallback, not just
-        // the requested setting. Constant for the session, so query lazily once.
-        if (gfxBackend_.empty())
-        {
-            if (auto* surface = ctx_ ? ctx_->GetService<IGraphicsSurface>() : nullptr)
-            {
-                gfxBackend_ = surface->GetGraphicsBackendName();
-            }
-        }
-        if (!gfxBackend_.empty())
-        {
-            row("Graphics backend: ", gfxBackend_.c_str());
-        }
-
-        std::snprintf(
-            buf, sizeof(buf), "Used: %" PRId64 " KB  (hits %" PRId64 " / miss %" PRId64 ")", cacheUsed_, cacheHits_,
-            cacheMisses_
-        );
-        row("Cache: ", buf);
-
-        std::snprintf(buf, sizeof(buf), "%" PRId64, dropped_);
-        row("Dropped frames: ", buf);
-
-        std::snprintf(buf, sizeof(buf), "%" PRId64, mistimed_);
-        row("Mistimed frames: ", buf);
-
-        std::snprintf(buf, sizeof(buf), "%" PRId64, decodeErrors_);
-        row("Decode errors: ", buf);
-
-        std::snprintf(buf, sizeof(buf), "%.0f%%", volume_);
-        row("Volume: ", buf);
-
-        const UI::Vec2 winSize = ctx.GetMainWindowSize();
-        std::snprintf(buf, sizeof(buf), "%dx%d", static_cast<int>(winSize.x), static_cast<int>(winSize.y));
-        row("Window dimensions: ", buf);
-
-        const char* status = isIdle_ ? "Idle" : (isPaused_ ? "Paused" : "Playing");
-        row("Playback status: ", status);
-    }
 }

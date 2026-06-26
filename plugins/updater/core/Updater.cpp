@@ -262,8 +262,6 @@ std::vector<framelift::SettingsField> Updater::SettingsFields()
 
 void Updater::OnInstall(IModuleContext& ctx)
 {
-    SetupSettingsPage(ctx);
-
     json_ = ctx.GetService<IJson>();
     stateTimer_ = new QTimer(this);
     stateTimer_->setInterval(250);
@@ -311,41 +309,6 @@ QString Updater::StatusText() const
         return QStringLiteral("Update check failed");
     }
     return {};
-}
-
-void Updater::RenderSettings(UIContext& ctx)
-{
-    Widgets::SectionHeader(ctx, "Version");
-    ctx.Text("Version:  " FRAMELIFT_VERSION_STRING);
-    Widgets::SectionHeader(ctx, "Automatic updates");
-    Widgets::Checkbox(ctx, "Enable auto-update", "Automatically check for and download updates.", autoUpdate_);
-    Widgets::SectionHeader(ctx, "Status");
-    auto status = "";
-    switch (state_.load())
-    {
-    case UpdaterState::Idle:
-    case UpdaterState::UpToDate:
-        status = "Up to date";
-        break;
-    case UpdaterState::Checking:
-        status = "Checking for updates...";
-        break;
-    case UpdaterState::Downloading:
-        status = "Downloading update...";
-        break;
-    case UpdaterState::ReadyToInstall:
-        status = "Ready to install \xe2\x80\x94 applies on exit";
-        break;
-    case UpdaterState::Failed:
-        status = "Update check failed";
-        break;
-    }
-    ctx.Text(status);
-    ctx.Dummy({0.f, 6.f});
-    if (ctx.Button("Check Now", {90.f, 0.f}))
-    {
-        CheckNow();
-    }
 }
 
 // ── IModule ──────────────────────────────────────────────────────────────────
@@ -555,59 +518,4 @@ void Updater::ApplyUpdate() const
     }
 
     Log::Info("[Updater] Update applied — {} file(s) replaced; launch FrameLift to run the update", applied);
-}
-
-// ── IRenderable ───────────────────────────────────────────────────────────────
-
-void Updater::OnRender(UIContext& ctx)
-{
-    const auto s = state_.load();
-    if (s == UpdaterState::Idle || s == UpdaterState::UpToDate)
-    {
-        return;
-    }
-
-    // Checking/Downloading are driven by a background thread that flips state_ without an
-    // event; keep repainting while in a transient state so the loop notices when it settles.
-    if (s == UpdaterState::Checking || s == UpdaterState::Downloading)
-    {
-        ctx.RequestRedraw();
-    }
-
-    const char* msg;
-    switch (s)
-    {
-    case UpdaterState::Checking:
-        msg = "Checking for updates...";
-        break;
-    case UpdaterState::Downloading:
-        msg = "Downloading update...";
-        break;
-    case UpdaterState::ReadyToInstall:
-        msg = "Update ready - installs on exit";
-        break;
-    case UpdaterState::Failed:
-        msg = "Update check failed";
-        break;
-    default:
-        return;
-    }
-
-    constexpr float w = 260.f;
-    constexpr float h = 22.f;
-    constexpr float padX = 10.f;
-    constexpr float padY = 4.f;
-    constexpr float margin = 8.f;
-
-    const float x = ctx.GetMainWindowSize().x - w - margin;
-    constexpr float y = margin;
-
-    auto& dl = ctx.GetForegroundDrawList();
-
-    const UI::Color32 bg = s == UpdaterState::ReadyToInstall ? UI::MakeColor32(35, 120, 45, 210)
-                           : s == UpdaterState::Failed       ? UI::MakeColor32(140, 35, 35, 210)
-                                                             : UI::MakeColor32(25, 25, 75, 210);
-
-    dl.AddRectFilled({x, y}, {x + w, y + h}, bg, 4.f);
-    dl.AddText({x + padX, y + padY}, UI::MakeColor32(230, 230, 230, 255), msg);
 }

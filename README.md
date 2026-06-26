@@ -79,8 +79,8 @@ enabled or disabled independently from the Settings → Plugins page (persisted 
   `[Plugin].Plugin.json` and `[Module].Module.json` files, including `fileVersion`, package `version`,
   and `abi`. CMake validates those files and embeds the resulting POD metadata into the
   plugin DLL; runtime does not read JSON sidecars.
-- **Small surface.** Plugins include only the umbrella headers `<framelift/core.h>`, `<framelift/ui.h>`,
-  `<framelift/services.h>`, and `<framelift/platform.h>` — never host internals.
+- **Small surface.** Plugins include only the umbrella headers `<framelift/core.h>`,
+  `<framelift/services.h>`, and `<framelift/platform.h>` plus Qt/QML headers — never host internals.
 - **Cross-plugin communication.** Plugins never link against each other; they interact through the
   module context via pub/sub events and capability services discovered with `ctx.GetService<T>()` —
   `IHistory`, the settings split (`ISettingsStore`/`ISettingsRegistry`), and platform interface
@@ -95,13 +95,11 @@ repository for worked example plugins to copy from.
 FrameLift/
 ├── sdk/                    # Public plugin SDK — everything a plugin author needs
 │   ├── include/framelift/  # Public headers (include path: sdk/include)
-│   │   ├── core.h          # Umbrella: module lifecycle, context, ABI, events, hotkeys
-│   │   ├── ui.h            # Umbrella: IRenderable, Panel, UIContext, widgets
+│   │   ├── core.h          # Umbrella: module lifecycle, package entry, context, ABI, events, hotkeys
 │   │   ├── services.h      # Umbrella: cross-plugin service interfaces
 │   │   ├── platform.h      # Umbrella: media playback + window interface families, IDirWatcher, IFileDialog
 │   │   ├── services/       # Per-plugin service interfaces (IHistory, …)
 │   │   ├── platform/       # Platform service interfaces
-│   │   └── ui/             # UI helper headers (Panel, UIContext, Widgets, …)
 │   └── src/                # SDK helper sources compiled into each plugin
 │       # (worked examples live in the separate FrameLift-Examples repo)
 │

@@ -7,7 +7,6 @@
 #include "Version.h"
 #include <cstring>
 #include <framelift/core.h>
-#include <framelift/ui.h>
 
 #include <QtCore/QVariantMap>
 #include <algorithm>
@@ -61,12 +60,6 @@ void History::FormatEntry(Entry& e)
     e.meta = e.playbackDate + "  \xc2\xb7  " + posBuf;
 }
 
-// ── Constructor ───────────────────────────────────────────────────────────────
-
-History::History() : Panel(Side::Right, 320.f, "History")
-{
-}
-
 // ── ModuleBase hooks ───────────────────────────────────────────────────────
 
 std::vector<framelift::SettingsField> History::SettingsFields()
@@ -86,11 +79,6 @@ std::vector<framelift::Keybind> History::Keybinds()
 
 void History::OnInstall(IModuleContext& ctx)
 {
-    SetupSettingsPage(ctx);
-
-    SetContext(&ctx);
-    SetFocusManager(ctx.GetService<FocusManager>(), this);
-
     // Discover the host JSON service before SetStoragePath so Load() can read.
     json_ = ctx.GetService<IJson>();
 
@@ -133,18 +121,12 @@ void History::OnInstall(IModuleContext& ctx)
                     m, "History", "toggleHistory",
                     [this]
                     {
-                        Toggle();
+                        togglePanel();
                     }
                 );
             }
         );
     }
-}
-
-void History::RenderSettings(UIContext& ctx)
-{
-    Widgets::SectionHeader(ctx, "Recent files");
-    Widgets::SliderInt(ctx, "Max history entries", "Maximum number of recent files to remember.", maxEntries_, 10, 500);
 }
 
 // ── IModule ──────────────────────────────────────────────────────────────────
@@ -520,7 +502,7 @@ QVariantList History::QmlEntries() const
 
 void History::togglePanel()
 {
-    Toggle();
+    SetOpen(!open_);
     Q_EMIT panelStateChanged();
 }
 
@@ -543,74 +525,31 @@ void History::publishVisibleWidth(const qreal width)
     }
 }
 
-// ── Panel content ─────────────────────────────────────────────────────────────
-
-void History::RenderContent(const float panelW, float /*panelH*/, UIContext& ctx)
+void History::SetOpen(const bool value)
 {
-    constexpr float rowH = 58.f;
-    constexpr float padding = 12.f;
-    constexpr float headerH = 36.f;
-    constexpr float searchH = 32.f;
-
-    // ── Header ───────────────────────────────────────────────────────────────
-    std::string counter;
-    if (!entries_.empty())
+    if (open_ == value)
     {
-        counter = searchQuery_.empty()
-                      ? std::to_string(entries_.size())
-                      : std::to_string(filteredIndices_.size()) + " / " + std::to_string(entries_.size());
+        return;
     }
-    Widgets::PanelHeader(
-        ctx, panelW, headerH, "History", IsPoppedOut(), counter.empty() ? nullptr : counter.c_str(), 60.f
-    );
-
-    // ─ Clear button (X) ────────────────────────────────────────────────────────
-    ctx.SetCursorPosY(8.f);
-    ctx.SetCursorPosX(Widgets::HeaderButtonX(panelW, 0));
-    ctx.PushStyleColor(UI::ColorSlot::Button, UI::Color4f(0.15f, 0.10f, 0.25f, 0.70f));
-    ctx.PushStyleColor(UI::ColorSlot::ButtonHovered, UI::Color4f(0.45f, 0.15f, 0.20f, 0.85f));
-    if (ctx.Button("X", {22.f, 20.f}))
+    open_ = value;
+    if (open_)
     {
-        Clear();
-    }
-    ctx.PopStyleColor(2);
-
-    ctx.SetCursorPosY(headerH); // restore cursor below the header before the search box
-
-    // ── Search ────────────────────────────────────────────────────────────────
-    {
-        ctx.SetCursorPosY(headerH + 6.f);
-        ctx.SetCursorPosX(padding);
-        ctx.SetNextItemWidth(panelW - padding * 2.f);
-        if (ctx.InputTextWithHint("##search", "Search...", searchQuery_))
+        cursor_ = filteredIndices_.empty() ? -1 : 0;
+        if (auto* focus = ctx_ ? ctx_->GetService<FocusManager>() : nullptr)
         {
-            RebuildFilter();
-            cursor_ = filteredIndices_.empty() ? -1 : 0;
+            focus->Acquire(this);
         }
-        ctx.SetCursorPosY(headerH + searchH);
     }
-
-    // ── Items ────────────────────────────────────────────────────────────────
-    const char* emptyMsg = entries_.empty() ? "No history yet." : "No results.";
-    const int clicked =
-        framelift::ListView("##histItems", rowH)
-            .Selected(cursor_)
-            .EmptyText(emptyMsg)
-            .Render(
-                ctx, panelW, static_cast<int>(filteredIndices_.size()),
-                [&](UIContext& c, const framelift::ListRow& row)
-                {
-                    const int ei = filteredIndices_[row.index];
-                    const UI::Color4f nameCol =
-                        row.selected ? UI::Color4f(1.f, 1.f, 1.f, 1.f) : UI::Color4f(0.82f, 0.78f, 0.9f, 1.f);
-                    row.TextLine(c, 6.f, nameCol, entries_[ei].label.c_str());
-                    row.TextLine(c, 24.f, UI::Color4f(0.45f, 0.42f, 0.55f, 1.f), entries_[ei].dir.c_str());
-                    row.TextLine(c, 40.f, UI::Color4f(0.35f, 0.32f, 0.45f, 1.f), entries_[ei].meta.c_str());
-                }
-            );
-    if (clicked >= 0)
+    else
     {
-        cursor_ = clicked;
-        ConfirmCursor();
+        if (auto* focus = ctx_ ? ctx_->GetService<FocusManager>() : nullptr)
+        {
+            focus->Release(this);
+        }
+        if (ctx_)
+        {
+            ctx_->Publish<PanelLayoutEvent>({1, 0.f});
+        }
     }
+    Q_EMIT historyChanged();
 }

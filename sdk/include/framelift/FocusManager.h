@@ -4,7 +4,7 @@ class IModule;
 
 // Tracks which module currently owns keyboard input.
 // Modules are pushed onto a stack - the most recently acquired sits at the
-// back and receives keyboard events exclusively. Panels acquire focus on open
+// back and receives keyboard events exclusively. QML-backed surfaces acquire focus on open
 // and release on close; modal states (e.g. keybind capture) do the same.
 // Pure abstract - implemented by the host (src/FocusManagerImpl).
 class FocusManager

@@ -6,7 +6,6 @@
 #include <framelift/IModuleSettings.h>
 #include <framelift/services/ISettingsRegistry.h>
 #include <framelift/services/ISettingsStore.h>
-#include <framelift/ui/UIContext.h>
 
 #include <filesystem>
 
@@ -63,21 +62,29 @@ void WinShell::Connect(IModuleContext& ctx)
         }
     );
 
-    // Register the "Notifications" settings page (status + toggle + register button).
+    // Register the settings toggle for the QML settings surface.
     if (auto* reg = ctx.GetService<ISettingsRegistry>())
     {
-        reg->RegisterSettingsPage(
-            "Notifications",
-            [](void* ud, UIContext& c)
+        const FrameLiftModuleSettingDesc desc{
+            "winshell.notifications",
+            0,
+            "Show playback-error notifications.",
+            "1",
+            [](void* ud) -> const char*
             {
-                static_cast<WinShell*>(ud)->RenderSettings(c);
+                auto* self = static_cast<WinShell*>(ud);
+                self->notifyValue_ = self->notifyEnabled_ ? "1" : "0";
+                return self->notifyValue_.c_str();
             },
-            [](void* ud)
+            [](void* ud, const char* value)
             {
-                static_cast<WinShell*>(ud)->ApplySettings();
+                auto* self = static_cast<WinShell*>(ud);
+                self->notifyEnabled_ = value && (std::string(value) == "1" || std::string(value) == "true");
+                self->SaveSettings();
             },
-            this, /*visible=*/true, /*cleanup=*/nullptr
-        );
+            this
+        };
+        reg->RegisterModuleSetting(&desc);
     }
 }
 
@@ -114,27 +121,7 @@ void WinShell::OnMediaEvent(const MediaEvent& e)
     }
 }
 
-void WinShell::RenderSettings(UIContext& ctx)
-{
-    ctx.Checkbox("Show playback-error notifications", &notifyEnabled_);
-
-    ctx.Separator();
-
-    if (toast_ && toast_->IsAvailable())
-    {
-        ctx.Text("Notifications are available through Qt.");
-        if (ctx.Button("Send test notification"))
-        {
-            toast_->Notify("FrameLift", "This is a test notification.");
-        }
-    }
-    else
-    {
-        ctx.TextWrapped("System notifications are not available in this session.");
-    }
-}
-
-void WinShell::ApplySettings()
+void WinShell::SaveSettings()
 {
     if (store_)
     {

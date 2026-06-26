@@ -7,9 +7,6 @@
 
 namespace
 {
-// Shared id for OpenPopup / BeginPopupModal — they must match.
-constexpr const char* kModalId = "Open Network Stream";
-
 // Reference XOR cipher for the bundled flsec:// sample. NOT real security — it
 // exists only to demonstrate the decryption hook. A replacement plugin swaps
 // this (and the fetch) for an actual stream format and cipher.
@@ -151,51 +148,4 @@ void RemoteStream::cancel()
     requestOpen_ = false;
     modalOpen_ = false;
     Q_EMIT dialogChanged();
-}
-
-void RemoteStream::OnRender(UIContext& ctx)
-{
-    if (requestOpen_)
-    {
-        ctx.OpenPopup(kModalId);
-        requestOpen_ = false;
-    }
-
-    constexpr float kWidth = 460.f;
-    const UI::Vec2 winSize = ctx.GetMainWindowSize();
-    ctx.SetNextWindowSize({kWidth, 0.f}, UI::Cond::FirstUseEver);
-    ctx.SetNextWindowPos({(winSize.x - kWidth) * 0.5f, winSize.y * 0.3f}, UI::Cond::FirstUseEver);
-
-    modalOpen_ = ctx.BeginPopupModal(kModalId);
-    if (!modalOpen_)
-    {
-        return;
-    }
-
-    ctx.Text("Stream URL (http://, https://, rtsp://, flsec://):");
-    ctx.Dummy({0.f, 4.f});
-    ctx.SetNextItemWidth(kWidth - 16.f);
-    ctx.InputTextWithHint("##url", "https://example.com/stream.m3u8", urlInput_);
-
-    ctx.Dummy({0.f, 8.f});
-    const bool open = ctx.Button("Open", {120.f, 0.f});
-    ctx.SameLine();
-    const bool cancel = ctx.Button("Cancel", {120.f, 0.f});
-
-    if (open && !urlInput_.empty())
-    {
-        // RemoteStream's own subscription picks this up and loads it; routing
-        // through the event keeps the entry point uniform with file drops/dialogs.
-        ctx_->Publish<OpenFileRequestEvent>({urlInput_.c_str(), false});
-        urlInput_.clear();
-        ctx.CloseCurrentPopup();
-        modalOpen_ = false;
-    }
-    else if (cancel)
-    {
-        ctx.CloseCurrentPopup();
-        modalOpen_ = false;
-    }
-
-    ctx.EndPopup();
 }
