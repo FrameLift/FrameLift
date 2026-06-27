@@ -67,6 +67,7 @@ vcpkg_installed/
 Testing/
 .cache/
 
+.vscode
 .idea
 
 # Vendored dependencies — fetched by CI, not committed
