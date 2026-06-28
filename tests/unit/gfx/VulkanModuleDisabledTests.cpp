@@ -1,5 +1,3 @@
-#include "Settings.h"
-#include "GraphicsSettings.h"
 #include "VideoDecodeMode.h"
 #include "GraphicsApi.h"
 
@@ -7,10 +5,12 @@
 
 #include <algorithm>
 
-TEST(VulkanModuleDisabledTests, GraphicsSettingsNormalizeToOpenGl)
+TEST(VulkanModuleDisabledTests, BackendSelectionNormalizesToOpenGl)
 {
-    Settings settings;
-    EXPECT_EQ(settings.Get<GraphicsSettings>().backend, "gl");
+    // With Vulkan compiled out, FL_BACKEND values that request Vulkan (or auto) collapse to
+    // OpenGL, and the canonical name is always "gl".
+    EXPECT_EQ(GraphicsApiFromString(""), GraphicsApi::OpenGL);
+    EXPECT_EQ(GraphicsApiFromString("auto"), GraphicsApi::OpenGL);
     EXPECT_EQ(GraphicsApiFromString("vulkan"), GraphicsApi::OpenGL);
     EXPECT_EQ(GraphicsApiFromString("vk"), GraphicsApi::OpenGL);
     EXPECT_STREQ(GraphicsApiName(GraphicsApi::Vulkan), "gl");

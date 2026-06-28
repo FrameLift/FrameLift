@@ -135,7 +135,24 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
     // Created hidden (shown on the first painted frame in RunEventLoop) so the user never
     // sees an unpainted black framebuffer while settings/plugins load. The GL RHI and the
     // "basic" render loop are forced in main() before any QQuickWindow exists.
+    //
+    // Apply geometry/title/flags BEFORE ConfigureQtWindow: the Vulkan backend realizes the
+    // native platform window early there (it needs a live surface for supportsPresent), and
+    // a window created without its final geometry/flags loses its decorations. QQuickWindow
+    // normally sizes its content item when the native window is exposed, but plugin roots
+    // are created before show(), so seed the same geometry now instead of constructing every
+    // QML surface at 0x0 for the first frame.
+    const auto applyWindowProps = [&](QQuickWindow* w)
+    {
+        w->setFlags(Qt::Window);
+        w->setTitle(QString::fromUtf8(title_.c_str()));
+        w->resize(width, height);
+        w->setColor(Qt::black);
+        w->contentItem()->setSize(QSizeF(width, height));
+    };
+
     window_ = new QQuickWindow();
+    applyWindowProps(window_);
     try
     {
         backend_->ConfigureQtWindow(window_);
@@ -155,15 +172,9 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
         QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
         backend_ = CreateGraphicsBackend(GraphicsApi::OpenGL);
         window_ = new QQuickWindow();
+        applyWindowProps(window_);
         backend_->ConfigureQtWindow(window_);
     }
-    window_->setTitle(QString::fromUtf8(title_.c_str()));
-    window_->resize(width, height);
-    window_->setColor(Qt::black);
-    // QQuickWindow normally sizes its content item when the native window is
-    // exposed. Plugin roots are created before show(), so seed the same geometry
-    // now instead of constructing every QML surface at 0x0 for the first frame.
-    window_->contentItem()->setSize(QSizeF(width, height));
 
     videoItem_ = new VideoItem(window_->contentItem());
     videoItem_->setZ(0);

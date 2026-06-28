@@ -8,7 +8,6 @@
 #include "PlaybackSettings.h" // media/ffmpeg
 #include "SubtitleSettings.h" // media/ffmpeg
 #include "CacheSettings.h"    // host/read-ahead
-#include "GraphicsSettings.h" // gfx/graphics-core
 #include "ThemeSettings.h"    // host/ui
 #include "UiSettings.h"       // host/ui
 
@@ -55,7 +54,6 @@ Settings::Settings()
     Add<PlaybackSettings>();
     Add<SubtitleSettings>();
     Add<CacheSettings>();
-    Add<GraphicsSettings>();
     Add<UiSettings>();
     Add<FilesSettings>();
     Add<AudioSettings>();
@@ -70,7 +68,6 @@ void Settings::ResetToDefaults()
     Get<PlaybackSettings>() = {};
     Get<SubtitleSettings>() = {};
     Get<CacheSettings>() = {};
-    Get<GraphicsSettings>() = {};
     Get<UiSettings>() = {};
     Get<FilesSettings>() = {};
     Get<AudioSettings>() = {};
@@ -87,7 +84,6 @@ SettingsRegistry BuildSettingsRegistry(Settings& s)
     RegisterPlaybackSettings(reg, s.Get<PlaybackSettings>());
     RegisterSubtitleSettings(reg, s.Get<SubtitleSettings>());
     RegisterCacheSettings(reg, s.Get<CacheSettings>());
-    RegisterGraphicsSettings(reg, s.Get<GraphicsSettings>());
     RegisterUiSettings(reg, s.Get<UiSettings>());
     RegisterFilesSettings(reg, s.Get<FilesSettings>());
     RegisterAudioSettings(reg, s.Get<AudioSettings>());

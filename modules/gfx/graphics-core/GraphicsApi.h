@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdlib>
 #include <string_view>
 
 #ifndef FRAMELIFT_MODULE_GRAPHICS_VULKAN
@@ -15,8 +16,8 @@ enum class GraphicsApi
     Vulkan,
 };
 
-// Parse a backend name (case-insensitive) from the settings file. Empty/auto
-// selects auto mode when Vulkan is built; unknown values fall back to OpenGL.
+// Parse a backend name (case-insensitive). Empty/auto selects auto mode when Vulkan is
+// built; unknown values fall back to OpenGL.
 inline GraphicsApi GraphicsApiFromString(std::string_view name)
 {
     // Tiny case-insensitive compare against the known names; the set is fixed and small.
@@ -84,4 +85,14 @@ inline const char* GraphicsApiName(GraphicsApi api)
         break;
     }
     return "gl";
+}
+
+// The backend is selected from the FL_BACKEND environment variable (auto/vulkan/gl), read
+// once at startup before the window — and the Qt platform — exist. There is no on-disk
+// graphics setting: switching backend means relaunching, e.g. `FL_BACKEND=gl framelift`.
+// Unset/empty ⇒ auto.
+inline GraphicsApi GraphicsApiFromEnv()
+{
+    const char* env = std::getenv("FL_BACKEND");
+    return GraphicsApiFromString(env ? env : "");
 }

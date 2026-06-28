@@ -11,7 +11,6 @@ add_framelift_plugin(SettingsMenu
         "${CMAKE_CURRENT_SOURCE_DIR}/AudioSettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/CacheSettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/FilesSettings.qml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/GraphicsSettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/KeybindSettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/PlaybackSettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/SubtitleSettings.qml"

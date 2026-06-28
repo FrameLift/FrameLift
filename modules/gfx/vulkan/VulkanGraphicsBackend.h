@@ -28,6 +28,7 @@ typedef struct VmaAllocator_T* VmaAllocator;
 
 class QQuickWindow;
 class QVulkanInstance;
+class QWindow;
 
 // FrameLift owns the Vulkan instance/device so the enabled feature chain and queues
 // are suitable for FFmpeg zero-copy. Qt Quick adopts those objects and remains the
@@ -135,7 +136,7 @@ public:
 
 private:
     void CreateInstance();
-    void CreateDevice(QQuickWindow* window);
+    void CreateDevice(QWindow* presentProbe);
     void DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties);
     void RefreshQtResources(QQuickWindow* window);
     void FlushFrameSignals();

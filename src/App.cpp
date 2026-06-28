@@ -3,7 +3,6 @@
 #include "CoreSettings.h"
 #include "FFmpegPlayer.h"
 #include "GraphicsApi.h"
-#include "GraphicsSettings.h"
 #include "IGraphicsBackend.h"
 #include "LogBuffer.h"
 #include "QtAppWindow.h"
@@ -75,22 +74,23 @@ void MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& plug
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
-App::App(const char* title, const int width, const int height, const int cliArgc, const char* const* cliArgv)
+App::App(
+    const char* title, const int width, const int height, const GraphicsApi graphicsApi, const int cliArgc,
+    const char* const* cliArgv
+)
     : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>())
 {
     FRAMELIFT_PERF_START("app-start");
 
     ffmpeg_ = player_.get();
 
-    // Resolve the pref dir up front: the graphics backend is fixed at window-creation
-    // time, so graphics.backend must be loaded from settings before InitPlatform.
     char prefBuf[512] = {};
     (void)QtAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
     const std::string prefDir = prefBuf;
     const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
     pluginsPath_ = prefDir.empty() ? "plugins.ini" : prefDir + "plugins.ini";
 
-    InitPlatform(title, width, height, prefDir, settingsPath);
+    InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath);
     InitServices(prefDir, settingsPath);
 
     // The ContextMenu plugin owns the right-click menu: it registers the ContextMenu
@@ -125,7 +125,8 @@ App::~App()
 // ── Construction phases ─────────────────────────────────────────────────────────
 
 void App::InitPlatform(
-    const char* title, const int width, const int height, const std::string& prefDir, const std::string& settingsPath
+    const char* title, const int width, const int height, const GraphicsApi graphicsApi, const std::string& prefDir,
+    const std::string& settingsPath
 )
 {
     // App owns the Settings instance; load it before any module sees it.
@@ -138,9 +139,7 @@ void App::InitPlatform(
                                        : (std::filesystem::path(pluginsPath_).parent_path() / "packages.ini").string();
     MigrateLegacyPluginConfig(legacyPath, pluginConfig_);
 
-    appWindow_ = std::make_unique<QtAppWindow>(
-        title, width, height, GraphicsApiFromString(settings_.Get<GraphicsSettings>().backend)
-    );
+    appWindow_ = std::make_unique<QtAppWindow>(title, width, height, graphicsApi);
 
     (void)appWindow_->SetWindowIcon(":/framelift/assets/Icon.png");
 

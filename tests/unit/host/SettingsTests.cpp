@@ -4,7 +4,6 @@
 #include "AudioSettings.h"
 #include "CacheSettings.h"
 #include "CoreSettings.h"
-#include "GraphicsSettings.h"
 #include "PlaybackSettings.h"
 #include "SubtitleSettings.h"
 #include "ThemeSettings.h"

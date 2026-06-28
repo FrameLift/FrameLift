@@ -122,7 +122,6 @@ set(_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES
 set(_FRAMELIFT_HOST_GRAPHICS_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsApi.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsBackendFactory.cpp"
-        "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/IGraphicsBackend.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/IVideoRenderer.h"
 )

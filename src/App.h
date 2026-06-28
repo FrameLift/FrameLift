@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FileDialogServiceImpl.h"
+#include "GraphicsApi.h"
 #include "HotkeysImpl.h"
 #include "JsonServiceImpl.h"
 #include "ModuleContext.h"
@@ -27,7 +28,8 @@ class WinShell;
 class App
 {
 public:
-    App(const char* title, int width, int height, int cliArgc = 0, const char* const* cliArgv = nullptr);
+    App(const char* title, int width, int height, GraphicsApi graphicsApi, int cliArgc = 0,
+        const char* const* cliArgv = nullptr);
     ~App();
 
     int Run();
@@ -42,7 +44,8 @@ private:
 
     // ── Construction phases (run in order from the ctor) ──
     void InitPlatform(
-        const char* title, int width, int height, const std::string& prefDir, const std::string& settingsPath
+        const char* title, int width, int height, GraphicsApi graphicsApi, const std::string& prefDir,
+        const std::string& settingsPath
     );
     void InitServices(const std::string& prefDir, const std::string& settingsPath);
     void LoadPlugins();

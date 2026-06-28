@@ -10,7 +10,9 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QVersionNumber>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QSurface>
 #include <QtGui/QVulkanInstance>
+#include <QtGui/QWindow>
 #include <QtQuick/QQuickGraphicsConfiguration>
 #include <QtQuick/QQuickGraphicsDevice>
 #include <QtQuick/QQuickWindow>
@@ -143,17 +145,19 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
     window->setVulkanInstance(qtInstance_.get());
 
     // CreateDevice() queries QVulkanInstance::supportsPresent(), which requires a live
-    // platform window — without one it warns and returns false for every queue family,
-    // so no device qualifies and we wrongly fall back to OpenGL. The window is otherwise
-    // created lazily at show() time, so force the native (Vulkan-capable) surface here.
-    // create() only allocates the platform window; the scene graph/RHI is still brought
-    // up later, so setGraphicsDevice() below remains valid.
-    if (!window->handle())
-    {
-        window->create();
-    }
+    // platform window — without one it warns and returns false for every queue family, so
+    // no device qualifies and we wrongly fall back to OpenGL. Realizing the *real* window
+    // here (an earlier approach) costs it its decorations on some platforms, since it is no
+    // longer created lazily at show() time the way the OpenGL path does. So probe present
+    // support on a throwaway Vulkan-surface window and leave the real window untouched; it
+    // is created normally at show(). setGraphicsDevice() below targets the QQuickWindow
+    // object, not a platform window, so it stays valid.
+    QWindow probe;
+    probe.setSurfaceType(QSurface::VulkanSurface);
+    probe.setVulkanInstance(qtInstance_.get());
+    probe.create();
 
-    CreateDevice(window);
+    CreateDevice(&probe);
     window->setGraphicsDevice(
         QQuickGraphicsDevice::fromDeviceObjects(
             physicalDevice_, device_, static_cast<int>(graphicsQueueFamily_), static_cast<int>(qtGraphicsQueueIndex_)
@@ -170,7 +174,7 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
     configured_ = true;
 }
 
-void VulkanGraphicsBackend::CreateDevice(QQuickWindow* window)
+void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
 {
     uint32_t physicalCount = 0;
     vkEnumeratePhysicalDevices(instance_, &physicalCount, nullptr);
@@ -205,7 +209,8 @@ void VulkanGraphicsBackend::CreateDevice(QQuickWindow* window)
         int graphicsFamily = -1;
         for (uint32_t i = 0; i < queueCount; ++i)
         {
-            if ((queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && qtInstance_->supportsPresent(candidate, i, window))
+            if ((queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+                qtInstance_->supportsPresent(candidate, i, presentProbe))
             {
                 graphicsFamily = static_cast<int>(i);
                 break;

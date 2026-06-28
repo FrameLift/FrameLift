@@ -52,10 +52,6 @@ const char* SettingsPageQmlForSection(const std::string& id)
     {
         return "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/FilesSettings.qml";
     }
-    if (id == "graphics")
-    {
-        return "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/GraphicsSettings.qml";
-    }
     if (id == "keybinds")
     {
         return "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/KeybindSettings.qml";
