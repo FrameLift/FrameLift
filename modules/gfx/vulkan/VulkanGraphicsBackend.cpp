@@ -114,22 +114,6 @@ void VulkanGraphicsBackend::CreateInstance()
         AddUniqueExtension(instanceExtNames_, "VK_KHR_win32_surface");
     }
 
-    uint32_t availableCount = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, nullptr);
-    std::vector<VkExtensionProperties> available(availableCount);
-    vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, available.data());
-
-    std::vector<const char*> extensions;
-    extensions.reserve(instanceExtNames_.size());
-    for (const std::string& extension : instanceExtNames_)
-    {
-        if (!HasExtension(available, extension.c_str()))
-        {
-            throw std::runtime_error("Required Qt Vulkan instance extension is unavailable: " + extension);
-        }
-        extensions.push_back(extension.c_str());
-    }
-
     qtInstance_ = std::make_unique<QVulkanInstance>();
     QByteArrayList qtExtensions;
     qtExtensions.reserve(static_cast<qsizetype>(instanceExtNames_.size()));
@@ -146,16 +130,6 @@ void VulkanGraphicsBackend::CreateInstance()
         ThrowVk("Qt Vulkan instance creation failed", qtInstance_->errorCode());
     }
     instance_ = qtInstance_->vkInstance();
-    if (platform.contains("wayland", Qt::CaseInsensitive))
-    {
-        const bool rawWaylandSurface =
-            vkGetInstanceProcAddr(instance_, "vkCreateWaylandSurfaceKHR") != nullptr;
-        const bool qtWaylandSurface = qtInstance_->getInstanceProcAddr("vkCreateWaylandSurfaceKHR") != nullptr;
-        Log::Debug(
-            "Vulkan: Wayland surface proc lookup raw={}, qt={}", rawWaylandSurface ? "available" : "missing",
-            qtWaylandSurface ? "available" : "missing"
-        );
-    }
     Log::Debug("Vulkan: loader {}, instance API {}", VersionString(loaderVersion), VersionString(instanceApiVersion_));
 }
 
@@ -167,6 +141,17 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
     }
 
     window->setVulkanInstance(qtInstance_.get());
+
+    // CreateDevice() queries QVulkanInstance::supportsPresent(), which requires a live
+    // platform window — without one it warns and returns false for every queue family,
+    // so no device qualifies and we wrongly fall back to OpenGL. The window is otherwise
+    // created lazily at show() time, so force the native (Vulkan-capable) surface here.
+    // create() only allocates the platform window; the scene graph/RHI is still brought
+    // up later, so setGraphicsDevice() below remains valid.
+    if (!window->handle())
+    {
+        window->create();
+    }
 
     CreateDevice(window);
     window->setGraphicsDevice(
