@@ -35,13 +35,13 @@ void LogViewer::OnInstall(IModuleContext& ctx)
         refreshTimer_, &QTimer::timeout, this,
         [this]
         {
-            if (open_ && Pull())
+            if (Pull())
             {
                 Q_EMIT changed();
             }
         }
     );
-    refreshTimer_->start();
+    // Timer is gated on open state (started in SetOpen), not running while hidden.
 
     // Invalidate the QmlLines cache on every change to the lines projection
     // (new entries, filter text, perf-only, level toggles all emit `changed`).
@@ -52,6 +52,28 @@ void LogViewer::OnInstall(IModuleContext& ctx)
             linesCacheDirty_ = true;
         }
     );
+}
+
+void LogViewer::SetOpen(const bool open)
+{
+    if (open_ == open)
+    {
+        return;
+    }
+    open_ = open;
+    if (refreshTimer_)
+    {
+        if (open_)
+        {
+            Pull(); // drain any backlog immediately so the view isn't blank on show
+            refreshTimer_->start();
+        }
+        else
+        {
+            refreshTimer_->stop();
+        }
+    }
+    Q_EMIT changed();
 }
 
 void LogViewer::LoadSettings(IModuleSettings& ps)

@@ -123,8 +123,7 @@ void RemoteStream::OnInstall(IModuleContext& ctx)
         ctx,
         [this](const OpenNetworkStreamRequestEvent&)
         {
-            requestOpen_ = true;
-            modalOpen_ = true;
+            dialogOpen_ = true;
             Q_EMIT dialogChanged();
         }
     );
@@ -138,14 +137,12 @@ void RemoteStream::submit()
     }
     ctx_->Publish<OpenFileRequestEvent>({urlInput_.c_str(), false});
     urlInput_.clear();
-    requestOpen_ = false;
-    modalOpen_ = false;
+    dialogOpen_ = false;
     Q_EMIT dialogChanged();
 }
 
 void RemoteStream::cancel()
 {
-    requestOpen_ = false;
-    modalOpen_ = false;
+    dialogOpen_ = false;
     Q_EMIT dialogChanged();
 }

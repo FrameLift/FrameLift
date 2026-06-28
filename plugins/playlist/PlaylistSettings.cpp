@@ -121,6 +121,12 @@ void PlaylistSettings::reset()
     Q_EMIT changed();
 }
 
+void PlaylistSettings::load()
+{
+    SeedFromPlaylist();
+    Q_EMIT changed();
+}
+
 void PlaylistSettings::SeedFromPlaylist()
 {
     scanSubdirs_ = playlist_.scanSubdirs_;

@@ -113,6 +113,12 @@ Item {
         acceptedButtons: Qt.NoButton
         hoverEnabled: true
         onPositionChanged: {
+            // Only reveal/extend the controls bar when it can actually show — not
+            // on the idle screen or while the settings window is up (mirrors the
+            // `controls` panel's own visible condition). Otherwise hideTimer would
+            // keep restarting on every mouse move with nothing to hide.
+            if (root.vm === null || root.vm.idle || root.vm.settingsOpen)
+                return
             root.controlsVisible = true
             hideTimer.restart()
         }

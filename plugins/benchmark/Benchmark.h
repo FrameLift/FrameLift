@@ -71,8 +71,7 @@ public:
 
     void Toggle()
     {
-        open_ = !open_;
-        Q_EMIT changed();
+        SetOpen(!open_);
     }
 
     [[nodiscard]] QString Summary() const;
@@ -92,10 +91,7 @@ public:
 
     Q_INVOKABLE void close()
     {
-        if (open_)
-        {
-            Toggle();
-        }
+        SetOpen(false);
     }
 
     [[nodiscard]] bool IsOpen() const
@@ -115,6 +111,9 @@ Q_SIGNALS:
     void changed();
 
 private:
+    // Flip the open/closed state, gate the frame-timing timer on it (start while
+    // open, stop while closed — Benchmark measures only while visible), and notify.
+    void SetOpen(bool open);
     void RequestRefresh();
     void StartRun(const char* path); // load `path` from 0 and begin recording
     void ResetStats();

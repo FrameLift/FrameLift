@@ -33,8 +33,7 @@ public:
 
     void Toggle()
     {
-        open_ = !open_;
-        Q_EMIT changed();
+        SetOpen(!open_);
     }
 
     [[nodiscard]] bool IsOpen() const
@@ -70,10 +69,7 @@ public:
 
     Q_INVOKABLE void close()
     {
-        if (open_)
-        {
-            Toggle();
-        }
+        SetOpen(false);
     }
 
 protected:
@@ -94,6 +90,9 @@ private:
         std::string msg;
     };
 
+    // Flip the open/closed state and gate the 250 ms poll timer on it (no draining
+    // the ring buffer while hidden); pulls immediately on open, then notifies.
+    void SetOpen(bool open);
     // ILogBuffer::Visitor trampoline — `ud` is the LogViewer instance.
     static void OnEntry(void* ud, unsigned long long seq, long long tsMillis, int level, const char* msg);
     // Drain newly-appended lines from the ring buffer; returns true iff ≥1 entry was added.

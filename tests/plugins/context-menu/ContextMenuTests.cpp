@@ -4,10 +4,11 @@
 
 #include <gtest/gtest.h>
 
-// ContextMenuModule is exercised without a host context: with no services wired
-// up the audio/subtitle flags report false and Assemble() builds only the core
-// items (which QmlExtraItems filters out). These cover the ContextMenu service
-// storage ABI and the QML projection.
+// ContextMenuModule is exercised without a host context: no Install()/event loop
+// runs, so the deferred Assemble() that builds the core items never fires here.
+// That makes these tests target exactly the ContextMenu service storage ABI and
+// the QmlExtraItems() projection: items added directly via the ABI surface, with
+// core items (stamped Item::core during Assemble at runtime) filtered out.
 
 namespace
 {
@@ -15,12 +16,26 @@ int g_invoked = 0;
 int g_cleaned = 0;
 } // namespace
 
-TEST(ContextMenuTest, CoreItemsAreExcludedFromExtraItems)
+TEST(ContextMenuTest, ExtraItemsEmptyBeforeAssembly)
 {
     ContextMenuModule m;
-    // First read assembles the core items (Open File, Play / Pause, Quit, …);
-    // all of them are filtered from the plugin "extra items" list.
+    // Without Install()/event loop the menu hasn't assembled, and no plugin items
+    // were added, so the projection is empty.
     EXPECT_TRUE(m.QmlExtraItems().isEmpty());
+}
+
+TEST(ContextMenuTest, CoreStampedItemsAreExcludedFromExtraItems)
+{
+    ContextMenuModule m;
+    // A non-core item (the default for the ABI add path) is projected...
+    m.AddItemRaw(
+        "Plugin Action", [](void*) {}, nullptr, nullptr
+    );
+    EXPECT_EQ(m.QmlExtraItems().size(), 1);
+    // ...while a separator is never an extra item; the core-vs-plugin distinction
+    // is carried by Item::core (set during Assemble), not by label string matching.
+    m.AddSeparator();
+    EXPECT_EQ(m.QmlExtraItems().size(), 1);
 }
 
 TEST(ContextMenuTest, CustomItemAppearsAndInvokes)

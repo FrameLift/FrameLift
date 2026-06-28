@@ -22,11 +22,18 @@ public:
 
     Q_INVOKABLE void save();
     Q_INVOKABLE void reset();
+    // Re-seed the editable draft from the live plugin state and clear the dirty
+    // flag. Call from QML when the page becomes visible so reopening the settings
+    // window never shows a stale or abandoned draft (this is a transactional edit
+    // model: edits live in the draft until save() commits them).
+    Q_INVOKABLE void load();
 
 Q_SIGNALS:
     void changed();
 
 private:
+    void SeedFromHistory();
+
     History& history_;
     bool dirty_ = false;
     int maxEntries_ = 200;

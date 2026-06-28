@@ -3,7 +3,7 @@
 #include <framelift/Hotkeys.h>
 #include <framelift/services.h>
 
-#include <QtCore/QSignalBlocker>
+#include <QtCore/QTimer>
 #include <QtCore/QVariantMap>
 #include <cstdio>
 #include <cstring>
@@ -15,7 +15,9 @@
 
 void ContextMenuModule::AddItemRaw(const char* label, void (*action)(void*), void* ud, void (*cleanup)(void*)) noexcept
 {
-    items_.push_back({label ? label : "", {}, action, ud, cleanup});
+    Item item{label ? label : "", {}, action, ud, cleanup};
+    item.core = buildingCore_;
+    items_.push_back(std::move(item));
     Q_EMIT menuChanged();
 }
 
@@ -23,7 +25,9 @@ void ContextMenuModule::AddItemWithHotkeyRaw(
     const char* label, const char* hotkey, void (*action)(void*), void* ud, void (*cleanup)(void*)
 ) noexcept
 {
-    items_.push_back({label ? label : "", hotkey ? hotkey : "", action, ud, cleanup});
+    Item item{label ? label : "", hotkey ? hotkey : "", action, ud, cleanup};
+    item.core = buildingCore_;
+    items_.push_back(std::move(item));
     Q_EMIT menuChanged();
 }
 
@@ -101,6 +105,27 @@ void ContextMenuModule::OnInstall(IModuleContext& ctx)
             extraItemsCacheDirty_ = true;
         }
     );
+
+    // Assemble the menu once, deferred to the first event-loop turn. Peer plugins
+    // register their sections during their own OnInstall(), which runs after this
+    // one; all OnInstall() calls complete synchronously before App::Run() starts
+    // the Qt event loop, so a queued single-shot fires after every section is
+    // registered — letting us build the full menu up front instead of lazily
+    // inside the QmlExtraItems() getter (which needed a QSignalBlocker to avoid a
+    // self-referential binding-loop warning).
+    QTimer::singleShot(
+        0, this,
+        [this]
+        {
+            if (assembled_)
+            {
+                return;
+            }
+            Assemble();
+            assembled_ = true;
+            Q_EMIT menuChanged(); // marks the cache dirty and refreshes the QML binding
+        }
+    );
 }
 
 void ContextMenuModule::HandleMediaEvent(const MediaEvent& e)
@@ -115,20 +140,8 @@ void ContextMenuModule::HandleMediaEvent(const MediaEvent& e)
 
 QVariantList ContextMenuModule::QmlExtraItems()
 {
-    if (!assembled_)
-    {
-        // Assemble() mutates items_ via AddItem*/AddSeparator, each of which emits
-        // menuChanged. Since menuChanged is the NOTIFY for extraItems, emitting it
-        // here — inside the property read — would invalidate the binding mid-eval
-        // and Qt reports a spurious binding loop. The read already returns the
-        // freshly built list, so suppress the redundant notifications.
-        const QSignalBlocker blocker(this);
-        Assemble();
-        assembled_ = true;
-        // Assemble()'s menuChanged emissions were blocked above, so the cache
-        // invalidator never ran — mark it dirty explicitly.
-        extraItemsCacheDirty_ = true;
-    }
+    // The menu is assembled once via a deferred single-shot in OnInstall(); this
+    // getter is a pure cached projection, rebuilt only when menuChanged fires.
     if (!extraItemsCacheDirty_)
     {
         return extraItemsCache_;
@@ -137,10 +150,9 @@ QVariantList ContextMenuModule::QmlExtraItems()
     for (int i = 0; i < static_cast<int>(items_.size()); ++i)
     {
         const Item& item = items_[i];
-        if (!item.action || item.label == "Open File" || item.label == "Open Network Stream…" ||
-            item.label == "Play / Pause" || item.label == "Toggle Fullscreen" || item.label == "Quit")
+        if (!item.action || item.core)
         {
-            continue;
+            continue; // separators and host core actions are rendered by QML, not here
         }
         QVariantMap row;
         row.insert(QStringLiteral("label"), QString::fromStdString(item.label));
@@ -225,12 +237,16 @@ void ContextMenuModule::HandleShutdown()
 
 void ContextMenuModule::Assemble()
 {
+    buildingCore_ = true;
     BuildCoreItems();
+    buildingCore_ = false;
 
-    // Plugin sections land here, between the core items and Quit.
+    // Plugin sections land here, between the core items and Quit. They are not
+    // core, so they flow through to extraItems for QML to render.
     EmitSections();
 
     AddSeparator();
+    buildingCore_ = true;
     framelift::AddItem(
         *this, "Quit", "quit",
         [this]
@@ -241,6 +257,7 @@ void ContextMenuModule::Assemble()
             }
         }
     );
+    buildingCore_ = false;
 }
 
 void ContextMenuModule::BuildCoreItems()

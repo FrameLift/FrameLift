@@ -1,8 +1,9 @@
 #include "HistorySettings.h"
 #include "History.h"
 
-HistorySettings::HistorySettings(History& history) : history_(history), maxEntries_(history.maxEntries_)
+HistorySettings::HistorySettings(History& history) : history_(history)
 {
+    SeedFromHistory();
 }
 
 QString HistorySettings::Title() const
@@ -42,4 +43,16 @@ void HistorySettings::reset()
     maxEntries_ = 200;
     dirty_ = true;
     Q_EMIT changed();
+}
+
+void HistorySettings::load()
+{
+    SeedFromHistory();
+    Q_EMIT changed();
+}
+
+void HistorySettings::SeedFromHistory()
+{
+    maxEntries_ = history_.maxEntries_;
+    dirty_ = false;
 }

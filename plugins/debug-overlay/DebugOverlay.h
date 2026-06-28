@@ -29,18 +29,14 @@ public:
 
     void Toggle()
     {
-        open_ = !open_;
-        Q_EMIT changed();
+        SetOpen(!open_);
     }
 
     [[nodiscard]] QString Summary() const;
 
     Q_INVOKABLE void close()
     {
-        if (open_)
-        {
-            Toggle();
-        }
+        SetOpen(false);
     }
 
     [[nodiscard]] bool IsOpen() const
@@ -58,6 +54,9 @@ Q_SIGNALS:
     void changed();
 
 private:
+    // Flip the open/closed state and gate the 1 s poll timer on it (no polling
+    // while the overlay is hidden), then notify.
+    void SetOpen(bool open);
     void RequestRefresh();
 
     bool open_ = false;

@@ -26,14 +26,33 @@ void DebugOverlay::OnInstall(IModuleContext&)
         refreshTimer_, &QTimer::timeout, this,
         [this]
         {
-            if (open_)
-            {
-                RequestRefresh();
-                Q_EMIT changed();
-            }
+            RequestRefresh();
+            Q_EMIT changed();
         }
     );
-    refreshTimer_->start();
+    // Timer is gated on open state (started in SetOpen), not running while hidden.
+}
+
+void DebugOverlay::SetOpen(const bool open)
+{
+    if (open_ == open)
+    {
+        return;
+    }
+    open_ = open;
+    if (refreshTimer_)
+    {
+        if (open_)
+        {
+            RequestRefresh(); // refresh immediately so the overlay isn't stale on show
+            refreshTimer_->start();
+        }
+        else
+        {
+            refreshTimer_->stop();
+        }
+    }
+    Q_EMIT changed();
 }
 
 void DebugOverlay::HandleMediaEvent(const MediaEvent& event)

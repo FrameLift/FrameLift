@@ -511,7 +511,7 @@ void History::CursorDown()
 
 void History::ConfirmCursor() const
 {
-    if (cursor_ >= 0 && cursor_ < static_cast<int>(filteredIndices_.size()))
+    if (ctx_ && cursor_ >= 0 && cursor_ < static_cast<int>(filteredIndices_.size()))
     {
         ctx_->Publish<OpenFileRequestEvent>({entries_[filteredIndices_[cursor_]].path.c_str()});
     }

@@ -3,6 +3,7 @@
 #include "KeybindList.h"
 #include <framelift/Hotkeys.h>
 
+#include <QtCore/QMetaObject>
 #include <QtCore/QSet>
 #include <QtCore/QVariantMap>
 #include <algorithm>
@@ -487,7 +488,20 @@ void SettingsMenu::SetActivePage(const QString& page)
     if (next != qmlActivePage_)
     {
         qmlActivePage_ = next;
+        ReseedActivePage();
         Q_EMIT qmlChanged();
+    }
+}
+
+void SettingsMenu::ReseedActivePage()
+{
+    QObject* vm = ActivePageViewModel();
+    // Skip pages whose model has no "load" slot (pure-QML pages, or the built-in
+    // host pages that read live store values directly) — invokeMethod would warn
+    // on a missing method, so check the meta-object first.
+    if (vm && vm->metaObject()->indexOfMethod("load()") >= 0)
+    {
+        QMetaObject::invokeMethod(vm, "load", Qt::DirectConnection);
     }
 }
 
@@ -498,6 +512,11 @@ QString SettingsMenu::ActivePageUrl() const
 
 QObject* SettingsMenu::ActivePageViewModel() const
 {
+    // Non-owning pointer borrowed from the page registry. Safe to hand to QML
+    // because RegisterSettingsPage requires the view model to outlive the settings
+    // UI (see ISettingsPageRegistry) and pages are never unregistered at runtime.
+    // Returns nullptr for an unknown/empty active page (pure-QML pages), which the
+    // QML binding handles gracefully.
     return ActivePageRecord().value(QStringLiteral("viewModel")).value<QObject*>();
 }
 
@@ -810,6 +829,7 @@ std::string SettingsMenu::SettingString(const std::string& key)
 void SettingsMenu::Open() noexcept
 {
     SeedFromContext();
+    ReseedActivePage();
     open_ = true;
     if (ctx_)
     {

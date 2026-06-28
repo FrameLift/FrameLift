@@ -100,6 +100,7 @@ private:
         void* ud = nullptr;
         void (*cleanup)(void*) = nullptr;
         std::vector<Item> children; // for static sub-menus (not used by public API)
+        bool core = false;          // host playback action (rendered by QML, excluded from extraItems)
     };
 
     struct Section
@@ -138,6 +139,10 @@ private:
 
     bool assembled_ = false;
     bool playerIdle_ = true;
+    // True while BuildCoreItems()/Assemble() append the host playback actions, so
+    // AddItem*Raw can stamp Item::core — robustly distinguishing core items from
+    // peer-plugin sections without matching label strings.
+    bool buildingCore_ = false;
 
     // ── QML extra-items cache ──────────────────────────────────────────────────
     // QmlExtraItems() filters items_ and rebuilds a QVariantList on every read.

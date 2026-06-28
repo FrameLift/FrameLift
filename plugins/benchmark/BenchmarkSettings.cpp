@@ -1,9 +1,9 @@
 #include "BenchmarkSettings.h"
 #include "Benchmark.h"
 
-BenchmarkSettings::BenchmarkSettings(Benchmark& benchmark)
-    : benchmark_(benchmark), limitDuration_(benchmark.limitDuration_), benchmarkDuration_(benchmark.benchmarkDuration_)
+BenchmarkSettings::BenchmarkSettings(Benchmark& benchmark) : benchmark_(benchmark)
 {
+    SeedFromBenchmark();
 }
 
 QString BenchmarkSettings::Title() const
@@ -56,6 +56,19 @@ void BenchmarkSettings::reset()
     limitDuration_ = false;
     benchmarkDuration_ = 30.0f;
     MarkDirty();
+}
+
+void BenchmarkSettings::load()
+{
+    SeedFromBenchmark();
+    Q_EMIT changed();
+}
+
+void BenchmarkSettings::SeedFromBenchmark()
+{
+    limitDuration_ = benchmark_.limitDuration_;
+    benchmarkDuration_ = benchmark_.benchmarkDuration_;
+    dirty_ = false;
 }
 
 void BenchmarkSettings::MarkDirty()

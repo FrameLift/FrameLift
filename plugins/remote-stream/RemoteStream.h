@@ -34,7 +34,7 @@ public:
 
     [[nodiscard]] bool DialogOpen() const
     {
-        return requestOpen_ || modalOpen_;
+        return dialogOpen_;
     }
 
     [[nodiscard]] QString Url() const
@@ -67,9 +67,8 @@ private:
     // title and history. Invoked from the OpenFileRequestEvent subscription.
     void OpenUrl(const std::string& url) noexcept;
 
-    bool requestOpen_ = false; // set by the menu item; triggers OpenPopup next frame
-    bool modalOpen_ = false;   // true while the modal is on screen
-    std::string urlInput_;     // URL text-field contents
+    bool dialogOpen_ = false; // true while the URL-entry modal is on screen
+    std::string urlInput_;    // URL text-field contents
 };
 
 FRAMELIFT_MODULE_ENTRY(

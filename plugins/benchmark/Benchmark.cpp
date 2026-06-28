@@ -90,7 +90,30 @@ void Benchmark::OnInstall(IModuleContext& ctx)
             Q_EMIT changed();
         }
     );
-    refreshTimer_->start();
+    // Timer is gated on open state (started in SetOpen), not running while closed.
+}
+
+void Benchmark::SetOpen(const bool open)
+{
+    if (open_ == open)
+    {
+        return;
+    }
+    open_ = open;
+    if (refreshTimer_)
+    {
+        if (open_)
+        {
+            lastFrameTick_ = {};
+            refreshTimer_->start();
+        }
+        else
+        {
+            refreshTimer_->stop();
+            lastFrameTick_ = {};
+        }
+    }
+    Q_EMIT changed();
 }
 
 void Benchmark::ApplySettings(bool limitDuration, float benchmarkDuration)

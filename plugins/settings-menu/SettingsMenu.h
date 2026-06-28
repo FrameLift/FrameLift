@@ -148,6 +148,11 @@ private:
     [[nodiscard]] IPluginCatalog* PluginCatalog() const;
 
     void SeedFromContext();
+    // Ask the active page's view model to re-seed its editable draft from live
+    // plugin state, so reopening the settings window never shows a stale draft.
+    // Best-effort + page-type-agnostic: invokes a Q_INVOKABLE "load" slot if the
+    // model defines one, no-op otherwise.
+    void ReseedActivePage();
     void SeedHostValue(const FieldMeta& f);
     void SeedModuleValue(const FieldMeta& f);
     void RefreshFields();
