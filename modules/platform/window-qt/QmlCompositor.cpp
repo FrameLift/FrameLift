@@ -103,7 +103,7 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
         }
 
         views_.push_back({std::move(context), item});
-        Log::Info(
+        Log::Debug(
             "QML '{}': loaded '{}' at z={} ({}x{})", view.moduleId.toStdString(), view.sourceUrl.toStdString(),
             item->z(), item->width(), item->height()
         );
