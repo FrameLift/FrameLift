@@ -297,17 +297,33 @@ FFmpegAudioOutput::~FFmpegAudioOutput()
 
 bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSampleFormat srcFmt)
 {
-    Close();
-
     std::lock_guard lock(mutex_);
 
-    dstRate_ = srcRate;
-    dstChannels_ = DesiredChannelsLocked();
+    const int newRate = srcRate;
+    const int newChannels = DesiredChannelsLocked();
+
+    // Reuse a still-running sink when the next file's output format is identical (same
+    // sample rate, channel count, and selected device). Closing/reopening the QAudioSink
+    // and its dedicated thread is the bulk of the audio open cost on a file boundary; only
+    // the resampler — which depends on the *source* format — must be rebuilt each time.
+    const bool reuse = sink_ && sink_->active.load() && dstRate_ == newRate && dstChannels_ == newChannels &&
+                       sinkDevice_ == preferredDevice_;
+    if (!reuse)
+    {
+        CloseLocked();
+    }
+
+    dstRate_ = newRate;
+    dstChannels_ = newChannels;
 
     // Build the resampler to F32 interleaved / dstChannels_ / dstRate_, retrying at stereo
     // if a surround sink isn't available.
     auto buildSwr = [&](int channels) -> bool
     {
+        if (swr_)
+        {
+            swr_free(&swr_); // drop the previous file's resampler (kept across a reuse)
+        }
         AVChannelLayout dstLayout;
         av_channel_layout_default(&dstLayout, channels);
         SwrContext* swr = nullptr;
@@ -326,9 +342,20 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     if (!buildSwr(dstChannels_))
     {
         Log::Error("FFmpegAudioOutput: resampler init failed");
+        CloseLocked();
         return false;
     }
     bytesPerSec_ = dstRate_ * dstChannels_ * static_cast<int>(sizeof(float));
+
+    if (reuse)
+    {
+        // Sink + thread stay up; just discard the previous file's queued audio so the new
+        // file's samples start playing from a clean baseline.
+        sink_->ring.Clear();
+        sink_->ResetSink();
+        lastQueuedPts_ = 0.0;
+        return true;
+    }
 
     sink_ = std::make_unique<AudioSink>();
     const QString preferred = QString::fromStdString(preferredDevice_);
@@ -350,12 +377,11 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     if (!ok)
     {
         Log::Error("FFmpegAudioOutput: QAudioSink start failed");
-        sink_.reset();
-        swr_free(&swr_);
-        bytesPerSec_ = 0;
+        CloseLocked();
         return false;
     }
 
+    sinkDevice_ = preferredDevice_;
     lastQueuedPts_ = 0.0;
     Log::Info("FFmpegAudioOutput: opened {} Hz {}ch F32 (QAudioSink)", dstRate_, dstChannels_);
     return true;
@@ -543,6 +569,11 @@ void FFmpegAudioOutput::Flush()
 void FFmpegAudioOutput::Close()
 {
     std::lock_guard lock(mutex_);
+    CloseLocked();
+}
+
+void FFmpegAudioOutput::CloseLocked()
+{
     sink_.reset(); // tears down the sink + audio thread (AudioSink::~AudioSink → Stop)
     if (swr_)
     {
@@ -550,4 +581,5 @@ void FFmpegAudioOutput::Close()
     }
     bytesPerSec_ = 0;
     lastQueuedPts_ = 0.0;
+    sinkDevice_.clear();
 }

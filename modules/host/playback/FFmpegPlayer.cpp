@@ -691,7 +691,19 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     }
 
     av_packet_free(&pkt);
-    audioOut_->Close();
+    // Keep the audio device open when another file is already queued (the common playlist
+    // advance): the next PlayFile's OpenAudioBinding reuses the still-running QAudioSink
+    // when the output format matches, avoiding a device close/reopen per file. Only tear it
+    // down when we're genuinely stopping (shutdown), where the next open won't follow.
+    bool advancing = false;
+    {
+        std::lock_guard lock(mutex_);
+        advancing = hasPendingLoad_;
+    }
+    if (!advancing)
+    {
+        audioOut_->Close();
+    }
     avcodec_free_context(&vDec);
     if (aud.dec)
     {
@@ -1453,11 +1465,15 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
         avformat_close_input(&aud.fmt);
     }
     aud = AudioBinding{};
-    audioOut_->Close();
+    // Note: the audio device is NOT closed here. FFmpegAudioOutput::Open() reuses a
+    // still-running sink when the new track's output format matches, so on the common
+    // file→file boundary the QAudioSink + its thread stay up. Every path below that ends
+    // without a live binding closes the device explicitly instead.
 
     TrackEntry e;
     if (id < 0 || !FindTrack(id, e) || e.kind != TrackKind::Audio)
     {
+        audioOut_->Close();
         return false;
     }
 
@@ -1474,17 +1490,20 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
         if (avformat_open_input(&srcFmt, srcPath.c_str(), nullptr, nullptr) < 0)
         {
             Log::Warn("FFmpegPlayer: failed to open external audio {}", srcPath);
+            audioOut_->Close();
             return false;
         }
         if (avformat_find_stream_info(srcFmt, nullptr) < 0)
         {
             avformat_close_input(&srcFmt);
+            audioOut_->Close();
             return false;
         }
         streamIdx = av_find_best_stream(srcFmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
         if (streamIdx < 0)
         {
             avformat_close_input(&srcFmt);
+            audioOut_->Close();
             return false;
         }
     }
@@ -1498,6 +1517,7 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
         {
             avformat_close_input(&srcFmt);
         }
+        audioOut_->Close();
         return false;
     }
     avcodec_parameters_to_context(dec, st->codecpar);

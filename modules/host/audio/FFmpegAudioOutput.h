@@ -80,6 +80,7 @@ public:
     void Close();
 
 private:
+    void CloseLocked();     // tear down sink + resampler (mutex_ held)
     void ApplyGainLocked(); // push volume_/muted_ to the device (mutex_ held)
     [[nodiscard]] int DesiredChannelsLocked() const;
     [[nodiscard]] float CurrentGainLocked() const;     // effective gain from volume/mute/duck
@@ -98,6 +99,7 @@ private:
     int volume_ = 100; // 0–100, mirrors the player's canonical value
     bool muted_ = false;
     std::string preferredDevice_;
+    std::string sinkDevice_; // device the live sink_ was opened with (for reuse checks)
     AudioChannelMode channelMode_ = AudioChannelMode::Auto;
     bool duckingEnabled_ = false;
     int duckingLevel_ = 50;
