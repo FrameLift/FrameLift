@@ -3,6 +3,7 @@
 #include <framelift/Hotkeys.h>
 #include <framelift/services.h>
 
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QVariantMap>
 #include <cstdio>
 #include <cstring>
@@ -107,6 +108,12 @@ QVariantList ContextMenuModule::QmlExtraItems()
 {
     if (!assembled_)
     {
+        // Assemble() mutates items_ via AddItem*/AddSeparator, each of which emits
+        // menuChanged. Since menuChanged is the NOTIFY for extraItems, emitting it
+        // here — inside the property read — would invalidate the binding mid-eval
+        // and Qt reports a spurious binding loop. The read already returns the
+        // freshly built list, so suppress the redundant notifications.
+        const QSignalBlocker blocker(this);
         Assemble();
         assembled_ = true;
     }
