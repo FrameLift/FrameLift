@@ -259,6 +259,10 @@ private:
     // CPU-RGBA8 path runs). vulkanZeroCopyAvailable_ gates per-file selection in PlayFile.
     AVBufferRef* vkHwDevice_ = nullptr;
     bool vulkanZeroCopyAvailable_ = false;
+    // FFmpeg's Vulkan video-decode backend faults (VK_ERROR_DEVICE_LOST) on the NVIDIA
+    // driver, so Auto mode must not auto-select it there — NVDEC/CUDA is NVIDIA's reliable
+    // path and comes next in AutoVideoDecodePreference(). Explicit VulkanZeroCopy still tries.
+    bool vulkanAdapterIsNvidia_ = false;
 #endif
 
     std::thread decodeThread_;
