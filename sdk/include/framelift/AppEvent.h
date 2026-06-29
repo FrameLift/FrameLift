@@ -218,6 +218,11 @@ struct AppEvent
     {
         Key key = Keys::Unknown;
         Mod mods = Mod::None;
+        // True when this KeyDown was synthesised by the OS auto-repeat of a held key
+        // rather than a fresh physical press. Consumers that want once-per-press
+        // semantics (toggles) ignore repeats; consumers that want held-key repetition
+        // (seek, list navigation) act on them.
+        bool repeat = false;
     };
 
     // Payload for DropFile events.

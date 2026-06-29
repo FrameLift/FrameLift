@@ -399,15 +399,17 @@ bool QtAppWindow::eventFilter(QObject* watched, QEvent* event)
     case QEvent::KeyPress:
     case QEvent::KeyRelease: {
         const auto* ke = static_cast<QKeyEvent*>(event);
-        // A held key emits a stream of auto-repeat KeyPress/KeyRelease events; drop them so
-        // hotkeys fire once per physical press instead of repeating.
-        if (ke->isAutoRepeat())
+        // A held key emits a stream of auto-repeat KeyPress/KeyRelease events. Drop the
+        // synthetic releases (no KeyUp until the key is physically let go), but forward
+        // the repeats as KeyDown tagged repeat=true so consumers can opt in to held-key
+        // repetition (seek, list nav) while toggles still ignore them.
+        if (ke->isAutoRepeat() && event->type() == QEvent::KeyRelease)
         {
             deliver = false;
             break;
         }
         out.type = event->type() == QEvent::KeyPress ? AppEventType::KeyDown : AppEventType::KeyUp;
-        out.key = {TranslateKey(ke->key()), TranslateMods(ke->modifiers())};
+        out.key = {TranslateKey(ke->key()), TranslateMods(ke->modifiers()), ke->isAutoRepeat()};
         break;
     }
     case QEvent::MouseButtonPress:

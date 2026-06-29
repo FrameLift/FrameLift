@@ -43,7 +43,7 @@ public:
 
     // ── Entries ────────────────────────────────────────────────────────────────
     // Append a single path (does not activate it).
-    void AddFile(std::string path);
+    void AddFile(std::string path, std::string subfolder = {});
     // Append multiple paths at once (does not activate any of them).
     void AddFiles(const std::vector<std::string>& paths);
     // Remove all entries and reset current_ and cursor_ to -1.
@@ -135,18 +135,23 @@ private:
     struct Entry
     {
         std::string path;
-        std::string label; // display name (filename without directory)
+        std::string label;     // display name (filename without directory)
+        std::string subfolder; // path relative to the scanned root, empty if at the root
     };
 
     // Set current_ to index and trigger onLoad_ to begin playback.
     void Activate(int index);
     // Extract the filename component of a path for use as a display label.
     static std::string FilenameOf(const std::string& path);
+    // Subfolder of `path` relative to `base` (forward slashes), empty if directly
+    // in `base` or if `base` is empty.
+    static std::string SubfolderOf(const std::string& path, const std::string& base);
 
     // Replace entries_ with the (to-be-sorted) scanned paths, keeping keepPath
     // present and selected (current_/cursor_) without restarting playback.
+    // Subfolder labels are computed relative to `baseDir` (the scanned root).
     // Shared by Reload() and the async-scan completion path.
-    void RebuildEntries(std::vector<std::string>& files, const std::string& keepPath);
+    void RebuildEntries(std::vector<std::string>& files, const std::string& keepPath, const std::string& baseDir);
     // UI-thread handler for a completed background directory scan: swaps in the
     // full playlist and (re)arms the directory watcher. No-op if superseded.
     void ApplyScanResult();

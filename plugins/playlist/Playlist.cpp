@@ -131,6 +131,29 @@ std::string Playlist::FilenameOf(const std::string& path)
     }
 }
 
+std::string Playlist::SubfolderOf(const std::string& path, const std::string& base)
+{
+    if (base.empty())
+    {
+        return {};
+    }
+    try
+    {
+        const auto parent = std::filesystem::path(path).parent_path();
+        const auto rel = std::filesystem::relative(parent, std::filesystem::path(base));
+        std::string s = rel.generic_string();
+        if (s == "." || s.rfind("..", 0) == 0)
+        {
+            return {};
+        }
+        return s;
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
+
 // ── ModuleBase hooks ───────────────────────────────────────────────────────
 
 std::vector<framelift::Keybind> Playlist::Keybinds()
@@ -344,7 +367,7 @@ bool Playlist::HandleKeyDownEvent(const AppEvent& e)
         CursorDown();
         return true;
     }
-    if (kp.key == Keys::Return)
+    if (kp.key == Keys::Return && !kp.repeat)
     {
         ConfirmCursor();
         return true;
@@ -555,7 +578,7 @@ void Playlist::ApplyScanResult()
     // Keep whatever is currently playing selected, without restarting playback.
     const std::string keepPath =
         current_ >= 0 && current_ < static_cast<int>(entries_.size()) ? entries_[current_].path : openedPath;
-    RebuildEntries(files, keepPath);
+    RebuildEntries(files, keepPath, dir);
 
     // (Re)arm the directory watcher for the now-listed directory.
     watchedDir_ = dir;
@@ -564,10 +587,10 @@ void Playlist::ApplyScanResult()
 
 // ── Entry management ──────────────────────────────────────────────────────────
 
-void Playlist::AddFile(std::string path)
+void Playlist::AddFile(std::string path, std::string subfolder)
 {
     auto label = FilenameOf(path);
-    entries_.emplace_back(std::move(path), std::move(label));
+    entries_.emplace_back(std::move(path), std::move(label), std::move(subfolder));
     Q_EMIT playlistChanged();
 }
 
@@ -671,7 +694,7 @@ void Playlist::Reload()
 
     std::vector<std::string> files;
     ScanVideos(std::filesystem::path(watchedDir_), 0, maxDepth, scanExt, files);
-    RebuildEntries(files, currentPath);
+    RebuildEntries(files, currentPath, watchedDir_);
     ArmDirectoryWatcher();
 }
 
@@ -704,7 +727,7 @@ void Playlist::ClearDirectoryWatcher()
     }
 }
 
-void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string& keepPath)
+void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string& keepPath, const std::string& baseDir)
 {
     std::ranges::sort(files);
 
@@ -714,7 +737,8 @@ void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string
     entries_.reserve(files.size() + 1);
     for (auto& f : files)
     {
-        AddFile(std::move(f));
+        auto subfolder = SubfolderOf(f, baseDir);
+        AddFile(std::move(f), std::move(subfolder));
     }
 
     // Ensure the file to keep stays in the list even if it wasn't scanned.
@@ -727,7 +751,7 @@ void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string
                                                 );
     if (!keepPath.empty() && !keepFound)
     {
-        AddFile(keepPath);
+        AddFile(keepPath, SubfolderOf(keepPath, baseDir));
     }
 
     // Restore current_ by path match.
@@ -862,6 +886,7 @@ QVariantList Playlist::QmlEntries() const
     {
         QVariantMap row;
         row.insert(QStringLiteral("label"), QString::fromStdString(entries_[i].label));
+        row.insert(QStringLiteral("subfolder"), QString::fromStdString(entries_[i].subfolder));
         row.insert(QStringLiteral("path"), QString::fromStdString(entries_[i].path));
         row.insert(QStringLiteral("current"), i == current_);
         row.insert(QStringLiteral("cursor"), i == cursor_);

@@ -88,6 +88,9 @@ enum class PlayerProperty : std::uint8_t
 
     DecodeErrors, // "decode-error-count" Int64 – packets that failed to decode (send_packet errors)
 
+    Normalize, // "normalize"  Flag – true when dynamic audio normalization is enabled
+               // (appended before Unknown to keep the ABI ordinals above stable)
+
     Unknown, // placeholder for unrecognised properties – safe to ignore
 };
 

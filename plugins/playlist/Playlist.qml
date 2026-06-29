@@ -57,18 +57,33 @@ Item {
                     id: row
                     required property var modelData
                     required property int index
+                    property bool hasSubfolder: row.modelData.subfolder.length > 0
                     width: ListView.view.width
-                    height: 44
+                    height: row.hasSubfolder ? 46 : 30
                     radius: 6
                     color: row.modelData.current ? "#408B5CF6"
                           : mouse.containsMouse ? "#18FFFFFF" : "transparent"
-                    Text {
-                        anchors.fill: parent
-                        anchors.margins: 12
-                        text: row.modelData.label
-                        color: FLTheme.text
-                        elide: Text.ElideMiddle
-                        verticalAlignment: Text.AlignVCenter
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.margins: 8
+                        spacing: 1
+                        Text {
+                            text: row.modelData.label
+                            color: FLTheme.text
+                            elide: Text.ElideMiddle
+                            width: parent.width
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            visible: row.hasSubfolder
+                            text: row.modelData.subfolder
+                            color: FLTheme.textMuted
+                            elide: Text.ElideMiddle
+                            width: parent.width
+                            font.pixelSize: 11
+                        }
                     }
                     MouseArea {
                         id: mouse

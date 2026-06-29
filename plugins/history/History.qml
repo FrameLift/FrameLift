@@ -87,7 +87,7 @@ Item {
                         anchors.fill: parent
                         anchors.margins: 8
                         spacing: 1
-                        Text { text: row.modelData.label; color: FLTheme.text; elide: Text.ElideMiddle; width: parent.width }
+                        Text { text: row.modelData.label; color: FLTheme.text; elide: Text.ElideMiddle; width: parent.width; font.pixelSize: 12 }
                         Text { text: row.modelData.directory; color: FLTheme.textMuted; elide: Text.ElideMiddle; width: parent.width; font.pixelSize: 11 }
                         Text { text: row.modelData.meta; color: FLTheme.textMuted; font.pixelSize: 11 }
                     }

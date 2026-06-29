@@ -199,7 +199,7 @@ bool History::HandleKeyDownEvent(const AppEvent& e)
         CursorDown();
         return true;
     }
-    if (kp.key == Keys::Return)
+    if (kp.key == Keys::Return && !kp.repeat)
     {
         ConfirmCursor();
         return true;

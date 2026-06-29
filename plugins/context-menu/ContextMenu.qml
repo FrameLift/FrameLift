@@ -146,7 +146,7 @@ Item {
             Item_ { text: "No audio tracks"; enabled: false; visible: audioTracks.count === 0 }
             Sep_ { visible: audioTracks.count > 0 }
             Item_ { text: "Mute"; checkable: true; visible: audioTracks.count > 0; shortcut: root.vm !== null ? root.vm.coreShortcuts["toggleMute"] : ""; checked: root.vm !== null && root.vm.muted; onTriggered: root.vm.toggleMute() }
-            Item_ { text: "Normalize"; checkable: true; visible: audioTracks.count > 0; checked: root.vm !== null && root.vm.normalizeEnabled; onTriggered: root.vm.toggleNormalize() }
+            Item_ { text: "Normalize"; checkable: true; visible: audioTracks.count > 0; shortcut: root.vm !== null ? root.vm.coreShortcuts["toggleNormalize"] : ""; checked: root.vm !== null && root.vm.normalizeEnabled; onTriggered: root.vm.toggleNormalize() }
 
             // Tracks are populated when a file loads — see indexOfItem() note.
             Instantiator {

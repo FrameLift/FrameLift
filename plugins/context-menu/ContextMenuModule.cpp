@@ -90,6 +90,11 @@ void ContextMenuModule::OnInstall(IModuleContext& ctx)
     if (props_)
     {
         props_->ObserveProperty(PlayerProperty::IdleActive);
+        // Observe audio state so the menu's checkmarks stay in sync when mute /
+        // normalize are toggled elsewhere (e.g. via their hotkeys), not just from
+        // this menu's own actions.
+        props_->ObserveProperty(PlayerProperty::Mute);
+        props_->ObserveProperty(PlayerProperty::Normalize);
     }
 
     // Register the menu so peer plugins can extend it via AddSection() during their
@@ -136,6 +141,17 @@ void ContextMenuModule::HandleMediaEvent(const MediaEvent& e)
         playerIdle_ = e.property.value.flag != 0;
         Q_EMIT menuChanged();
         Q_EMIT tracksChanged(); // idle ⇒ no tracks; loaded ⇒ refresh
+        return;
+    }
+
+    // Mute / normalize can be toggled from their hotkeys; refresh the menu's
+    // checkmarks (bound to muted / normalizeEnabled via menuChanged) when the
+    // player reports the new state.
+    if (e.type == MediaEventType::PropertyChange &&
+        (e.property.prop == PlayerProperty::Mute || e.property.prop == PlayerProperty::Normalize) &&
+        e.property.type == PropertyType::Flag)
+    {
+        Q_EMIT menuChanged();
         return;
     }
 
@@ -221,7 +237,8 @@ QVariantMap ContextMenuModule::QmlCoreShortcuts() const
 {
     QVariantMap shortcuts;
     for (const char* name :
-         {"openFileDialog", "togglePause", "toggleFullscreen", "toggleMute", "toggleSubtitles", "quit"})
+         {"openFileDialog", "togglePause", "toggleFullscreen", "toggleMute", "toggleNormalize", "toggleSubtitles",
+          "quit"})
     {
         shortcuts.insert(QString::fromUtf8(name), QString::fromStdString(ShortcutFor(name)));
     }

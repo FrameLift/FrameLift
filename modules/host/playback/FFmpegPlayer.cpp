@@ -1867,7 +1867,19 @@ void FFmpegPlayer::Seek(double seconds) noexcept
     {
         return; // nothing loaded — ignore (avoids seeking the next file opened)
     }
-    RequestSeek(ClampSeekTarget(GetMasterClock() + seconds, duration_.load()));
+    // Accumulate relative seeks against a still-pending target rather than the master
+    // clock: while a seek is in flight (e.g. a held arrow key auto-repeating) the clock
+    // hasn't advanced to the previous target yet, so basing off it would make every
+    // repeat re-target the same spot instead of stepping further each press.
+    bool pending = false;
+    double pendingTarget = 0.0;
+    {
+        std::lock_guard lock(mutex_);
+        pending = hasPendingSeek_;
+        pendingTarget = seekTarget_;
+    }
+    const double base = pending ? pendingTarget : GetMasterClock();
+    RequestSeek(ClampSeekTarget(base + seconds, duration_.load()));
 }
 
 void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
@@ -1908,6 +1920,7 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     }
     normalizeEnabled_ = enabled;
     normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
+    EmitFlag(PlayerProperty::Normalize, enabled);
 
     if (idle_.load())
     {
@@ -2368,6 +2381,9 @@ void FFmpegPlayer::ObserveProperty(PlayerProperty prop) noexcept
         break;
     case PlayerProperty::Mute:
         EmitFlag(prop, muteEnabled_);
+        break;
+    case PlayerProperty::Normalize:
+        EmitFlag(prop, normalizeEnabled_.load());
         break;
     case PlayerProperty::CoreIdle:
         EmitFlag(prop, coreIdle_.load());
