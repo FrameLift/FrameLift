@@ -120,6 +120,15 @@ Mod TranslateMods(Qt::KeyboardModifiers m)
     }
     return static_cast<Mod>(r);
 }
+
+// True when a text-editing item (search field, etc.) currently holds active focus.
+// Such items set ItemAcceptsInputMethod; while one is focused its keystrokes are text
+// entry, not global hotkeys, so the host event sink must not see them.
+bool FocusItemIsTextInput(const QQuickWindow* window)
+{
+    const QQuickItem* item = window ? window->activeFocusItem() : nullptr;
+    return item && item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod);
+}
 } // namespace
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
@@ -399,6 +408,14 @@ bool QtAppWindow::eventFilter(QObject* watched, QEvent* event)
     case QEvent::KeyPress:
     case QEvent::KeyRelease: {
         const auto* ke = static_cast<QKeyEvent*>(event);
+        // While a text-input item (search field, etc.) holds focus, keystrokes belong to
+        // it — don't route them to global hotkeys. Qt still delivers the event to the
+        // focus item normally (we return false below); only the host sink is skipped.
+        if (FocusItemIsTextInput(window_))
+        {
+            deliver = false;
+            break;
+        }
         // A held key emits a stream of auto-repeat KeyPress/KeyRelease events. Drop the
         // synthetic releases (no KeyUp until the key is physically let go), but forward
         // the repeats as KeyDown tagged repeat=true so consumers can opt in to held-key
