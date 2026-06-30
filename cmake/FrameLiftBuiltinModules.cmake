@@ -6,7 +6,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/FrameLiftPluginMetadata.cmake")
 
 function(_framelift_builtin_option_name out module_id)
     set(_prefix "FRAMELIFT_MODULE")
-    string(REGEX REPLACE "^framelift\\.host\\." "" _suffix "${module_id}")
+    string(REGEX REPLACE "^framelift\\." "" _suffix "${module_id}")
     string(TOUPPER "${_suffix}" _suffix)
     string(REGEX REPLACE "[^A-Z0-9_]" "_" _suffix "${_suffix}")
     set(${out} "${_prefix}_${_suffix}" PARENT_SCOPE)
