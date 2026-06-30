@@ -87,7 +87,9 @@ jobs:
           target: desktop
           arch: win64_msvc2022_64
           dir: ${{ runner.temp }}/qt
-          modules: qtdeclarative qtmultimedia
+          # Qt Declarative/QML/Quick is part of the base desktop package; only
+          # install add-on modules here.
+          modules: qtmultimedia
       - name: Set up MSVC environment
         # Locate the preinstalled VS toolset with vswhere and export its vcvars64
         # environment so the Ninja single-config build picks up cl.exe — matching
