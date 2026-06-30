@@ -108,6 +108,7 @@ jobs:
             libtool-bin \
             glslang-tools \
             libltdl-dev \
+            python3-venv \
             mono-complete
           curl -fL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh" \
             -o /tmp/cmake-install.sh
