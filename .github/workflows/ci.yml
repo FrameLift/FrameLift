@@ -56,7 +56,7 @@ jobs:
   # Produces FrameLift-win64.zip on a native Windows runner with MSVC. The
   # windows-latest image ships CMake, Ninja, vcpkg, and the VS 2026 MSVC toolset
   # preinstalled, so no setup actions are needed. Qt, FFmpeg, and libass come from
-  # the vcpkg manifest (vcpkg.json) for the x64-windows triplet; the GitHub
+  # the vcpkg manifest (vcpkg.json) for the release-only x64-windows triplet; the GitHub
   # Packages NuGet feed caches the heavy source-built libraries (FFmpeg, Qt) so
   # they do not rebuild from source on every run.
   build-windows:
@@ -74,6 +74,8 @@ jobs:
       # vcpkg's binary cache is a GitHub Packages NuGet feed so heavy libraries
       # such as FFmpeg and Qt do not rebuild from source on every run.
       VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite"
+      # Release-only triplet
+      VCPKG_TRIPLET: x64-windows-release
     steps:
       - uses: actions/checkout@v4
       - name: Set up MSVC environment
@@ -119,11 +121,11 @@ jobs:
             VERSION_DISPLAY="git-$(echo "$GITHUB_SHA" | cut -c1-8)"
           fi
           # Manifest mode: configuring installs qt + ffmpeg + libass (vcpkg.json)
-          # for the x64-windows triplet before the host build proceeds.
+          # for the release-only triplet before the host build proceeds.
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-windows \
-            -DVCPKG_HOST_TRIPLET=x64-windows \
+            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DVCPKG_HOST_TRIPLET="$VCPKG_TRIPLET" \
             -DCMAKE_C_COMPILER=cl \
             -DCMAKE_CXX_COMPILER=cl \
             -DCMAKE_BUILD_TYPE=Release \
@@ -134,7 +136,7 @@ jobs:
         run: cmake --build "$BUILD_DIR" --parallel
       - name: Package
         run: |
-          WINDEPLOYQT="$BUILD_DIR/vcpkg_installed/x64-windows/tools/Qt6/bin/windeployqt.exe"
+          WINDEPLOYQT="$BUILD_DIR/vcpkg_installed/$VCPKG_TRIPLET/tools/Qt6/bin/windeployqt.exe"
           STAGE="$RUNNER_TEMP/stage"
           mkdir -p "$STAGE/plugins"
           cp "$BUILD_DIR/framelift.exe" "$STAGE/"
@@ -149,7 +151,7 @@ jobs:
           # FFmpeg/libass/Qt runtime DLLs (+ transitive deps) from vcpkg. Copied
           # last so FrameLift's own FFmpeg wins any filename overlap with the Qt
           # Multimedia backend's bundled copy.
-          cp "$BUILD_DIR"/vcpkg_installed/x64-windows/bin/*.dll "$STAGE/"
+          cp "$BUILD_DIR"/vcpkg_installed/$VCPKG_TRIPLET/bin/*.dll "$STAGE/"
           (cd "$STAGE" && 7z a "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-win64.zip" .)
           # The SDK is packaged by the dedicated `build-sdk` job.
       - name: Upload artifact
