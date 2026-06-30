@@ -45,73 +45,21 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 # use Qt media playback classes here: compressed media stays on FFmpegPlayer and
 # the external `ffmpeg` target above. Widgets provides the native QFileDialog
 # open-file picker.
-# AUTOMOC is required for the Q_OBJECT types in the window-qt module.
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets)
-set(CMAKE_AUTOMOC ON)
 
-set(_FRAMELIFT_FORBIDDEN_QT_MEDIA_PLAYBACK_APIS
-        "QMediaPlayer"
-        "QVideoSink"
-        "QMediaCaptureSession"
-        "QMediaRecorder"
-        "QCamera"
-        "QImageCapture"
-        "QAudioOutput")
-file(GLOB_RECURSE _FRAMELIFT_QT_MEDIA_AUDIT_FILES CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/src/*.[ch]pp"
-        "${CMAKE_SOURCE_DIR}/src/*.h"
-        "${CMAKE_SOURCE_DIR}/modules/*.[ch]pp"
-        "${CMAKE_SOURCE_DIR}/modules/*.h"
-        "${CMAKE_SOURCE_DIR}/plugins/*.[ch]pp"
-        "${CMAKE_SOURCE_DIR}/plugins/*.h"
-        "${CMAKE_SOURCE_DIR}/qml/*.qml"
-        "${CMAKE_SOURCE_DIR}/plugins/*.qml")
-foreach (_audit_file IN LISTS _FRAMELIFT_QT_MEDIA_AUDIT_FILES)
-    file(READ "${_audit_file}" _audit_text)
-    foreach (_forbidden_api IN LISTS _FRAMELIFT_FORBIDDEN_QT_MEDIA_PLAYBACK_APIS)
-        if (_audit_text MATCHES "${_forbidden_api}")
-            message(FATAL_ERROR
-                    "FrameLift uses external FFmpeg for media playback; ${_audit_file} "
-                    "references forbidden Qt media playback API ${_forbidden_api}. "
-                    "Qt Multimedia is allowed only for QAudioSink/QMediaDevices audio output.")
-        endif ()
-    endforeach ()
-    if (_audit_file MATCHES "\\.qml$" AND _audit_text MATCHES "import[ \t]+QtMultimedia")
-        message(FATAL_ERROR
-                "FrameLift uses external FFmpeg for media playback; ${_audit_file} "
-                "imports QtMultimedia QML. Qt Multimedia is allowed only for "
-                "QAudioSink/QMediaDevices audio output in C++.")
-    endif ()
-endforeach ()
-unset(_audit_text)
-unset(_audit_file)
-unset(_forbidden_api)
+# Guard: no Qt Multimedia playback APIs (compressed media stays on external FFmpeg).
+include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftMediaAudit.cmake")
+framelift_assert_no_qt_media_playback()
 
-set(FRAMELIFT_GRAPHICS_INCLUDE_DIRS
-        "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core"
-        "${CMAKE_SOURCE_DIR}/modules/gfx/opengl"
-        "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan"
-)
-set(FRAMELIFT_HOST_MODULE_INCLUDE_DIRS
-        "${CMAKE_SOURCE_DIR}/modules/host/module-runtime"
-        "${CMAKE_SOURCE_DIR}/modules/host/settings"
-        "${CMAKE_SOURCE_DIR}/modules/host/services"
-        "${CMAKE_SOURCE_DIR}/modules/host/controls"
-        "${CMAKE_SOURCE_DIR}/modules/host/logging"
-        "${CMAKE_SOURCE_DIR}/modules/host/audio"
-        "${CMAKE_SOURCE_DIR}/modules/host/playback"
-        "${CMAKE_SOURCE_DIR}/modules/host/read-ahead"
-        "${CMAKE_SOURCE_DIR}/modules/host/ui"
-        "${CMAKE_SOURCE_DIR}/modules/platform/window-qt"
-        "${CMAKE_SOURCE_DIR}/modules/platform/win-shell"
-)
+# Host/gfx internal include dirs (shared with the test build).
+include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftHostIncludes.cmake")
 
 # ── Shader → SPIR-V build step (glslang, fetched in-tree) ─────────────────────
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftShaders.cmake")
 endif ()
 
-# ── Release-build optimizations (FrameLift_apply_release_opts) ─────────────────────
+# ── Release-build optimizations (framelift_apply_release_opts) ─────────────────────
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftOptimize.cmake")
 
 # ── Version header ───────────────────────────────────────────────────────────
@@ -136,28 +84,11 @@ if (WIN32)
 endif ()
 
 add_executable(FrameLift ${FRAMELIFT_SOURCES} ${FRAMELIFT_SDK_SOURCES})
-set_source_files_properties(
-        qml/FrameLift/Controls/FLTheme.qml
-        PROPERTIES QT_RESOURCE_ALIAS FLTheme.qml QT_QML_SINGLETON_TYPE TRUE)
-set_source_files_properties(qml/FrameLift/Controls/FLGlassPanel.qml PROPERTIES QT_RESOURCE_ALIAS FLGlassPanel.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLActionButton.qml PROPERTIES QT_RESOURCE_ALIAS FLActionButton.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLDrawer.qml PROPERTIES QT_RESOURCE_ALIAS FLDrawer.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLConfirmDialog.qml PROPERTIES QT_RESOURCE_ALIAS FLConfirmDialog.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLSettingsGroup.qml PROPERTIES QT_RESOURCE_ALIAS FLSettingsGroup.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLSettingRow.qml PROPERTIES QT_RESOURCE_ALIAS FLSettingRow.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLSwitch.qml PROPERTIES QT_RESOURCE_ALIAS FLSwitch.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLTextField.qml PROPERTIES QT_RESOURCE_ALIAS FLTextField.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLSpinBox.qml PROPERTIES QT_RESOURCE_ALIAS FLSpinBox.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLComboBox.qml PROPERTIES QT_RESOURCE_ALIAS FLComboBox.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLSlider.qml PROPERTIES QT_RESOURCE_ALIAS FLSlider.qml)
-set_source_files_properties(qml/FrameLift/Controls/FLKeyCapButton.qml PROPERTIES QT_RESOURCE_ALIAS FLKeyCapButton.qml)
-qt_add_qml_module(
-        FrameLift
-        URI FrameLift.Controls
-        VERSION 1.0
-        RESOURCE_PREFIX "/qt/qml"
-        NO_PLUGIN
-        QML_FILES
+# AUTOMOC for the Q_OBJECT types in the host modules (window-qt, etc.). Scoped to this
+# target (plugins and tests enable it on their own); set before qt_add_qml_module, which
+# requires AUTOMOC for its metatype/type registration.
+set_target_properties(FrameLift PROPERTIES AUTOMOC ON)
+set(_framelift_control_qml
         qml/FrameLift/Controls/FLTheme.qml
         qml/FrameLift/Controls/FLGlassPanel.qml
         qml/FrameLift/Controls/FLActionButton.qml
@@ -171,6 +102,20 @@ qt_add_qml_module(
         qml/FrameLift/Controls/FLComboBox.qml
         qml/FrameLift/Controls/FLSlider.qml
         qml/FrameLift/Controls/FLKeyCapButton.qml)
+# Resource alias is the basename, so each lands at /qt/qml/FrameLift/Controls/<File>.qml.
+foreach (_qml IN LISTS _framelift_control_qml)
+    get_filename_component(_qml_alias "${_qml}" NAME)
+    set_source_files_properties("${_qml}" PROPERTIES QT_RESOURCE_ALIAS "${_qml_alias}")
+endforeach ()
+# FLTheme is a QML singleton (pragma Singleton) — flag it for the type registrar.
+set_source_files_properties(qml/FrameLift/Controls/FLTheme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+qt_add_qml_module(
+        FrameLift
+        URI FrameLift.Controls
+        VERSION 1.0
+        RESOURCE_PREFIX "/qt/qml"
+        NO_PLUGIN
+        QML_FILES ${_framelift_control_qml})
 set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/img/icon.svg" PROPERTIES QT_RESOURCE_ALIAS icon.svg)
 qt_add_resources(
         FrameLift framelift_assets
@@ -234,7 +179,7 @@ if (MINGW)
     target_link_options(FrameLift PRIVATE -static-libgcc -static-libstdc++ -static)
 endif ()
 
-FrameLift_apply_release_opts(FrameLift)
+framelift_apply_release_opts(FrameLift)
 
 # Create plugins/ subdirectory before the first plugin DLL/SO is built.
 add_custom_command(TARGET FrameLift PRE_BUILD
@@ -262,15 +207,13 @@ if (FRAMELIFT_BUILD_PLUGINS)
     endif ()
 
     # Apply the same Release optimizations to each shipped plugin DLL/SO (LTO is
-    # per-binary, so the host's doesn't reach into the plugins).
+    # per-binary, so the host's doesn't reach into the plugins). Plugins see only the
+    # public SDK and their own dir — never host/gfx internals (a plugin that needs a
+    # host source, e.g. SettingsMenu, opts into those include dirs itself).
     foreach (_plugin IN LISTS FRAMELIFT_PLUGIN_TARGETS)
         get_target_property(_plugin_disabled ${_plugin} FRAMELIFT_PLUGIN_DISABLED)
         if (NOT _plugin_disabled)
-            framelift_apply_builtin_module_definitions(${_plugin})
-            target_include_directories(${_plugin} PRIVATE
-                    ${FRAMELIFT_GRAPHICS_INCLUDE_DIRS}
-                    ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
-            FrameLift_apply_release_opts(${_plugin})
+            framelift_apply_release_opts(${_plugin})
         endif ()
     endforeach ()
 endif ()
@@ -308,54 +251,5 @@ if (FRAMELIFT_BUILD_TESTS)
 endif ()
 
 # ── Plugin SDK packaging ──────────────────────────────────────────────────────
-# Stage a standalone, dependency-free SDK that external authors build plugins
-# against. Inert during a normal build; materialised via `cmake --install ...
-# --component sdk` + `cpack` (see .github/workflows/ci.yml). The package version tracks the
-# ABI version so find_package(FrameLiftSdk) can gate on ExactVersion.
-# The version is parsed from the SDK header — single source of truth.
-set(_FrameLift_abi_header "${CMAKE_SOURCE_DIR}/sdk/include/framelift/ModuleABI.h")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_FrameLift_abi_header}")
-# Same whitespace-tolerant regex as FrameLiftPluginMetadata.cmake's standalone-SDK
-# fallback, so either parse path accepts spaces or tabs after the macro name.
-file(STRINGS "${_FrameLift_abi_header}" _FrameLift_abi_line
-        REGEX "^#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+[0-9]+")
-if (NOT _FrameLift_abi_line MATCHES "FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
-    message(FATAL_ERROR "Could not parse FRAMELIFT_ABI_VERSION from ${_FrameLift_abi_header}")
-endif ()
-set(FRAMELIFT_SDK_ABI_VERSION "${CMAKE_MATCH_1}")
-unset(_FrameLift_abi_line)
-unset(_FrameLift_abi_header)
-
-include(CMakePackageConfigHelpers)
-configure_package_config_file(
-        "${CMAKE_SOURCE_DIR}/cmake/FrameLiftSdkConfig.cmake.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfig.cmake"
-        INSTALL_DESTINATION "cmake")
-write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfigVersion.cmake"
-        VERSION "${FRAMELIFT_SDK_ABI_VERSION}"
-        COMPATIBILITY ExactVersion)
-
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/include/"
-        DESTINATION include COMPONENT sdk)
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/sdk/src/"
-        DESTINATION src COMPONENT sdk)
-install(FILES
-        "${CMAKE_SOURCE_DIR}/cmake/FrameLiftSdk.cmake"
-        "${CMAKE_SOURCE_DIR}/cmake/FrameLiftPluginMetadata.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/sdk-pkg/FrameLiftSdkConfigVersion.cmake"
-        DESTINATION cmake COMPONENT sdk)
-install(FILES "${CMAKE_SOURCE_DIR}/sdk/package-template/CMakeLists.txt"
-        DESTINATION . COMPONENT sdk)
-install(FILES "${CMAKE_SOURCE_DIR}/sdk/README.md" "${CMAKE_SOURCE_DIR}/LICENSE"
-        DESTINATION . COMPONENT sdk)
-
-# ── CPack: one ZIP for the sdk component → FrameLift-sdk-<ver>.zip ──────────────────
-set(CPACK_GENERATOR "ZIP")
-set(CPACK_PACKAGE_NAME "FrameLift-sdk")
-set(CPACK_PACKAGE_VERSION "${FRAMELIFT_VERSION}")
-set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
-set(CPACK_COMPONENTS_ALL sdk)
-set(CPACK_ARCHIVE_SDK_FILE_NAME "FrameLift-sdk-${FRAMELIFT_VERSION}")
-include(CPack)
+include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftSdkPackage.cmake")
+framelift_configure_sdk_package()

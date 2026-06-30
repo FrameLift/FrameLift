@@ -12,6 +12,10 @@
 #    configuring with the vcpkg toolchain (see CMakePresets.json).
 
 # ── FFmpeg ────────────────────────────────────────────────────────────────────
+# The FFmpeg libraries FrameLift links, named without the lib prefix. pkg-config wants
+# the lib-prefixed module names (libavcodec, …); the vcpkg import-lib lookup wants the
+# bare names (avcodec, …).
+set(_framelift_ffmpeg_components avformat avcodec avutil swscale swresample avfilter)
 if (WIN32)
     # FFmpeg from vcpkg. vcpkg's FindFFMPEG.cmake isn't placed on CMAKE_MODULE_PATH,
     # so resolve the headers + per-component import libs directly — the vcpkg
@@ -19,7 +23,7 @@ if (WIN32)
     find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h REQUIRED)
     add_library(ffmpeg INTERFACE)
     target_include_directories(ffmpeg INTERFACE ${FFMPEG_INCLUDE_DIR})
-    foreach (_lib avformat avcodec avutil swscale swresample avfilter)
+    foreach (_lib IN LISTS _framelift_ffmpeg_components)
         find_library(FFMPEG_${_lib}_LIBRARY ${_lib} REQUIRED)
         target_link_libraries(ffmpeg INTERFACE ${FFMPEG_${_lib}_LIBRARY})
     endforeach ()
@@ -29,8 +33,11 @@ else ()
     # packages normally include both; the FFmpegHwDecode helper degrades to software
     # if a backend is unavailable, so this is a runtime expectation, not a build dep.
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
-            libavformat libavcodec libavutil libswscale libswresample libavfilter)
+    set(_framelift_ffmpeg_pc_modules)
+    foreach (_lib IN LISTS _framelift_ffmpeg_components)
+        list(APPEND _framelift_ffmpeg_pc_modules "lib${_lib}")
+    endforeach ()
+    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET ${_framelift_ffmpeg_pc_modules})
     add_library(ffmpeg ALIAS PkgConfig::FFMPEG)
 endif ()
 

@@ -135,7 +135,11 @@ function(add_framelift_plugin NAME)
     endif ()
     # CMAKE_CURRENT_BINARY_DIR holds the generated metadata JSON; on the target's include
     # path so moc resolves Q_PLUGIN_METADATA(... FILE "<NAME>PluginMetadata.json").
-    target_include_directories(${NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    # CMAKE_CURRENT_SOURCE_DIR (the calling plugin's dir) lets the plugin include its own
+    # headers without each plugin repeating the line.
+    target_include_directories(${NAME} PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(${NAME} PRIVATE FrameLiftSdk)
     if (MINGW)
         target_link_options(${NAME} PRIVATE

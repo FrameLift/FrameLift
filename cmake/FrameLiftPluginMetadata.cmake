@@ -1,5 +1,19 @@
 # JSON-authored plugin metadata -> embedded Qt plugin metadata.
 
+# Parse FRAMELIFT_ABI_VERSION (a single integer) from a ModuleABI.h header.
+# Whitespace-tolerant so spaces or tabs after the macro name both parse. Single source
+# of truth for the regex — used by both the SDK self-bootstrap below and the root build.
+function(framelift_read_abi_version out header)
+    if (NOT EXISTS "${header}")
+        message(FATAL_ERROR "ModuleABI.h not found: ${header}")
+    endif ()
+    file(READ "${header}" _abi_text)
+    if (NOT _abi_text MATCHES "#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
+        message(FATAL_ERROR "Could not parse FRAMELIFT_ABI_VERSION from ${header}")
+    endif ()
+    set(${out} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+endfunction()
+
 if (NOT DEFINED FRAMELIFT_SDK_ABI_VERSION)
     set(_framelift_abi_header_candidates
             "${CMAKE_CURRENT_LIST_DIR}/../sdk/include/framelift/ModuleABI.h"
@@ -14,12 +28,7 @@ if (NOT DEFINED FRAMELIFT_SDK_ABI_VERSION)
     if ("${_framelift_abi_header}" STREQUAL "")
         message(FATAL_ERROR "Unable to find ModuleABI.h for plugin metadata generation")
     endif ()
-    file(READ "${_framelift_abi_header}" _framelift_plugin_abi_h)
-    if (_framelift_plugin_abi_h MATCHES "#define[ \t]+FRAMELIFT_ABI_VERSION[ \t]+([0-9]+)")
-        set(FRAMELIFT_SDK_ABI_VERSION "${CMAKE_MATCH_1}")
-    else ()
-        message(FATAL_ERROR "Unable to parse FRAMELIFT_ABI_VERSION from ModuleABI.h")
-    endif ()
+    framelift_read_abi_version(FRAMELIFT_SDK_ABI_VERSION "${_framelift_abi_header}")
 endif ()
 
 function(_framelift_json_required_string out json path label)
@@ -38,20 +47,26 @@ function(_framelift_json_optional_string out json path default)
     set(${out} "${_value}" PARENT_SCOPE)
 endfunction()
 
+# Validate a JSON/CMake boolean spelling (true/false/ON/OFF) and return TRUE/FALSE.
+function(_framelift_normalize_bool out value label)
+    if (NOT value STREQUAL "ON" AND NOT value STREQUAL "OFF" AND
+        NOT value STREQUAL "true" AND NOT value STREQUAL "false")
+        message(FATAL_ERROR "${label} must be a boolean")
+    endif ()
+    if (value STREQUAL "true" OR value STREQUAL "ON")
+        set(${out} TRUE PARENT_SCOPE)
+    else ()
+        set(${out} FALSE PARENT_SCOPE)
+    endif ()
+endfunction()
+
 function(_framelift_json_required_bool out json path label)
     string(JSON _value ERROR_VARIABLE _err GET "${json}" ${path})
     if (_err)
         message(FATAL_ERROR "${label}: missing required bool '${path}' (${_err})")
     endif ()
-    if (NOT _value STREQUAL "ON" AND NOT _value STREQUAL "OFF" AND
-        NOT _value STREQUAL "true" AND NOT _value STREQUAL "false")
-        message(FATAL_ERROR "${label}: '${path}' must be a boolean")
-    endif ()
-    if (_value STREQUAL "true" OR _value STREQUAL "ON")
-        set(${out} TRUE PARENT_SCOPE)
-    else ()
-        set(${out} FALSE PARENT_SCOPE)
-    endif ()
+    _framelift_normalize_bool(_value "${_value}" "${label}: '${path}'")
+    set(${out} "${_value}" PARENT_SCOPE)
 endfunction()
 
 function(_framelift_json_optional_bool out json path default label)
@@ -59,15 +74,8 @@ function(_framelift_json_optional_bool out json path default label)
     if (_err)
         set(_value "${default}")
     endif ()
-    if (NOT _value STREQUAL "ON" AND NOT _value STREQUAL "OFF" AND
-        NOT _value STREQUAL "true" AND NOT _value STREQUAL "false")
-        message(FATAL_ERROR "${label}: '${path}' must be a boolean")
-    endif ()
-    if (_value STREQUAL "true" OR _value STREQUAL "ON")
-        set(${out} TRUE PARENT_SCOPE)
-    else ()
-        set(${out} FALSE PARENT_SCOPE)
-    endif ()
+    _framelift_normalize_bool(_value "${_value}" "${label}: '${path}'")
+    set(${out} "${_value}" PARENT_SCOPE)
 endfunction()
 
 function(_framelift_json_required_int out json path label)
@@ -101,14 +109,11 @@ function(_framelift_json_string_array out json label)
     set(${out} "${_items}" PARENT_SCOPE)
 endfunction()
 
+# A C string literal: same backslash/quote escaping as JSON, wrapped in quotes.
+# (_framelift_json_escape is defined below; CMake resolves calls at call time.)
 function(_framelift_cpp_string out value)
-    if ("${value}" STREQUAL "")
-        set(${out} "\"\"" PARENT_SCOPE)
-        return()
-    endif ()
-    string(REPLACE "\\" "\\\\" _value "${value}")
-    string(REPLACE "\"" "\\\"" _value "${_value}")
-    set(${out} "\"${_value}\"" PARENT_SCOPE)
+    _framelift_json_escape(_escaped "${value}")
+    set(${out} "\"${_escaped}\"" PARENT_SCOPE)
 endfunction()
 
 function(_framelift_cpp_optional_string out value)

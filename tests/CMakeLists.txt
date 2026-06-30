@@ -33,24 +33,12 @@ include(GoogleTest)
 find_package(Threads REQUIRED)
 
 set(FRAMELIFT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
-set(FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS
-        "${FRAMELIFT_ROOT}/modules/gfx/graphics-core"
-        "${FRAMELIFT_ROOT}/modules/gfx/opengl"
-        "${FRAMELIFT_ROOT}/modules/gfx/vulkan"
-)
-set(FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS
-        "${FRAMELIFT_ROOT}/modules/host/module-runtime"
-        "${FRAMELIFT_ROOT}/modules/host/settings"
-        "${FRAMELIFT_ROOT}/modules/host/services"
-        "${FRAMELIFT_ROOT}/modules/host/controls"
-        "${FRAMELIFT_ROOT}/modules/host/logging"
-        "${FRAMELIFT_ROOT}/modules/host/audio"
-        "${FRAMELIFT_ROOT}/modules/host/playback"
-        "${FRAMELIFT_ROOT}/modules/host/read-ahead"
-        "${FRAMELIFT_ROOT}/modules/host/ui"
-        "${FRAMELIFT_ROOT}/modules/platform/window-qt"
-        "${FRAMELIFT_ROOT}/modules/platform/win-shell"
-)
+# Reuse the host/gfx include-dir lists (single source of truth) instead of re-listing
+# them; resolve them against the repo root so the standalone tests build works too.
+set(FRAMELIFT_SOURCE_ROOT "${FRAMELIFT_ROOT}")
+include("${FRAMELIFT_ROOT}/cmake/FrameLiftHostIncludes.cmake")
+set(FRAMELIFT_GRAPHICS_TEST_INCLUDE_DIRS ${FRAMELIFT_GRAPHICS_INCLUDE_DIRS})
+set(FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
 
 # ── Coverage (gcov/gcovr) ─────────────────────────────────────────────────────
 option(FRAMELIFT_COVERAGE "Instrument the tests for gcov/gcovr coverage" OFF)

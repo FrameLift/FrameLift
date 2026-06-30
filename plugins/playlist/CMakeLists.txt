@@ -10,4 +10,3 @@ add_framelift_plugin(Playlist
         QML_FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/PlaylistSettings.qml"
 )
-target_include_directories(Playlist PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

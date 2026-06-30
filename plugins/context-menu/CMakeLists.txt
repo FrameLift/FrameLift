@@ -6,4 +6,3 @@ add_framelift_plugin(ContextMenu
         "${CMAKE_CURRENT_SOURCE_DIR}/ContextMenuModule.h"
         ${FRAMELIFT_SDK_SOURCES}
 )
-target_include_directories(ContextMenu PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

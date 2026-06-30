@@ -6,7 +6,6 @@ add_framelift_plugin(Overlay
         "${CMAKE_CURRENT_SOURCE_DIR}/Overlay.h"
         ${FRAMELIFT_SDK_SOURCES}
 )
-target_include_directories(Overlay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/img/icon.svg" PROPERTIES QT_RESOURCE_ALIAS icon.svg)
 qt_add_resources(
         Overlay overlay_assets
