@@ -289,6 +289,9 @@ void FFmpegPlayer::DecodeThreadMain()
             path = pendingPath_;
             resume = pendingResume_;
             hasPendingLoad_ = false;
+            // A load supersedes any prior Stop(): clear it here (rather than only when
+            // parking) so this fresh PlayFile isn't immediately seen as stop-requested.
+            stopRequested_ = false;
         }
 
         try
@@ -723,7 +726,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
                     lock, until,
                     [this]
                     {
-                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_;
+                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
                     }
                 ))
             {
@@ -739,14 +742,15 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         }
 
         // keep-open: hold the last frame here until a seek or stop. A playlist that
-        // advances on EndFile arrives as a new load (Stop); a manual seek resumes.
+        // advances on EndFile arrives as a new load (Stop); a manual seek resumes;
+        // an end-of-playlist Stop() sets stopRequested_ to break the hold and go idle.
         {
             std::unique_lock lock(mutex_);
             cv_.wait(
                 lock,
                 [this]
                 {
-                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_;
+                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
                 }
             );
         }
@@ -1056,12 +1060,12 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                     [this]
                     {
                         return !paused_.load() || seekRefresh_.load() || shutdown_.load() || hasPendingLoad_ ||
-                               hasPendingSeek_;
+                               hasPendingSeek_ || stopRequested_;
                     }
                 );
                 // Honour a pending seek only once this one has painted (seekSettled_),
                 // so the target frame is shown before the loop bails to re-seek.
-                if (shutdown_.load() || hasPendingLoad_ || (hasPendingSeek_ && seekSettled_))
+                if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
                 {
                     return true;
                 }
@@ -1114,11 +1118,12 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                     lock, slice,
                     [this]
                     {
-                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load();
+                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load() ||
+                               stopRequested_;
                     }
                 );
             }
-            if (shutdown_.load() || hasPendingLoad_ || (hasPendingSeek_ && seekSettled_))
+            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
             {
                 return true;
             }
@@ -1837,7 +1842,7 @@ void FFmpegPlayer::UpdateCoreIdle()
 bool FFmpegPlayer::StopRequested()
 {
     std::lock_guard lock(mutex_);
-    return shutdown_.load() || hasPendingLoad_;
+    return shutdown_.load() || hasPendingLoad_ || stopRequested_;
 }
 
 double FFmpegPlayer::TakePendingSeek()
@@ -1872,6 +1877,32 @@ void FFmpegPlayer::LoadFile(const char* path, double resumePos) noexcept
     videoQ_->Abort();
     subQ_->Abort();
     Wake();
+}
+
+void FFmpegPlayer::Stop() noexcept
+{
+    {
+        std::lock_guard lock(mutex_);
+        if (idle_.load())
+        {
+            return; // nothing loaded — already idle
+        }
+        stopRequested_ = true;   // break the decode thread out of playback / EOF hold
+        hasPendingSeek_ = false; // drop any queued seek — there's nothing to resume
+    }
+    // Abandon the current file promptly (mirror LoadFile): unblock the workers and the
+    // decode thread so it tears the session down and parks. stopRequested_ lingers while
+    // parked (harmless — nothing consults it there) and is cleared by the next load.
+    audioQ_->Abort();
+    videoQ_->Abort();
+    subQ_->Abort();
+    Wake();
+
+    // Reflect idle immediately for the UI: clears the EOF-held frame's seekable state
+    // and raises IdleActive so the overlay shows the idle screen and hides the controls.
+    eofReached_ = false;
+    EmitFlag(PlayerProperty::EofReached, false);
+    SetIdle(true);
 }
 
 void FFmpegPlayer::SetPause(bool paused) noexcept

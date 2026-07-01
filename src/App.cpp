@@ -192,6 +192,17 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
         }
     );
 
+    // Playlist publishes this when its last item ends with nothing to advance to.
+    // Stop the player so it returns to the idle screen rather than holding the final
+    // frame in a seekable "playing" state.
+    framelift::Subscribe<StopPlaybackRequestEvent>(
+        *moduleCtx_,
+        [this](const StopPlaybackRequestEvent&)
+        {
+            ffmpeg_->Stop();
+        }
+    );
+
     // Qt owns the loop: route the window's GUI-thread hooks back into App. Input/events
     // → Dispatch; player worker wakeups → OnPlayerWakeup (drain media events); the
     // scene-graph video node → RenderVideo (the host video draw).

@@ -37,6 +37,14 @@ struct OpenFileRequestEvent
     bool rebuildPlaylist = false; // true = rescan the directory and rebuild; false = just play this file
 };
 
+// Request to stop playback and return the player to its idle state (idle screen,
+// no held frame). Published by Playlist when the last item finishes with nothing
+// to advance to; the host subscribes and stops the media player. No payload.
+struct StopPlaybackRequestEvent
+{
+    static constexpr const char* EventId = "framelift.StopPlaybackRequestEvent";
+};
+
 // Request to prompt the user for a remote stream URL. Published by the host's
 // "Open Network Stream…" context-menu item; the RemoteStream plugin subscribes
 // and opens its URL-entry modal. No payload — it is purely a "show the prompt".

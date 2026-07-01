@@ -411,10 +411,21 @@ void Playlist::HandleMediaEvent(const MediaEvent& e)
     {
         ctx_->Publish<FileEndedEvent>({currentFile_.c_str(), 0.0});
     }
+    // The file played to completion — clear its resume position so neither the next
+    // LoadFile's flush (below/on advance) nor a later resume re-saves the stale
+    // near-duration time, which would otherwise re-open the file straight at EOF.
+    currentTimePos_ = 0.0;
 
     if (Current() < Count() - 1)
     {
         Next();
+    }
+    else if (ctx_)
+    {
+        // Last item finished with nothing to advance to: stop playback so the host
+        // returns to the idle screen instead of holding the final frame as a seekable
+        // "playing" state.
+        ctx_->Publish<StopPlaybackRequestEvent>({});
     }
 }
 

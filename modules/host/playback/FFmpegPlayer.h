@@ -60,6 +60,10 @@ public:
     FFmpegPlayer& operator=(const FFmpegPlayer&) = delete;
 
     void LoadFile(const char* path, double resumePos = 0.0) noexcept override;
+    // Abandon the current file and return to the idle state (idle screen, no held
+    // frame). Host-only (concrete): used at end-of-playlist so a finished last item
+    // doesn't linger as a seekable held frame. No-op when already idle.
+    void Stop() noexcept;
     void SetPause(bool paused) noexcept override;
     void TogglePause() noexcept override;
     void ToggleMute() noexcept override;
@@ -296,6 +300,10 @@ private:
     std::string pendingPath_;
     double pendingResume_ = 0.0;
     bool hasPendingLoad_ = false;
+    // Set by Stop() to abandon the current file and return to idle without loading a
+    // new one (StopRequested() folds it in). Lingers harmlessly while the decode thread
+    // is parked; cleared when the next load is consumed.
+    bool stopRequested_ = false;
     std::string currentPath_;
 
     // Events queued for the main thread to drain via PollEvent(). Guarded by mutex_.
