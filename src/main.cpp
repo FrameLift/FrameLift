@@ -29,10 +29,6 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    // QApplication (not QGuiApplication) so the native QFileDialog open-file picker —
-    // a QWidget — has the widgets application it requires. QApplication is a
-    // QGuiApplication, so Qt Quick / raw PCM audio are unaffected.
-    QApplication qtApp(argc, argv);
     QApplication::setOrganizationName("FrameLift");
     QApplication::setApplicationName("FrameLift");
     // GNOME (and other freedesktop shells) resolve the dock/overview/taskbar icon by
@@ -42,6 +38,11 @@ int main(int argc, char* argv[])
     // without this the shell shows the generic "no icon" placeholder. (No effect on
     // Windows/macOS.)
     QApplication::setDesktopFileName("framelift");
+
+    // QApplication (not QGuiApplication) so the native QFileDialog open-file picker —
+    // a QWidget — has the widgets application it requires. QApplication is a
+    // QGuiApplication, so Qt Quick / raw PCM audio are unaffected.
+    QApplication qtApp(argc, argv);
     // We drive shutdown explicitly (window close → App quit flow), so don't let Qt quit
     // out from under the host when the last window closes.
     QApplication::setQuitOnLastWindowClosed(false);
