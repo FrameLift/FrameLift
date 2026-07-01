@@ -146,6 +146,39 @@ private Q_SLOTS:
         QVERIFY((c.UsedKB()) == (2));
     }
 
+    void PeakTracksHighWaterMark()
+    {
+        ReadAheadCache c;
+        c.Configure(true, 1 << 20);
+
+        c.AddBytes(1024);
+        c.AddBytes(2048);
+        c.RemoveBytes(2500);
+        c.AddBytes(512);
+
+        QVERIFY((c.UsedBytes()) == (1084));
+        QVERIFY((c.PeakUsedBytes()) == (3072));
+        QVERIFY((c.PeakUsedKB()) == (3));
+    }
+
+    void ResetMetricsKeepsCurrentUsedAsPeakBaseline()
+    {
+        ReadAheadCache c;
+        c.Configure(true, 1 << 20);
+        c.AddBytes(4096);
+        c.RecordHit();
+        c.ResetMetrics();
+
+        QVERIFY((c.Hits()) == (0));
+        QVERIFY((c.PeakUsedBytes()) == (4096));
+
+        c.RemoveBytes(2048);
+        QVERIFY((c.PeakUsedBytes()) == (4096));
+
+        c.AddBytes(4096);
+        QVERIFY((c.PeakUsedBytes()) == (6144));
+    }
+
     void StallCallbackFiresOnAggregateTransition()
     {
         ReadAheadCache c;

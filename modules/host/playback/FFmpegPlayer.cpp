@@ -32,6 +32,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <utility>
 
@@ -77,6 +78,26 @@ static_assert(kAvErrAccess == AVERROR(EACCES), "AVERROR(EACCES) mirror drifted")
 
 namespace
 {
+class PerfScope
+{
+public:
+    explicit PerfScope(std::string name) : name_(std::move(name))
+    {
+        FRAMELIFT_PERF_START(name_.c_str());
+    }
+
+    ~PerfScope()
+    {
+        FRAMELIFT_PERF_END(name_.c_str());
+    }
+
+    PerfScope(const PerfScope&) = delete;
+    PerfScope& operator=(const PerfScope&) = delete;
+
+private:
+    std::string name_;
+};
+
 MediaEvent MakeLifecycle(MediaEventType type)
 {
     MediaEvent e;
@@ -203,6 +224,14 @@ FFmpegPlayer::FFmpegPlayer()
     cache_.SetStallCallback(
         [this](bool stalling)
         {
+            if (stalling)
+            {
+                FRAMELIFT_PERF_START("cache-stall");
+            }
+            else
+            {
+                FRAMELIFT_PERF_END("cache-stall");
+            }
             EmitFlag(PlayerProperty::PausedForCache, stalling);
         }
     );
@@ -302,6 +331,10 @@ void FFmpegPlayer::DecodeThreadMain()
         {
             Log::Error("FFmpegPlayer: decode error: {}", e.what());
             QueueEvent(MakeEndFile(EndFileReason::Error));
+            FRAMELIFT_PERF_END("file-load-metadata");
+            FRAMELIFT_PERF_END("file-open");
+            FRAMELIFT_PERF_END("seek");
+            EmitPlaybackSummary("decode-error");
         }
     }
 }
@@ -309,6 +342,7 @@ void FFmpegPlayer::DecodeThreadMain()
 void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
 {
     FRAMELIFT_PERF_START("file-open");
+    FRAMELIFT_PERF_START("file-load-metadata");
     QueueEvent(MakeLifecycle(MediaEventType::StartFile));
     SetIdle(false);
     eofReached_ = false;
@@ -316,6 +350,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     droppedFrames_ = 0;
     mistimedFrames_ = 0;
     decodeErrors_ = 0;
+    cache_.ResetMetrics();
     displayWidth_ = 0;
     displayHeight_ = 0;
     seekSkipPts_ = -1e18; // no carry-over skip from a prior file's seek
@@ -344,17 +379,33 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
 
     AVFormatContext* fmt = nullptr;
     InstallFFmpegLogCallback(); // Qt may have clobbered the global callback since construction.
-    if (const int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr); ret < 0)
+    int openRet = 0;
+    {
+        PerfScope perf("file-open-input");
+        openRet = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
+    }
+    if (openRet < 0)
     {
         Log::Error("FFmpegPlayer: failed to open {}", path);
-        QueueEvent(MakeEndFile(ClassifyAvError(ret)));
+        QueueEvent(MakeEndFile(ClassifyAvError(openRet)));
+        FRAMELIFT_PERF_END("file-load-metadata");
+        FRAMELIFT_PERF_END("file-open");
+        EmitPlaybackSummary("open-error");
         return;
     }
-    if (const int ret = avformat_find_stream_info(fmt, nullptr); ret < 0)
+    int streamInfoRet = 0;
+    {
+        PerfScope perf("file-stream-info");
+        streamInfoRet = avformat_find_stream_info(fmt, nullptr);
+    }
+    if (streamInfoRet < 0)
     {
         Log::Error("FFmpegPlayer: failed to read stream info for {}", path);
         avformat_close_input(&fmt);
-        QueueEvent(MakeEndFile(ClassifyAvError(ret)));
+        QueueEvent(MakeEndFile(ClassifyAvError(streamInfoRet)));
+        FRAMELIFT_PERF_END("file-load-metadata");
+        FRAMELIFT_PERF_END("file-open");
+        EmitPlaybackSummary("stream-info-error");
         return;
     }
 
@@ -371,50 +422,62 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     int W = 0;
     int H = 0;
     hasVideo_ = false;
-    if (vIdx >= 0 && vCodec)
     {
-        vStream = fmt->streams[vIdx];
-        vDec = avcodec_alloc_context3(vCodec);
-        if (vDec)
+        PerfScope perf("video-decoder-open");
+        if (vIdx >= 0 && vCodec)
         {
-            avcodec_parameters_to_context(vDec, vStream->codecpar);
-            vDec->pkt_timebase = vStream->time_base;
-            // Try the selected hardware decode mode; all modes fall back cleanly to
-            // software if the codec, device, or renderer interop path is unavailable.
-            (void)TryEnableHardwareDecode(vCodec, vDec, hw);
-            vDec->thread_count = hw.Active() ? 1 : 0; // 0 = auto-detect for software decode
-            if (avcodec_open2(vDec, vCodec, nullptr) == 0 && vDec->width > 0 && vDec->height > 0)
+            vStream = fmt->streams[vIdx];
+            vDec = avcodec_alloc_context3(vCodec);
+            if (vDec)
             {
-                W = vDec->width;
-                H = vDec->height;
-                hasVideo_ = true;
-                displayWidth_ = W;
-                displayHeight_ = H;
+                avcodec_parameters_to_context(vDec, vStream->codecpar);
+                vDec->pkt_timebase = vStream->time_base;
+                // Try the selected hardware decode mode; all modes fall back cleanly to
+                // software if the codec, device, or renderer interop path is unavailable.
+                (void)TryEnableHardwareDecode(vCodec, vDec, hw);
+                vDec->thread_count = hw.Active() ? 1 : 0; // 0 = auto-detect for software decode
+                if (avcodec_open2(vDec, vCodec, nullptr) == 0 && vDec->width > 0 && vDec->height > 0)
                 {
-                    std::lock_guard lock(mutex_);
-                    hwDecName_ = hw.Active() ? hw.DeviceName() : "no";
+                    W = vDec->width;
+                    H = vDec->height;
+                    hasVideo_ = true;
+                    displayWidth_ = W;
+                    displayHeight_ = H;
+                    {
+                        std::lock_guard lock(mutex_);
+                        hwDecName_ = hw.Active() ? hw.DeviceName() : "no";
+                    }
                 }
-            }
-            else
-            {
-                Log::Warn("FFmpegPlayer: video decoder unavailable; audio-only playback");
-                avcodec_free_context(&vDec);
+                else
+                {
+                    Log::Warn("FFmpegPlayer: video decoder unavailable; audio-only playback");
+                    avcodec_free_context(&vDec);
+                }
             }
         }
     }
 
     // ── Discover sidecar files and build the audio/subtitle track list ────────
-    ScanExternalSources(path);
-    BuildTrackList(fmt, defaultAudioIdx);
+    {
+        PerfScope perf("track-discovery");
+        ScanExternalSources(path);
+        BuildTrackList(fmt, defaultAudioIdx);
+    }
 
     // ── Bind the default audio + subtitle selections ──────────────────────────
     AudioBinding aud;
-    OpenAudioBinding(selectedAudioId_, fmt, aud);
+    {
+        PerfScope perf("audio-bind");
+        OpenAudioBinding(selectedAudioId_, fmt, aud);
+    }
 
     int subIdx = -1;
     AVCodecContext* sDec = nullptr;
     AVStream* sStream = nullptr;
-    OpenSubtitleBinding(selectedSubId_, path, fmt, subIdx, sDec, sStream);
+    {
+        PerfScope perf("subtitle-bind");
+        OpenSubtitleBinding(selectedSubId_, path, fmt, subIdx, sDec, sStream);
+    }
 
     if (!hasVideo_ && !aud.dec)
     {
@@ -424,6 +487,9 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         OpenSubtitleBinding(-1, path, fmt, subIdx, sDec, sStream);
         avformat_close_input(&fmt);
         QueueEvent(MakeEndFile(EndFileReason::NoStream));
+        FRAMELIFT_PERF_END("file-load-metadata");
+        FRAMELIFT_PERF_END("file-open");
+        EmitPlaybackSummary("no-stream");
         return;
     }
 
@@ -462,6 +528,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         mediaTitle_ = titleTag && titleTag->value ? titleTag->value : std::filesystem::path(path).filename().string();
     }
     QueueEvent(MakeLifecycle(MediaEventType::FileLoaded));
+    FRAMELIFT_PERF_END("file-load-metadata");
     EmitDouble(PlayerProperty::Duration, durationSec);
     if (aud.dec)
     {
@@ -483,10 +550,6 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     double seekTo = resumePos > 0.0 ? resumePos : std::numeric_limits<double>::quiet_NaN();
     AVPacket* pkt = av_packet_alloc();
     bool stop = false;
-
-    // Fresh hit/miss counters for this file (the budget itself was configured via
-    // SetReadAheadCache and persists across files).
-    cache_.ResetMetrics();
 
     while (!stop)
     {
@@ -520,6 +583,11 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         }
 
         // ── Apply a pending seek (single-threaded here: workers are joined) ────
+        const bool timingSeekApply = !std::isnan(seekTo);
+        if (timingSeekApply)
+        {
+            FRAMELIFT_PERF_START("seek-apply");
+        }
         if (!std::isnan(seekTo))
         {
             const auto ts = static_cast<int64_t>(seekTo * AV_TIME_BASE);
@@ -593,6 +661,10 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         // Clear the read-ahead accounting + abort flag (the queues were aborted on
         // the seek that brought us here) so the demuxer can refill for this read.
         cache_.Reset();
+        if (timingSeekApply)
+        {
+            FRAMELIFT_PERF_END("seek-apply");
+        }
         if (aud.dec)
         {
             audioThread_ = std::thread(&FFmpegPlayer::AudioWorker, this, aud.dec, aud.stream, aud.startOffset);
@@ -769,10 +841,24 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     // when the output format matches, avoiding a device close/reopen per file. Only tear it
     // down when we're genuinely stopping (shutdown), where the next open won't follow.
     bool advancing = false;
+    const char* summaryReason = "stop";
     {
         std::lock_guard lock(mutex_);
         advancing = hasPendingLoad_;
+        if (shutdown_.load())
+        {
+            summaryReason = "shutdown";
+        }
+        else if (hasPendingLoad_)
+        {
+            summaryReason = "superseded";
+        }
+        else if (!stopRequested_)
+        {
+            summaryReason = "ended";
+        }
     }
+    EmitPlaybackSummary(summaryReason);
     if (!advancing)
     {
         audioOut_->Close();
@@ -847,6 +933,9 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         // For audio-only files there is no video worker to drive TimePos.
         if (!hasVideo_)
         {
+            FRAMELIFT_PERF_END("file-open");
+            FRAMELIFT_PERF_END("seek");
+
             const auto now = std::chrono::steady_clock::now();
             if (now - lastEmit >= std::chrono::milliseconds(250))
             {
@@ -1792,6 +1881,31 @@ void FFmpegPlayer::RequestRender()
     }
 }
 
+void FFmpegPlayer::EmitPlaybackSummary(const char* reason)
+{
+    if (!Log::PerfActive())
+    {
+        return;
+    }
+
+    std::string hwDec;
+    {
+        std::lock_guard lock(mutex_);
+        hwDec = hwDecName_.empty() ? std::string("unknown") : hwDecName_;
+    }
+
+    Log::Emit(
+        Log::Level::Perf,
+        std::format(
+            "playback-summary reason={} video={} duration_ms={:.0f} display={}x{} hwdec={} dropped={} mistimed={} "
+            "decode_errors={} cache_hits={} cache_misses={} cache_peak_kib={}",
+            reason ? reason : "unknown", hasVideo_ ? 1 : 0, duration_.load() * 1000.0, displayWidth_.load(),
+            displayHeight_.load(), hwDec, droppedFrames_.load(), mistimedFrames_.load(), decodeErrors_.load(),
+            cache_.Hits(), cache_.Misses(), cache_.PeakUsedKB()
+        )
+    );
+}
+
 void FFmpegPlayer::EmitFlag(PlayerProperty prop, bool value)
 {
     if (!observed_[static_cast<std::size_t>(prop)].load())
@@ -2567,8 +2681,10 @@ void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
         vulkanAdapterIsNvidia_ = backend->HasNvidiaAdapter();
         if (vulkanZeroCopyAvailable_ && vulkanAdapterIsNvidia_)
         {
-            Log::Debug("FFmpegPlayer: NVIDIA adapter — Auto decode prefers NVDEC over Vulkan zero-copy "
-                      "(VK_ERROR_DEVICE_LOST on the NVIDIA Vulkan video backend)");
+            Log::Debug(
+                "FFmpegPlayer: NVIDIA adapter — Auto decode prefers NVDEC over Vulkan zero-copy "
+                "(VK_ERROR_DEVICE_LOST on the NVIDIA Vulkan video backend)"
+            );
         }
     }
 #endif

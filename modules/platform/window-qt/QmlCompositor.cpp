@@ -10,6 +10,31 @@
 #include <QtQuick/QQuickItem>
 
 #include <algorithm>
+#include <string>
+#include <utility>
+
+namespace
+{
+class PerfScope
+{
+public:
+    explicit PerfScope(std::string name) : name_(std::move(name))
+    {
+        FRAMELIFT_PERF_START(name_.c_str());
+    }
+
+    ~PerfScope()
+    {
+        FRAMELIFT_PERF_END(name_.c_str());
+    }
+
+    PerfScope(const PerfScope&) = delete;
+    PerfScope& operator=(const PerfScope&) = delete;
+
+private:
+    std::string name_;
+};
+} // namespace
 
 QmlCompositor::QmlCompositor(QQuickItem* root) : root_(root), engine_(std::make_unique<QQmlEngine>())
 {
@@ -53,6 +78,7 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
             continue;
         }
 
+        PerfScope perf("qml-load:" + view.moduleId.toStdString());
         auto context = std::make_unique<QQmlContext>(engine_->rootContext());
 
         QQmlComponent component(engine_.get(), QUrl(view.sourceUrl));

@@ -24,6 +24,26 @@ constexpr const char* kPluginExt = ".dll";
 constexpr const char* kPluginExt = ".so";
 #endif
 
+class PerfScope
+{
+public:
+    explicit PerfScope(std::string name) : name_(std::move(name))
+    {
+        FRAMELIFT_PERF_START(name_.c_str());
+    }
+
+    ~PerfScope()
+    {
+        FRAMELIFT_PERF_END(name_.c_str());
+    }
+
+    PerfScope(const PerfScope&) = delete;
+    PerfScope& operator=(const PerfScope&) = delete;
+
+private:
+    std::string name_;
+};
+
 struct PluginBinary
 {
     std::string pluginFile;
@@ -95,8 +115,7 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
         {
             Log::Warn(
                 "Plugin '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current SDK",
-                meta.pluginId, meta.version[0], meta.version[1], meta.version[2], meta.abiVersion,
-                FRAMELIFT_ABI_VERSION
+                meta.pluginId, meta.version[0], meta.version[1], meta.version[2], meta.abiVersion, FRAMELIFT_ABI_VERSION
             );
             continue;
         }
@@ -173,7 +192,7 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
             continue;
         }
 
-        const auto pluginStart = Clock::now();
+        PerfScope pluginPerf("plugin-load:" + meta.pluginId);
 
         QObject* const root = candidate.loader->instance();
         if (!root)
@@ -211,10 +230,9 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
         );
 
         const std::string by = meta.publisher.empty() ? std::string() : std::string(" by ") + meta.publisher;
-        const double pluginMs = std::chrono::duration<double, std::milli>(Clock::now() - pluginStart).count();
-        Log::Info(
-            "Plugin '{}' v{}.{}.{}{} loaded (abi version {}, {:.1f} ms)", meta.pluginId, meta.version[0],
-            meta.version[1], meta.version[2], by, meta.abiVersion, pluginMs
+        Log::Debug(
+            "Plugin '{}' v{}.{}.{}{} loaded (abi version {})", meta.pluginId, meta.version[0], meta.version[1],
+            meta.version[2], by, meta.abiVersion
         );
     }
 
