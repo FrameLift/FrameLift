@@ -425,14 +425,14 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         throw std::runtime_error("Vulkan upload fence creation failed");
     }
 
-    Log::Info(
+    Log::Debug(
         "Vulkan: {} (device API {}, negotiated {}; zero-copy prerequisites {}, video decode queue {})",
         properties.deviceName, VersionString(properties.apiVersion), VersionString(deviceApiVersion_),
         enabledF11_.samplerYcbcrConversion && enabledF12_.timelineSemaphore && enabledF13_.synchronization2 ? "enabled"
                                                                                                             : "partial",
         supportsVulkanVideo_ ? "available" : "unavailable"
     );
-    Log::Info(
+    Log::Debug(
         "Vulkan: Qt graphics queue family {}, index {}; FFmpeg graphics queue index 0", graphicsQueueFamily_,
         qtGraphicsQueueIndex_
     );

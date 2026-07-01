@@ -62,7 +62,7 @@ FFmpegSubtitles::FFmpegSubtitles()
     // Autodetect picks the platform font provider (DirectWrite on Windows,
     // fontconfig/CoreText elsewhere) and a sane default family.
     ass_set_fonts(renderer_, nullptr, "sans-serif", ASS_FONTPROVIDER_AUTODETECT, nullptr, 1);
-    Log::Info("FFmpegSubtitles: libass {} ready", ass_library_version());
+    Log::Debug("FFmpegSubtitles: libass {} ready", ass_library_version());
 }
 
 FFmpegSubtitles::~FFmpegSubtitles()
