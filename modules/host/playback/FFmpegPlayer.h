@@ -180,6 +180,8 @@ private:
     [[nodiscard]] double TakePendingSeek();
     // Record an absolute seek target and wake the decode thread / workers.
     void RequestSeek(double target) noexcept;
+    // Emit one sparse perf summary for the loaded session; no file paths are logged.
+    void EmitPlaybackSummary(const char* reason);
 
     // ── Track model ──────────────────────────────────────────────────────────
     enum class TrackKind : std::uint8_t

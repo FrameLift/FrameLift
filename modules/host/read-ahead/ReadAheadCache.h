@@ -47,7 +47,13 @@ public:
     bool WaitForSpace(int64_t bytes)
     {
         std::unique_lock lock(m_);
-        cv_.wait(lock, [&] { return aborted_ || CanAccept(bytes); });
+        cv_.wait(
+            lock,
+            [&]
+            {
+                return aborted_ || CanAccept(bytes);
+            }
+        );
         return !aborted_;
     }
 
@@ -56,6 +62,10 @@ public:
     {
         std::lock_guard lock(m_);
         used_ += bytes;
+        if (used_ > peakUsed_)
+        {
+            peakUsed_ = used_;
+        }
     }
 
     // Release bytes as a queue hands a packet to its decode worker. Wakes a
@@ -84,6 +94,17 @@ public:
         return UsedBytes() / 1024;
     }
 
+    [[nodiscard]] int64_t PeakUsedBytes() const
+    {
+        std::lock_guard lock(m_);
+        return peakUsed_;
+    }
+
+    [[nodiscard]] int64_t PeakUsedKB() const
+    {
+        return PeakUsedBytes() / 1024;
+    }
+
     // A "hit" is a decode worker dequeueing a packet that was already buffered;
     // a "miss" is the worker stalling on an empty (non-EOF) queue — a real
     // read-ahead underrun.
@@ -91,6 +112,7 @@ public:
     {
         hits_.fetch_add(1, std::memory_order_relaxed);
     }
+
     void RecordMiss()
     {
         misses_.fetch_add(1, std::memory_order_relaxed);
@@ -100,6 +122,7 @@ public:
     {
         return hits_.load(std::memory_order_relaxed);
     }
+
     [[nodiscard]] int64_t Misses() const
     {
         return misses_.load(std::memory_order_relaxed);
@@ -161,6 +184,10 @@ public:
     // Clear hit/miss metrics (called when a new file is loaded).
     void ResetMetrics()
     {
+        {
+            std::lock_guard lock(m_);
+            peakUsed_ = used_;
+        }
         hits_.store(0, std::memory_order_relaxed);
         misses_.store(0, std::memory_order_relaxed);
     }
@@ -179,6 +206,7 @@ private:
     bool aborted_ = false;
     int64_t maxBytes_ = 0;
     int64_t used_ = 0;
+    int64_t peakUsed_ = 0;
     std::atomic<int64_t> hits_{0};
     std::atomic<int64_t> misses_{0};
     std::atomic<int> stalls_{0};

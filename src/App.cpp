@@ -32,6 +32,26 @@
 
 namespace
 {
+class PerfScope
+{
+public:
+    explicit PerfScope(std::string name) : name_(std::move(name))
+    {
+        FRAMELIFT_PERF_START(name_.c_str());
+    }
+
+    ~PerfScope()
+    {
+        FRAMELIFT_PERF_END(name_.c_str());
+    }
+
+    PerfScope(const PerfScope&) = delete;
+    PerfScope& operator=(const PerfScope&) = delete;
+
+private:
+    std::string name_;
+};
+
 std::string LegacyPluginId(std::string id)
 {
     if (id.ends_with(".core"))
@@ -96,14 +116,26 @@ App::App(
     const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
     pluginsPath_ = prefDir.empty() ? "plugins.ini" : prefDir + "plugins.ini";
 
-    InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath);
-    InitServices(prefDir, settingsPath);
+    {
+        PerfScope perf("startup-platform");
+        InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath);
+    }
+    {
+        PerfScope perf("startup-services");
+        InitServices(prefDir, settingsPath);
+    }
 
     // The ContextMenu plugin owns the right-click menu: it registers the ContextMenu
     // service that other plugins extend, and assembles its items on its first frame.
-    LoadPlugins();
+    {
+        PerfScope perf("startup-plugins");
+        LoadPlugins();
+    }
 
-    BuildPluginViews();
+    {
+        PerfScope perf("startup-qml");
+        BuildPluginViews();
+    }
 }
 
 App::~App()
