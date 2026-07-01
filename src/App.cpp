@@ -1,5 +1,6 @@
 #include "App.h"
 #include "Cli.h"
+#include "CoreCommands.h"
 #include "CoreSettings.h"
 #include "FFmpegPlayer.h"
 #include "GraphicsApi.h"
@@ -74,6 +75,7 @@ void MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& plug
         }
     }
 }
+
 } // namespace
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
@@ -173,6 +175,7 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<ILogBuffer>(&HostLogBuffer());
     graphicsInfo_ = std::make_unique<GraphicsInfoService>(appWindow_.get());
     moduleCtx_->RegisterService<IGraphicsInfo>(graphicsInfo_.get());
+    host::RegisterCoreCommands(moduleCtx_->Commands(), *moduleCtx_, *ffmpeg_, *appWindow_, pluginsPath_);
 
     // Controllers own their own event-bus wiring (settings re-apply, audio ducking,
     // theme reaction) so App holds no subscriptions.

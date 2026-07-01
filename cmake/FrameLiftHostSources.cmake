@@ -14,6 +14,8 @@ set(_FRAMELIFT_HOST_CORE_SOURCES
 set(_FRAMELIFT_HOST_MODULE_RUNTIME_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/PluginConfig.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/PluginConfig.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/CommandRegistry.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/CommandRegistry.h"
         "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/ModuleContext.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/ModuleContext.h"
         "${CMAKE_SOURCE_DIR}/modules/host/module-runtime/AppPaths.cpp"
@@ -51,6 +53,8 @@ set(_FRAMELIFT_HOST_SERVICES_SOURCES
 )
 
 set(_FRAMELIFT_HOST_CONTROLS_SOURCES
+        "${CMAKE_SOURCE_DIR}/modules/host/controls/CoreCommands.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/controls/CoreCommands.h"
         "${CMAKE_SOURCE_DIR}/modules/host/controls/PlaybackControls.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/controls/PlaybackControls.h"
 )

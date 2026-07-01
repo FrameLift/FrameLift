@@ -26,8 +26,8 @@ Item {
                 required property var modelData
                 title: modelData.label
                 description: modelData.prop === "perfOnly"
-                             ? "Show only performance log entries in the viewer."
-                             : "Include this log level in the viewer output."
+                             ? "Show only performance log entries in the console."
+                             : "Include this log level in the console output."
                 Switch {
                     checked: root.viewModel[modelData.prop]
                     onToggled: root.viewModel[modelData.prop] = checked

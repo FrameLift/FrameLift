@@ -2,7 +2,7 @@
   "fileVersion": 1,
   "id": "framelift.logging",
   "name": "Logging",
-  "description": "Host logging sink and in-memory ring buffer backing Log::* and the LogViewer plugin.",
+  "description": "Host logging sink and in-memory ring buffer backing Log::*.",
   "enabled": true,
   "required": true,
   "provides": {

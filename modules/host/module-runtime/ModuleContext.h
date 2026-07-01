@@ -1,5 +1,6 @@
 #pragma once
 #include "AppPaths.h"
+#include "CommandRegistry.h"
 #include "PluginCatalog.h"
 #include "SettingsService.h"
 #include <framelift/IModuleContext.h>
@@ -48,6 +49,10 @@ public:
     {
         return paths_;
     }
+    [[nodiscard]] CommandRegistry& Commands() noexcept
+    {
+        return commands_;
+    }
 
     // Drop all subscriber/DLL-owned callbacks before FreeLibrary: this context's own
     // pub/sub subscriptions, then the settings sub-service's registration tables.
@@ -67,6 +72,7 @@ private:
     AppPaths paths_;
     PluginCatalog catalog_;
     SettingsService settings_;
+    CommandRegistry commands_;
 
     std::unordered_map<std::string, void*> registry_;
     std::vector<SubscriptionRec> subscriptions_;

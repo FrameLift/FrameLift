@@ -66,6 +66,7 @@ add_executable(framelift_tests
         unit/host/SettingsTests.cpp
         unit/host/ModuleContextTests.cpp
         unit/host/PluginConfigTests.cpp
+        unit/host/CommandRegistryTests.cpp
         unit/host/ModuleSettingsTests.cpp
         unit/misc/KeyNamesTests.cpp
         unit/host/HotkeysTests.cpp
@@ -89,6 +90,7 @@ add_executable(framelift_tests
         ${FRAMELIFT_QT_TEST_RUNNER}
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/module-runtime/CommandRegistry.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
@@ -179,8 +181,8 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/debug-overlay"
             "${FRAMELIFT_ROOT}/plugins/benchmark"
             "${FRAMELIFT_ROOT}/plugins/remote-stream"
-            "${FRAMELIFT_ROOT}/plugins/context-menu"
-            "${FRAMELIFT_ROOT}/plugins/log-viewer"
+        "${FRAMELIFT_ROOT}/plugins/context-menu"
+            "${FRAMELIFT_ROOT}/plugins/console"
     )
     target_link_libraries(${name} PRIVATE
             Threads::Threads Qt6::Core Qt6::Gui Qt6::Test)
@@ -205,6 +207,7 @@ add_framelift_plugin_test(framelift_test_playlist
         "${FRAMELIFT_ROOT}/plugins/playlist/Playlist.cpp"
         "${FRAMELIFT_ROOT}/plugins/playlist/PlaylistSettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/module-runtime/CommandRegistry.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
@@ -215,6 +218,7 @@ add_framelift_plugin_test(framelift_test_settingsmenu
         plugins/settings-menu/SettingsMenuTests.cpp
         "${FRAMELIFT_ROOT}/plugins/settings-menu/SettingsMenu.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/module-runtime/CommandRegistry.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
@@ -247,7 +251,8 @@ add_framelift_plugin_test(framelift_test_contextmenu
         plugins/context-menu/ContextMenuTests.cpp
         "${FRAMELIFT_ROOT}/plugins/context-menu/ContextMenuModule.cpp")
 
-add_framelift_plugin_test(framelift_test_logviewer
-        plugins/log-viewer/LogViewerTests.cpp
-        "${FRAMELIFT_ROOT}/plugins/log-viewer/LogViewer.cpp"
-        "${FRAMELIFT_ROOT}/plugins/log-viewer/LogViewerSettings.cpp")
+add_framelift_plugin_test(framelift_test_console
+        plugins/console/ConsoleTests.cpp
+        "${FRAMELIFT_ROOT}/plugins/console/Console.cpp"
+        "${FRAMELIFT_ROOT}/plugins/console/ConsoleSettings.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/module-runtime/CommandRegistry.cpp")

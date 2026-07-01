@@ -2,9 +2,9 @@
 
 #include <QtCore/QObject>
 
-class LogViewer;
+class Console;
 
-class LogViewerSettings final : public QObject
+class ConsoleSettings final : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QString title READ Title CONSTANT)
@@ -16,7 +16,7 @@ class LogViewerSettings final : public QObject
     Q_PROPERTY(bool perfOnly READ PerfOnly WRITE SetPerfOnly NOTIFY changed)
 
 public:
-    explicit LogViewerSettings(LogViewer& logViewer);
+    explicit ConsoleSettings(Console& console);
 
     [[nodiscard]] QString Title() const;
     [[nodiscard]] bool Dirty() const;
@@ -41,7 +41,7 @@ Q_SIGNALS:
 private:
     void MarkDirty();
 
-    LogViewer& logViewer_;
+    Console& console_;
     bool dirty_ = false;
     bool showDebug_ = true;
     bool showInfo_ = true;

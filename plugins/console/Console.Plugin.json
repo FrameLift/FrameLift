@@ -1,15 +1,15 @@
 {
   "fileVersion": 1,
-  "id": "framelift.log_viewer",
-  "name": "LogViewer",
+  "id": "framelift.console",
+  "name": "Console",
   "publisher": "FrameLift",
-  "description": "In-app log and performance viewer",
+  "description": "In-app logs and internal command console",
   "version": "project",
   "abi": 1,
   "enabled": true,
   "provides": {
     "features": [
-      "log.viewer"
+      "developer.console"
     ]
   },
   "requires": {

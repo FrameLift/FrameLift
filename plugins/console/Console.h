@@ -11,13 +11,13 @@
 #include <vector>
 
 class QTimer;
-class LogViewerSettings;
+class ConsoleSettings;
 
-// In-app log viewer (Ctrl+L to toggle). Reads recent log lines back from the
+// In-app console (Ctrl+L to toggle). Reads recent log lines back from the
 // host's in-memory ring buffer via the ILogBuffer service and shows them in a
 // scrolling, filterable window. Performance measurements are emitted at
 // Log::Level::Perf; the "Perf only" toggle isolates them.
-class LogViewer final : public QObject, public ModuleBase
+class Console final : public QObject, public ModuleBase
 {
     Q_OBJECT
     // `open` drives the panel's `visible` in QML. Keep it on its own signal, separate
@@ -33,7 +33,7 @@ class LogViewer final : public QObject, public ModuleBase
 public:
     const char* ModuleName() const override
     {
-        return "LogViewer";
+        return "Console";
     }
 
     void Toggle()
@@ -71,6 +71,9 @@ public:
     }
 
     Q_INVOKABLE void clearLines();
+    Q_INVOKABLE void submitCommand(const QString& command);
+    Q_INVOKABLE QString historyPrevious(const QString& current);
+    Q_INVOKABLE QString historyNext();
 
     Q_INVOKABLE void close()
     {
@@ -81,6 +84,7 @@ protected:
     std::vector<framelift::Keybind> Keybinds() override;
     void LoadSettings(IModuleSettings& ps) override;
     void SaveSettings(IModuleSettings& ps) override;
+    void LoadKeybinds(IModuleSettings& kps) override;
     void OnInstall(IModuleContext& ctx) override;
 
 Q_SIGNALS:
@@ -90,6 +94,14 @@ Q_SIGNALS:
 private:
     struct Entry
     {
+        enum class Kind
+        {
+            Log,
+            Input,
+            Output,
+        };
+
+        Kind kind = Kind::Log;
         unsigned long long seq = 0;
         long long tsMillis = 0;
         int level = 0;
@@ -99,11 +111,17 @@ private:
     // Flip the open/closed state and gate the 250 ms poll timer on it (no draining
     // the ring buffer while hidden); pulls immediately on open, then notifies.
     void SetOpen(bool open);
-    // ILogBuffer::Visitor trampoline — `ud` is the LogViewer instance.
+    // ILogBuffer::Visitor trampoline — `ud` is the Console instance.
     static void OnEntry(void* ud, unsigned long long seq, long long tsMillis, int level, const char* msg);
     // Drain newly-appended lines from the ring buffer; returns true iff ≥1 entry was added.
     bool Pull();
     [[nodiscard]] bool Passes(const Entry& e) const;
+    void AppendConsoleLine(Entry::Kind kind, int level, std::string msg);
+    void RegisterLocalCommands(IModuleContext& ctx);
+    static void OnCommandOutput(void* ud, int level, const char* text) noexcept;
+    static void HelpCommand(const ICommandRegistry::Invocation* invocation, void* ud) noexcept;
+    static void ClearCommand(const ICommandRegistry::Invocation* invocation, void* ud) noexcept;
+    static void LogsCommand(const ICommandRegistry::Invocation* invocation, void* ud) noexcept;
 
     // Invalidate the QmlLines cache, then emit `changed`. The dirty flag MUST be set
     // before the emit: QML's `lines` binding may re-evaluate (calling QmlLines) ahead
@@ -117,9 +135,12 @@ private:
     }
 
     ILogBuffer* logs_ = nullptr;
+    ICommandRegistry* commands_ = nullptr;
     unsigned long long lastSeq_ = 0;
     std::deque<Entry> entries_;
+    std::deque<Entry> consoleEntries_;
     static constexpr std::size_t kMaxEntries = 5000;
+    static constexpr std::size_t kMaxCommandHistory = 100;
 
     bool open_ = false;
     std::string toggleKey_ = "Ctrl+L";
@@ -130,10 +151,13 @@ private:
     bool showWarn_ = true;
     bool showError_ = true;
     bool perfOnly_ = false;
-    std::unique_ptr<LogViewerSettings> settingsPage_;
+    std::unique_ptr<ConsoleSettings> settingsPage_;
 
     // Runtime-only text search (not persisted).
     std::string filterText_;
+    std::vector<std::string> commandHistory_;
+    int historyCursor_ = 0;
+    std::string historyDraft_;
     QTimer* refreshTimer_ = nullptr;
 
     // ── QML lines cache ────────────────────────────────────────────────────────
@@ -145,11 +169,11 @@ private:
 
     void ApplySettings(bool showDebug, bool showInfo, bool showWarn, bool showError, bool perfOnly);
 
-    friend class LogViewerSettings;
+    friend class ConsoleSettings;
 };
 
 FRAMELIFT_MODULE_ENTRY(
-    LogViewer, {
-                   .renderOrder = 70,
-               }
+    Console, {
+                 .renderOrder = 70,
+             }
 )

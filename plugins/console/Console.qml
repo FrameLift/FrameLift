@@ -30,6 +30,18 @@ Item {
         default: return "LOG"
         }
     }
+    function rowLabel(row) {
+        if (row.kind === "input")
+            return ">"
+        if (row.kind === "output") {
+            switch (row.level) {
+            case 1: return "WARN"
+            case 2: return "ERR"
+            default: return "OUT"
+            }
+        }
+        return root.levelLabel(row.level)
+    }
     function levelColor(level) {
         switch (level) {
         case 1: return "#34D399" // info  — green
@@ -38,6 +50,18 @@ Item {
         case 4: return FLTheme.accent // perf
         default: return FLTheme.textMuted // debug
         }
+    }
+    function rowColor(row) {
+        if (row.kind === "input")
+            return FLTheme.accent
+        if (row.kind === "output") {
+            switch (row.level) {
+            case 1: return "#FBBF24"
+            case 2: return FLTheme.danger
+            default: return FLTheme.text
+            }
+        }
+        return root.levelColor(row.level)
     }
 
     FLGlassPanel {
@@ -53,7 +77,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                Text { text: "Logs"; color: FLTheme.text; font.pixelSize: 18; font.weight: Font.DemiBold }
+                Text { text: "Console"; color: FLTheme.text; font.pixelSize: 18; font.weight: Font.DemiBold }
                 TextField {
                     id: filterField
                     Layout.fillWidth: true
@@ -110,8 +134,8 @@ Item {
                         Layout.alignment: Qt.AlignTop
                     }
                     Text {
-                        text: root.levelLabel(row.modelData.level)
-                        color: root.levelColor(row.modelData.level)
+                        text: root.rowLabel(row.modelData)
+                        color: root.rowColor(row.modelData)
                         font.family: "monospace"
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
@@ -120,7 +144,7 @@ Item {
                     }
                     Text {
                         text: row.modelData.message
-                        color: FLTheme.text
+                        color: root.rowColor(row.modelData)
                         font.family: "monospace"
                         font.pixelSize: 11
                         wrapMode: Text.WrapAnywhere
@@ -128,6 +152,45 @@ Item {
                     }
                 }
                 onCountChanged: Qt.callLater(positionViewAtEnd)
+            }
+            TextField {
+                id: commandField
+                Layout.fillWidth: true
+                placeholderText: "Command"
+                placeholderTextColor: FLTheme.textMuted
+                color: FLTheme.text
+                font.family: "monospace"
+                font.pixelSize: 12
+                leftPadding: 10
+                rightPadding: 10
+                topPadding: 7
+                bottomPadding: 7
+                selectByMouse: true
+                onAccepted: {
+                    if (root.vm !== null && text.length > 0) {
+                        root.vm.submitCommand(text)
+                        text = ""
+                    }
+                }
+                Keys.onPressed: function(event) {
+                    if (root.vm === null)
+                        return
+                    if (event.key === Qt.Key_Up) {
+                        text = root.vm.historyPrevious(text)
+                        cursorPosition = text.length
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Down) {
+                        text = root.vm.historyNext()
+                        cursorPosition = text.length
+                        event.accepted = true
+                    }
+                }
+                background: Rectangle {
+                    radius: 6
+                    color: "#14000000"
+                    border.width: 1
+                    border.color: commandField.activeFocus ? FLTheme.accent : FLTheme.border
+                }
             }
         }
     }

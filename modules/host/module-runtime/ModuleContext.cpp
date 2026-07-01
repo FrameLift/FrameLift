@@ -19,6 +19,7 @@ ModuleContext::ModuleContext(
     RegisterServiceRaw(ISettingsStore::InterfaceId, static_cast<ISettingsStore*>(&settings_));
     RegisterServiceRaw(ISettingsRegistry::InterfaceId, static_cast<ISettingsRegistry*>(&settings_));
     RegisterServiceRaw(ISettingsPageRegistry::InterfaceId, static_cast<ISettingsPageRegistry*>(&settings_));
+    RegisterServiceRaw(ICommandRegistry::InterfaceId, static_cast<ICommandRegistry*>(&commands_));
 }
 
 ModuleContext::~ModuleContext() = default;
@@ -78,4 +79,5 @@ void ModuleContext::ClearSubscriptions()
     subscriptions_.clear();
 
     settings_.ClearRegistrations();
+    commands_.ClearPluginCommands();
 }
