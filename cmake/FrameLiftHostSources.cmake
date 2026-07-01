@@ -214,6 +214,11 @@ if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     list(APPEND _framelift_playback_sources ${_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES})
 endif ()
 framelift_add_host_module(framelift_mod_playback ${_framelift_playback_sources})
+if (WIN32)
+    # winmm: timeBeginPeriod/timeEndPeriod used by the video frame-pacing timer in
+    # FFmpegPlayer.cpp (this module is where those calls actually live).
+    target_link_libraries(framelift_mod_playback PRIVATE winmm)
+endif ()
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     target_link_libraries(framelift_mod_playback PRIVATE
             Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator)

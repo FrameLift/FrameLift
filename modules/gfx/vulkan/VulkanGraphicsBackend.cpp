@@ -84,9 +84,13 @@ bool VulkanGraphicsBackend::IsSupported()
 void VulkanGraphicsBackend::CreateInstance()
 {
     uint32_t loaderVersion = VK_API_VERSION_1_0;
-    if (vkEnumerateInstanceVersion)
+    // vkEnumerateInstanceVersion only exists on a 1.1+ loader; resolve it dynamically so a
+    // 1.0-only loader leaves loaderVersion at 1.0 (a direct symbol reference is always
+    // non-null, so `if (vkEnumerateInstanceVersion)` would never detect the 1.0 case).
+    if (auto enumerateVersion =
+            reinterpret_cast<PFN_vkEnumerateInstanceVersion>(vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion")))
     {
-        vkEnumerateInstanceVersion(&loaderVersion);
+        enumerateVersion(&loaderVersion);
     }
     if (loaderVersion < VK_API_VERSION_1_3)
     {

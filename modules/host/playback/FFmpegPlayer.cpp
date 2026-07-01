@@ -68,8 +68,8 @@ static_assert(kAvErrAccess == AVERROR(EACCES), "AVERROR(EACCES) mirror drifted")
 #ifndef NOMINMAX
 #define NOMINMAX // keep std::min/std::max usable below
 #endif
-#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm)
 #include <windows.h>
+#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm); needs windows.h types first
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002 // Win10 1803+; define for older SDK headers
 #endif

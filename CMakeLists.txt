@@ -170,12 +170,6 @@ target_link_libraries(FrameLift PRIVATE ffmpeg libass)
 # link libdl explicitly so the symbols resolve (no-op libs on Windows).
 target_link_libraries(FrameLift PRIVATE ${CMAKE_DL_LIBS})
 
-# winmm: timeBeginPeriod/timeEndPeriod, used to tighten the video frame-pacing timer
-# (the waitable-timer / event APIs live in kernel32, linked by default).
-if (WIN32)
-    target_link_libraries(FrameLift PRIVATE winmm)
-endif ()
-
 if (MINGW)
     target_link_options(FrameLift PRIVATE -static-libgcc -static-libstdc++ -static)
 endif ()
