@@ -1,14 +1,13 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.services",
+  "id": "framelift.services",
   "name": "Host Services",
-  "description": "Host service implementations for hotkeys, focus, and file dialogs.",
+  "description": "Host service implementations for hotkeys and file dialogs.",
   "enabled": true,
   "required": true,
   "provides": {
     "features": [
       "services.hotkeys",
-      "services.focus",
       "services.file_dialog"
     ]
   },

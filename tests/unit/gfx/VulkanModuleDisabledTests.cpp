@@ -1,33 +1,53 @@
-#include "Settings.h"
-#include "GraphicsSettings.h"
-#include "VideoDecodeMode.h"
 #include "GraphicsApi.h"
+#include "VideoDecodeMode.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
+
+#include <QtTest/QtTest>
 
 #include <algorithm>
 
-TEST(VulkanModuleDisabledTests, GraphicsSettingsNormalizeToOpenGl)
+class VulkanModuleDisabledTests final : public QObject
 {
-    Settings settings;
-    EXPECT_EQ(settings.Get<GraphicsSettings>().backend, "gl");
-    EXPECT_EQ(GraphicsApiFromString("vulkan"), GraphicsApi::OpenGL);
-    EXPECT_EQ(GraphicsApiFromString("vk"), GraphicsApi::OpenGL);
-    EXPECT_STREQ(GraphicsApiName(GraphicsApi::Vulkan), "gl");
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void BackendSelectionNormalizesToOpenGl()
+    {
+        // With Vulkan compiled out, FL_BACKEND values that request Vulkan (or auto) collapse to
+        // OpenGL, and the canonical name is always "gl".
+        QVERIFY((GraphicsApiFromString("")) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString("auto")) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString("vulkan")) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString("vk")) == (GraphicsApi::OpenGL));
+        QVERIFY(::framelift::test::CStringEqual(GraphicsApiName(GraphicsApi::Vulkan), "gl"));
+    }
+
+    void VulkanDecodeModesNormalizeToAuto()
+    {
+        QVERIFY((VideoDecodeModeFromString("vulkan-zero-copy")) == (VideoDecodeMode::Auto));
+        QVERIFY((VideoDecodeModeFromString("vulkan")) == (VideoDecodeMode::Auto));
+        QVERIFY(::framelift::test::CStringEqual(VideoDecodeModeName(VideoDecodeMode::VulkanZeroCopy), "auto"));
+        QVERIFY(::framelift::test::CStringEqual(VideoDecodeModeName(VideoDecodeMode::Vulkan), "auto"));
+        QVERIFY((HwBackendFromVideoDecodeMode(VideoDecodeMode::Vulkan)) == (HwBackend::None));
+    }
+
+    void AutoPreferenceOmitsVulkanModes()
+    {
+        const auto preference = AutoVideoDecodePreference();
+        QVERIFY(
+            (std::find(preference.begin(), preference.end(), VideoDecodeMode::VulkanZeroCopy)) == (preference.end())
+        );
+        QVERIFY((std::find(preference.begin(), preference.end(), VideoDecodeMode::Vulkan)) == (preference.end()));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<VulkanModuleDisabledTests> kRegisterVulkanModuleDisabledTests{
+    "VulkanModuleDisabledTests"
+};
 }
 
-TEST(VulkanModuleDisabledTests, VulkanDecodeModesNormalizeToAuto)
-{
-    EXPECT_EQ(VideoDecodeModeFromString("vulkan-zero-copy"), VideoDecodeMode::Auto);
-    EXPECT_EQ(VideoDecodeModeFromString("vulkan"), VideoDecodeMode::Auto);
-    EXPECT_STREQ(VideoDecodeModeName(VideoDecodeMode::VulkanZeroCopy), "auto");
-    EXPECT_STREQ(VideoDecodeModeName(VideoDecodeMode::Vulkan), "auto");
-    EXPECT_EQ(HwBackendFromVideoDecodeMode(VideoDecodeMode::Vulkan), HwBackend::None);
-}
-
-TEST(VulkanModuleDisabledTests, AutoPreferenceOmitsVulkanModes)
-{
-    const auto preference = AutoVideoDecodePreference();
-    EXPECT_EQ(std::find(preference.begin(), preference.end(), VideoDecodeMode::VulkanZeroCopy), preference.end());
-    EXPECT_EQ(std::find(preference.begin(), preference.end(), VideoDecodeMode::Vulkan), preference.end());
-}
+#include "VulkanModuleDisabledTests.moc"

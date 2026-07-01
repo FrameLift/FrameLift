@@ -6,7 +6,19 @@
   "description": "Plays remote network streams and custom encrypted streams",
   "version": "1.0.0",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "stream.remote"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": []
+  },
+  "platforms": []
 }

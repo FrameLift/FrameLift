@@ -51,7 +51,7 @@ public:
     using SaveFn = std::function<std::string()>;
 
     // Bind `member` to `key`. `save` overrides serialization for the few fields that
-    // need a transform (e.g. graphics.backend normalization); empty = plain to-string.
+    // need a transform (e.g. playback.hwdecMode normalization); empty = plain to-string.
     void AddBool(std::string key, bool& member, std::string desc, SaveFn save = {})
     {
         SettingField f;

@@ -23,7 +23,6 @@ struct PlaybackSettings
     bool hwdec = true;
     std::string hwdecMode = "auto";
     bool hrSeek = true;
-    bool videoSync = true;
     bool subAutoLoad = true;
     bool audioFileAutoLoad = true;
 };
@@ -47,12 +46,11 @@ inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
                       return std::string(VideoDecodeModeName(mode));
                   });
     reg.AddBool("playback.hrSeek", s.hrSeek, "Use precise (high-resolution) seeking.");
-    reg.AddBool("playback.videoSync", s.videoSync, "Synchronize video timing to the display refresh.");
     reg.AddBool("playback.subAutoLoad", s.subAutoLoad, "Auto-load subtitle files matching the opened media.");
     reg.AddBool("playback.audioFileAutoLoad", s.audioFileAutoLoad,
                 "Auto-load external audio files matching the opened media.");
 
-    // Reconcile hwdec/hwdecMode after load, mirroring the legacy defaults: an
+    // Reconcile hwdec/hwdecMode after load: an
     // explicit mode wins; a bare hwdec=0 forces "off"; otherwise default to auto.
     reg.AddPostLoad(
         [&s](const std::set<std::string>& seen)

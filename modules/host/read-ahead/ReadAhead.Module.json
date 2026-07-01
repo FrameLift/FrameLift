@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.read_ahead",
+  "id": "framelift.read_ahead",
   "name": "Read-Ahead Cache",
   "description": "Shared memory-bounded read-ahead budget and hit/miss/stall metrics for the demuxer packet queues.",
   "enabled": true,

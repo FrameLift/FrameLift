@@ -1,24 +1,21 @@
+#include <cstring>
 #include <framelift/ContextHelpers.h>
 #include <framelift/Guard.h>
 #include <framelift/HotkeyHelpers.h>
 #include <framelift/ModuleBase.h>
 #include <framelift/services/ISettingsRegistry.h>
 #include <framelift/services/ISettingsStore.h>
-#include <framelift/ui/UIContext.h>
-#include <cstring>
 
 void ModuleBase::Install(IModuleContext& ctx) noexcept
 {
     ctx_ = &ctx;
-    // Note: ImGui context is now managed by the host-side UIContextImpl.
-    // No SetImGuiContext call needed here.
 
     framelift::Guard(
         ModuleName(), "Install",
         [&]
         {
-            // Cache the declarative tables once; the default hooks below consume them.
-            fields_ = SettingsFields();
+            // Cache the declarative keybind table once; settings are now explicit
+            // per module so complex QML settings pages can own their view models.
             keybinds_ = Keybinds();
 
             if (auto* store = ctx.GetService<ISettingsStore>())
@@ -145,12 +142,10 @@ bool ModuleBase::HandleEvent(const AppEvent& e)
 
 void ModuleBase::LoadSettings(IModuleSettings& ps)
 {
-    framelift::LoadFields(ps, fields_);
 }
 
 void ModuleBase::SaveSettings(IModuleSettings& ps)
 {
-    framelift::SaveFields(ps, fields_);
 }
 
 void ModuleBase::LoadKeybinds(IModuleSettings& kps)
@@ -173,7 +168,7 @@ void ModuleBase::RegisterKeybinds(IModuleContext& ctx)
 {
     for (auto& kb : keybinds_)
     {
-        framelift::RegisterKeybindEntry(ctx, kb.label, kb.action, *kb.storage);
+        framelift::RegisterKeybindEntry(ctx, kb.label, kb.action, *kb.storage, ModuleName(), kb.def);
     }
 }
 
@@ -188,44 +183,18 @@ void ModuleBase::OnBindHotkeys(Hotkeys& keys)
     }
 }
 
-void ModuleBase::SetupSettingsPage(IModuleContext& ctx, const bool visible)
+void ModuleBase::PersistSettings()
 {
-    auto* registry = ctx.GetService<ISettingsRegistry>();
-    if (!registry)
+    auto* store = ctx_ ? ctx_->GetService<ISettingsStore>() : nullptr;
+    if (!store)
     {
         return;
     }
-    registry->RegisterSettingsPage(
-        ModuleName(),
-        [](void* ud, UIContext& uiCtx)
-        {
-            framelift::Guard(
-                "settings page render",
-                [&]
-                {
-                    static_cast<ModuleBase*>(ud)->RenderSettings(uiCtx);
-                }
-            );
-        },
-        [](void* ud)
-        {
-            framelift::Guard(
-                "settings page apply",
-                [&]
-                {
-                    auto* fp = static_cast<ModuleBase*>(ud);
-                    auto* store = fp->ctx_ ? fp->ctx_->GetService<ISettingsStore>() : nullptr;
-                    if (!store)
-                    {
-                        return;
-                    }
-                    IModuleSettings& ps = store->GetModuleSettings(fp->SettingsSection().c_str());
-                    fp->SaveSettings(ps);
-                    IModuleSettings& kps = store->GetModuleSettings(fp->KeybindsSection().c_str());
-                    fp->SaveKeybinds(kps);
-                }
-            );
-        },
-        this, visible, nullptr
-    );
+    IModuleSettings& ps = store->GetModuleSettings(SettingsSection().c_str());
+    SaveSettings(ps);
+    ps.Save();
+
+    IModuleSettings& kps = store->GetModuleSettings(KeybindsSection().c_str());
+    SaveKeybinds(kps);
+    kps.Save();
 }

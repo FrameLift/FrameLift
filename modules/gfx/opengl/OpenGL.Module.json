@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.graphics_opengl",
+  "id": "framelift.graphics_opengl",
   "name": "OpenGL",
   "description": "OpenGL graphics backend and video renderer.",
   "enabled": true,
@@ -13,7 +13,7 @@
   },
   "requires": {
     "modules": [
-      "framelift.host.graphics_core"
+      "framelift.graphics_core"
     ],
     "features": []
   },

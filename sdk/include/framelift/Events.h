@@ -37,6 +37,14 @@ struct OpenFileRequestEvent
     bool rebuildPlaylist = false; // true = rescan the directory and rebuild; false = just play this file
 };
 
+// Request to stop playback and return the player to its idle state (idle screen,
+// no held frame). Published by Playlist when the last item finishes with nothing
+// to advance to; the host subscribes and stops the media player. No payload.
+struct StopPlaybackRequestEvent
+{
+    static constexpr const char* EventId = "framelift.StopPlaybackRequestEvent";
+};
+
 // Request to prompt the user for a remote stream URL. Published by the host's
 // "Open Network Stream…" context-menu item; the RemoteStream plugin subscribes
 // and opens its URL-entry modal. No payload — it is purely a "show the prompt".
@@ -45,12 +53,12 @@ struct OpenNetworkStreamRequestEvent
     static constexpr const char* EventId = "framelift.OpenNetworkStreamRequestEvent";
 };
 
-// Published by Panel whenever its animated visible width changes; consumers
+// Published by side drawers whenever their animated visible width changes; consumers
 // (e.g. Overlay's controls-bar inset) cache the latest value per side.
 struct PanelLayoutEvent
 {
     static constexpr const char* EventId = "framelift.PanelLayoutEvent";
-    int side = 0; // 0 = left, 1 = right (mirrors Panel::Side)
+    int side = 0; // 0 = left, 1 = right
     float visibleWidth = 0.f;
 };
 
@@ -60,6 +68,12 @@ struct SettingsVisibilityEvent
 {
     static constexpr const char* EventId = "framelift.SettingsVisibilityEvent";
     bool open = false;
+};
+
+struct OpenSettingsPageEvent
+{
+    static constexpr const char* EventId = "framelift.OpenSettingsPageEvent";
+    const char* pageId = nullptr;
 };
 
 // Published once by the host at startup (after all plugins are loaded and

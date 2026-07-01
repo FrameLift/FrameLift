@@ -1,18 +1,18 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.audio",
+  "id": "framelift.audio",
   "name": "Audio Output",
-  "description": "Host audio output: SDL3 device + swresample, master clock, volume/mute/ducking, and the libavfilter normalization graph.",
+  "description": "Host audio output: Qt QAudioSink PCM device + swresample, master clock, volume/mute/ducking, and the libavfilter normalization graph.",
   "enabled": true,
   "required": true,
   "provides": {
     "features": [
-      "audio.output.sdl"
+      "audio.output.qt-pcm"
     ]
   },
   "requires": {
     "modules": [
-      "framelift.host.settings"
+      "framelift.settings"
     ],
     "features": []
   },

@@ -1,38 +1,36 @@
 #pragma once
 
 #include "FileDialogServiceImpl.h"
-#include "PackageConfig.h"
-#include "FocusManagerImpl.h"
+#include "GraphicsApi.h"
+#include "GraphicsInfoService.h"
 #include "HotkeysImpl.h"
 #include "JsonServiceImpl.h"
 #include "ModuleContext.h"
-#include "PackageLoader.h"
 #include "ModuleRegistry.h"
 #include "PlaybackControls.h"
+#include "PluginConfig.h"
+#include "PluginLoader.h"
 #include "Settings.h"
-#include "ThemeController.h"
-#include "UIContextImpl.h"
-#include <framelift/IRenderable.h>
-#include <framelift/platform/IAppWindow.h>
-#include <framelift/platform/IDirWatcher.h>
-#include <framelift/platform/IMediaPlayer.h>
 #include <chrono>
+#include <framelift/platform/IAppWindow.h>
+#include <framelift/platform/IMediaPlayer.h>
 #include <memory>
 #include <string>
 #include <vector>
 
-class SdlAppWindow;
+class QtAppWindow;
 class FFmpegPlayer;
 class WinShell;
 
 // Top-level application object. Owns all subsystems, drives the main loop,
 // and co-ordinates rendering. Exactly one instance exists for the program lifetime.
-// Has no compile-time knowledge of specific modules — every capability ships as a
-// package DLL loaded at runtime from the packages/ directory.
+// Has no compile-time knowledge of specific plugins; every user-facing capability
+// ships as a plugin DLL/SO loaded at runtime from the plugins/ directory.
 class App
 {
 public:
-    App(const char* title, int width, int height, int cliArgc = 0, const char* const* cliArgv = nullptr);
+    App(const char* title, int width, int height, GraphicsApi graphicsApi, int cliArgc = 0,
+        const char* const* cliArgv = nullptr);
     ~App();
 
     int Run();
@@ -46,21 +44,31 @@ private:
     };
 
     // ── Construction phases (run in order from the ctor) ──
-    void InitPlatform(const char* title, int width, int height, const std::string& prefDir, const std::string& settingsPath);
+    void InitPlatform(
+        const char* title, int width, int height, GraphicsApi graphicsApi, const std::string& prefDir,
+        const std::string& settingsPath
+    );
     void InitServices(const std::string& prefDir, const std::string& settingsPath);
-    void LoadPackages();
-    void BuildRenderables();
+    void LoadPlugins();
+    void BuildPluginViews();
 
-    void InitRender() const;
-    void InitImGui() const;
-
-    void Render();
+    // Wire the player's worker-thread wakeups to the window's queued signals (no GL).
+    void SetupPlayerCallbacks();
     void ResizeToVideo() const;
 
-    void DrainEvents(int timeoutMs);
     void Dispatch(const AppEvent& e);
     void DrainMediaEvents();
-    void RenderFrame();
+#if FRAMELIFT_BUILD_LAUNCH_TESTS
+    void ScheduleTestExitIfRequested();
+#endif
+
+    // The window's scene-graph video node calls this on the GUI thread with the target
+    // framebuffer size: lazily adopts Qt's GL context + builds the renderer on first call,
+    // then draws the current frame letterboxed.
+    void PrepareVideo(int fbW, int fbH);
+    void RenderVideo(int fbW, int fbH);
+    // Queued-signal handler: drain media events and apply any pending video-driven resize.
+    void OnPlayerWakeup();
 
     // Process command line, forwarded from main(). main()'s argv stays valid for
     // the program lifetime, so storing the pointer is safe. Broadcast verbatim as
@@ -68,67 +76,52 @@ private:
     int cliArgc_ = 0;
     const char* const* cliArgv_ = nullptr;
 
-    std::unique_ptr<SdlAppWindow> appWindow_;
+    // ── Teardown contract (members destruct in REVERSE declaration order) ──
+    // The order below is load-bearing; do not reorder without re-checking ~App:
+    //   • pluginLoader_ is declared last among the owning members, so it destructs
+    //     (FreeLibrary) only after every object that may live in a plugin DLL —
+    //     module instances in registry_, plugin view models, moduleCtx_ — is gone.
+    //     A plugin module may still call ctx_->GetService() from its destructor.
+    //   • moduleCtx_ is declared before pluginLoader_ (outlives it on destruction is
+    //     handled in ~App) and after the services it registers, so those services
+    //     stay alive while modules tear down.
+    //   • player_ and appWindow_ own GPU/render resources; ~App resets them explicitly
+    //     in the right order (player render context before the GL context) rather than
+    //     relying on declaration order alone.
+    std::unique_ptr<QtAppWindow> appWindow_;
     // App always builds the concrete FFmpegPlayer: it needs the FFmpeg-only entry
     // points (ApplySettings, decode mode, ducking) that aren't on any of the split
     // playback interfaces, and it registers each of those interfaces as a service.
     std::unique_ptr<FFmpegPlayer> player_;
     FFmpegPlayer* ffmpeg_ = nullptr; // alias of player_.get(), kept for readability at call sites
-    std::unique_ptr<IDirWatcher> dirWatcher_;
 
     bool pendingResize_ = false;
-    bool running_ = true;
 
     // Set when a media/video state change (other than a routine position tick) may have
     // altered the video image without a freshly decoded frame — e.g. EOF → idle screen,
-    // a video reconfig, or a seek. Forces the Vulkan compositor to re-render the video
-    // layer once; consumed in App::Render. Ignored by the OpenGL backend.
+    // a video reconfig, or a seek. Reserved for the Vulkan compositor; ignored by GL.
     bool pendingVideoRedraw_ = false;
 
-    // ── Demand-driven render loop (see App::Run) ──
-    // The loop renders+presents only when something changed and otherwise blocks on
-    // events so the GPU idles. uiEventThisIteration_ is set in Dispatch for input/window
-    // events (render once per input) and reset each loop iteration; redrawPending_ carries
-    // a renderable's RequestRedraw() (an in-progress animation or live panel — see
-    // UIContextImpl::ConsumeRedrawRequest) from one frame to the next, so the loop keeps
-    // painting exactly as long as something is actually animating, then sleeps.
-    bool uiEventThisIteration_ = false;
-    bool redrawPending_ = false;
-
-    // discreteInput_ marks a one-shot input this iteration (key/button/wheel/drop/custom)
-    // that must paint immediately; a *continuous* wake (an animation's redrawPending_, or a
-    // bare mouse-motion / WindowExposed) is instead throttled to kUiRedrawIntervalMs against
-    // lastPaint_, so a flood of self-induced exposes (the multi-viewport panels re-present
-    // every frame and keep posting window events) or mouse motion can't free-run the paint
-    // rate — and with it the second-swapchain platform-window present — past ~60 fps.
-    bool discreteInput_ = false;
-    // A continuous paint (animation, or a deferred motion/expose) that is waiting on the
-    // kUiRedrawIntervalMs clock before it may paint. Sticky across iterations so a single
-    // throttled wake still paints once the interval elapses (e.g. the first mouse-motion
-    // that should reveal the controls bar), instead of being dropped when its one-shot
-    // uiEventThisIteration_ resets.
-    bool continuousPaintPending_ = false;
-    std::chrono::steady_clock::time_point lastPaint_{};
+    // First-frame guard: Qt's scene-graph GL context only exists once the SG initializes,
+    // so the backend's context adoption + the player's renderer build are deferred to the
+    // first RenderVideo() (where the GL context is current).
+    bool renderInit_ = false;
 
     Settings settings_;
-    PackageConfig packageConfig_;
-    std::string packagesPath_;
+    PluginConfig pluginConfig_;
+    std::string pluginsPath_;
     FileDialogServiceImpl fileDialogService_{&settings_};
-    FocusManagerImpl focus_;
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
-    UIContextImpl uiCtx_;
-    ThemeController themeController_;
+    std::unique_ptr<GraphicsInfoService> graphicsInfo_;
 
     std::unique_ptr<ModuleContext> moduleCtx_;
     std::unique_ptr<PlaybackControls> playbackControls_;
 #if FRAMELIFT_MODULE_WIN_SHELL
-    // Windows-only: taskbar playback progress + error toasts. Driven off the media
+    // Windows-only: Qt-backed playback error notifications. Driven off the media
     // event stream in DrainMediaEvents; not part of the plugin registry.
     std::unique_ptr<WinShell> winShell_;
 #endif
-    PackageLoader packageLoader_;
+    PluginLoader pluginLoader_;
     ModuleRegistry registry_;
-
-    std::vector<IRenderable*> renderables_;
 };

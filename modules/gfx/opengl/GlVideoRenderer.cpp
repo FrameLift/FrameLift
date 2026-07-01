@@ -12,8 +12,8 @@
 // Minimal, self-contained GL 3.3-core loader. We deliberately avoid system GL
 // headers (which are awkward under the MinGW cross-compile) and instead declare
 // the handful of types, constants and entry points we use, loading them through
-// the host's getProcAddr. 64-bit only, so the Windows __stdcall thunk that GL
-// historically needs is a no-op and can be omitted from the function pointers.
+// the host's getProcAddr. 64-bit only, so the Windows __stdcall thunk can be
+// omitted from the function pointers.
 namespace
 {
 using GLenum = unsigned int;
@@ -430,7 +430,7 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
         impl_->Disable(GL_BLEND);
     }
 
-    // Restore neutral state so the host's ImGui pass starts clean.
+    // Restore neutral state before returning control to Qt Quick.
     impl_->BindVertexArray(0);
     impl_->BindTexture(GL_TEXTURE_2D, 0);
     impl_->UseProgram(0);

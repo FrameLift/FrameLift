@@ -6,7 +6,23 @@
   "description": "Recently-played history and resume",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "history.panel",
+      "history.resume",
+      "history.service"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
 }

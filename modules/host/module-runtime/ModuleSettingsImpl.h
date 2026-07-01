@@ -1,12 +1,12 @@
 #pragma once
-#include <filesystem>
-#include <fstream>
+#include <QSettings>
+#include <QString>
+#include <QStringList>
 #include <framelift/IModuleSettings.h>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 // Concrete IModuleSettings backed by one named section in a shared INI file.
 // Host-internal — never exposed to plugins directly; plugins receive IModuleSettings&.
@@ -98,93 +98,17 @@ public:
             return;
         }
 
-        std::vector<std::string> lines;
-        {
-            std::ifstream f(iniPath_);
-            std::string line;
-            while (std::getline(f, line))
-            {
-                if (!line.empty() && line.back() == '\r')
-                {
-                    line.pop_back();
-                }
-                lines.push_back(std::move(line));
-            }
-        }
-
-        const std::string header = "[" + section_ + "]";
-        int sectionStart = -1;
-        int sectionEnd = static_cast<int>(lines.size());
-
-        for (int i = 0; i < static_cast<int>(lines.size()); ++i)
-        {
-            if (lines[i] == header)
-            {
-                sectionStart = i;
-                for (int j = i + 1; j < static_cast<int>(lines.size()); ++j)
-                {
-                    if (!lines[j].empty() && lines[j].front() == '[')
-                    {
-                        sectionEnd = j;
-                        break;
-                    }
-                }
-                break;
-            }
-        }
-
-        std::vector<std::string> block;
-        block.push_back(header);
+        // QSettings loads the shared INI, overwrites only this section's keys, and
+        // re-emits every other section untouched (host settings, sibling plugins) —
+        // and syncs atomically, so no manual temp-file-rename dance is needed.
+        QSettings qs(QString::fromStdString(iniPath_), QSettings::IniFormat);
+        qs.beginGroup(QString::fromStdString(section_));
         for (const auto& [k, v] : values_)
         {
-            block.push_back(k + "=" + v);
+            qs.setValue(QString::fromStdString(k), QString::fromStdString(v));
         }
-
-        if (sectionStart >= 0)
-        {
-            lines.erase(lines.begin() + sectionStart, lines.begin() + sectionEnd);
-            lines.insert(lines.begin() + sectionStart, block.begin(), block.end());
-            const int afterBlock = sectionStart + static_cast<int>(block.size());
-            if (afterBlock < static_cast<int>(lines.size()) && !lines[afterBlock].empty())
-            {
-                lines.insert(lines.begin() + afterBlock, "");
-            }
-        }
-        else
-        {
-            if (!lines.empty())
-            {
-                lines.emplace_back();
-            }
-            lines.insert(lines.end(), block.begin(), block.end());
-        }
-
-        // Write to a sibling temp file then rename over the target, so a crash
-        // mid-write can't corrupt the shared INI.
-        std::filesystem::path tmp(iniPath_);
-        tmp += ".tmp";
-        {
-            std::ofstream f(tmp, std::ios::trunc);
-            if (!f)
-            {
-                return;
-            }
-            for (const auto& l : lines)
-            {
-                f << l << '\n';
-            }
-            f.flush();
-            if (!f)
-            {
-                return;
-            }
-        }
-        std::error_code ec;
-        std::filesystem::rename(tmp, iniPath_, ec);
-        if (ec)
-        {
-            std::filesystem::remove(tmp, ec);
-        }
+        qs.endGroup();
+        qs.sync();
     }
 
     [[nodiscard]] bool WasLoaded() const noexcept override
@@ -200,41 +124,16 @@ public:
 private:
     void Load()
     {
-        std::ifstream f(iniPath_);
-        if (!f)
-        {
-            return;
-        }
+        QSettings qs(QString::fromStdString(iniPath_), QSettings::IniFormat);
+        const QString group = QString::fromStdString(section_);
+        sectionFound_ = qs.childGroups().contains(group);
 
-        bool inSection = false;
-        std::string line;
-        while (std::getline(f, line))
+        qs.beginGroup(group);
+        for (const QString& key : qs.childKeys())
         {
-            if (!line.empty() && line.back() == '\r')
-            {
-                line.pop_back();
-            }
-            if (!line.empty() && line.front() == '[')
-            {
-                const std::string hdr = line.substr(1, line.size() - 2);
-                inSection = (hdr == section_);
-                if (inSection)
-                {
-                    sectionFound_ = true;
-                }
-                continue;
-            }
-            if (!inSection)
-            {
-                continue;
-            }
-            const auto eq = line.find('=');
-            if (eq == std::string::npos)
-            {
-                continue;
-            }
-            values_[line.substr(0, eq)] = line.substr(eq + 1);
+            values_[key.toStdString()] = qs.value(key).toString().toStdString();
         }
+        qs.endGroup();
     }
 
     std::string section_;

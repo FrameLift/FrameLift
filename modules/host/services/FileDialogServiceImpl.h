@@ -9,10 +9,9 @@ class Settings;
 
 // Host file picker — the single file-dialog abstraction for both the host and
 // plugins. Implements the plugin-facing IFileDialog ABI and adds host-only
-// Init/HandleEvent for the SDL async-result plumbing. The implementation
-// (FileDialogServiceImpl.cpp) is SDL-aware: like SdlAppWindow, it is one of the
-// few files allowed to touch SDL directly, since the native picker APIs are
-// inherently backend-specific.
+// Init/HandleEvent for the async-result plumbing. The implementation
+// (FileDialogServiceImpl.cpp) drives a native Qt QFileDialog and posts the result
+// back through the event pump so the callback never fires reentrantly.
 class FileDialogServiceImpl final : public IFileDialog
 {
 public:

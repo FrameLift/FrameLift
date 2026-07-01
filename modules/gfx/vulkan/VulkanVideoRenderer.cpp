@@ -1,7 +1,7 @@
 #include "VulkanVideoRenderer.h"
 
 #include "FFmpegLetterbox.h"
-#include "FFmpegVulkanDevice.h" // neutral bridge (no libav/volk types) — reads AVVkFrame
+#include "FFmpegVulkanDevice.h" // neutral bridge (no libav types) — reads AVVkFrame
 
 #include <vk_mem_alloc.h>
 
@@ -144,8 +144,9 @@ bool VulkanVideoRenderer::BuildPipeline()
     return CreateBlitPipeline(setLayout_, pipelineLayout_, pipeline_);
 }
 
-bool VulkanVideoRenderer::CreateBlitPipeline(VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout,
-                                             VkPipeline& outPipeline)
+bool VulkanVideoRenderer::CreateBlitPipeline(
+    VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline
+)
 {
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1;
@@ -201,8 +202,8 @@ bool VulkanVideoRenderer::CreateBlitPipeline(VkDescriptorSetLayout setLayout, Vk
     cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     cba.alphaBlendOp = VK_BLEND_OP_ADD;
-    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                         VK_COLOR_COMPONENT_A_BIT;
+    cba.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &cba;
@@ -387,8 +388,10 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
     toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     toDst.srcAccessMask = reuse ? VK_ACCESS_SHADER_READ_BIT : 0;
     toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, reuse ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+    vkCmdPipelineBarrier(
+        cmd, reuse ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst
+    );
 
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -404,8 +407,10 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
     toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &toRead);
+    vkCmdPipelineBarrier(
+        cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+        &toRead
+    );
 }
 } // namespace
 
@@ -545,9 +550,9 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
     VkFormatProperties fp{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice_, fmt, &fp);
     const VkFormatFeatureFlags feat = fp.optimalTilingFeatures;
-    const VkFilter chromaFilter =
-        (feat & VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT) ? VK_FILTER_LINEAR
-                                                                                    : VK_FILTER_NEAREST;
+    const VkFilter chromaFilter = (feat & VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT)
+                                      ? VK_FILTER_LINEAR
+                                      : VK_FILTER_NEAREST;
     const VkChromaLocation xChroma = (feat & VK_FORMAT_FEATURE_COSITED_CHROMA_SAMPLES_BIT)
                                          ? VK_CHROMA_LOCATION_COSITED_EVEN
                                          : VK_CHROMA_LOCATION_MIDPOINT;
@@ -556,8 +561,10 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
     cci.format = fmt;
     cci.ycbcrModel = YcbcrModel(colorSpace);
     cci.ycbcrRange = YcbcrRange(colorRange);
-    cci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                      VK_COMPONENT_SWIZZLE_IDENTITY};
+    cci.components = {
+        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY
+    };
     cci.xChromaOffset = xChroma;
     cci.yChromaOffset = xChroma;
     cci.chromaFilter = chromaFilter;
@@ -653,8 +660,10 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
     vci.image = reinterpret_cast<VkImage>(static_cast<uintptr_t>(image));
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = static_cast<VkFormat>(ycbcrFormat_);
-    vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                      VK_COMPONENT_SWIZZLE_IDENTITY};
+    vci.components = {
+        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+        VK_COMPONENT_SWIZZLE_IDENTITY
+    };
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     if (vkCreateImageView(device_, &vci, nullptr, &ft.view) != VK_SUCCESS)
     {
@@ -689,13 +698,13 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
     return &res.first->second;
 }
 
-void VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily)
+VkCommandBuffer VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily)
 {
-    const uint32_t slot = backend_->CurrentFrameIndex();
+    const uint32_t slot = backend_->CurrentFrameIndex() % static_cast<uint32_t>(transitionCmds_.size());
     VkCommandBuffer cmd = transitionCmds_[slot];
     if (cmd == VK_NULL_HANDLE)
     {
-        return;
+        return VK_NULL_HANDLE;
     }
     vkResetCommandBuffer(cmd, 0);
 
@@ -715,15 +724,11 @@ void VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, u
     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     b.srcAccessMask = 0;
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &b);
+    vkCmdPipelineBarrier(
+        cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b
+    );
     vkEndCommandBuffer(cmd);
-
-    // Run this transition in the single per-frame submit, just before the main render CB.
-    // The decode-complete wait + post-sample signal are registered on that submit by the
-    // caller (DrawVulkanFrame) via AddFrameWait/AddFrameSignal; in-batch CB ordering + the
-    // barrier above guarantee the transition completes before the render pass samples.
-    backend_->AddFramePreCmd(cmd);
+    return cmd;
 }
 
 void VulkanVideoRenderer::DrawVulkanFrame()
@@ -761,17 +766,13 @@ void VulkanVideoRenderer::DrawVulkanFrame()
     {
         // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into a
         //    pre-cmd that runs first in the single per-frame submit, outside the render pass.
-        RecordFrameTransition(info.image, info.layout, info.queueFamily);
-
-        // 2. Wait until decode signalled `v` (gating the transition at TOP_OF_PIPE). Only needed
-        //    on the first present of a freshly decoded frame; re-presents skip it (see above).
-        backend_->AddFrameWait(frameSem, info.semValue, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+        const VkCommandBuffer transition = RecordFrameTransition(info.image, info.layout, info.queueFamily);
+        if (!backend_->SubmitFrameTransition(transition, frameSem, info.semValue))
+        {
+            Log::Error("VulkanVideoRenderer: zero-copy transition submit failed");
+            return;
+        }
     }
-
-    // Signal `v+1` when this sample completes — the value FFmpeg/the next consumer waits on before
-    // reusing the image. Emitted on EVERY present (the value advances each time via step 4), so the
-    // guarantee covers the *last* sample of the frame even when re-presents skipped the wait.
-    backend_->AddFrameSignal(frameSem, info.semValue + 1);
 
     // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed.
     VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
@@ -800,8 +801,10 @@ void VulkanVideoRenderer::DrawVulkanFrame()
     //    neither transitioned the image nor advanced the timeline, so its state already stands.
     if (!alreadyPrepared)
     {
-        SetVulkanFrameState(vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1,
-                            backend_->GraphicsQueueFamily());
+        backend_->QueueFrameSignal(frameSem, info.semValue + 1);
+        SetVulkanFrameState(
+            vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1, backend_->GraphicsQueueFamily()
+        );
     }
 }
 

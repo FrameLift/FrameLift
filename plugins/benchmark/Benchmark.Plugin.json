@@ -6,7 +6,19 @@
   "description": "Performance benchmark overlay",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "benchmark.overlay"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": []
+  },
+  "platforms": []
 }

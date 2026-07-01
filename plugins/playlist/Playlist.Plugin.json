@@ -6,7 +6,22 @@
   "description": "Folder playlist and file navigation",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "playlist.panel",
+      "playlist.navigation"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
 }

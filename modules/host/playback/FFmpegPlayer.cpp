@@ -15,9 +15,9 @@
 
 #include "IGraphicsBackend.h"
 
-#include "CacheSettings.h"           // ToReadAheadCacheOptions (host/read-ahead)
-#include "FFmpegSettingsMapping.h"   // To{PlaybackOptions,VideoDecodeMode,...}
-#include "Settings.h"                // host aggregate settings
+#include "CacheSettings.h"         // ToReadAheadCacheOptions (host/read-ahead)
+#include "FFmpegSettingsMapping.h" // To{PlaybackOptions,VideoDecodeMode,...}
+#include "Settings.h"              // host aggregate settings
 
 #include <framelift/Log.h>
 
@@ -27,6 +27,8 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -67,7 +69,7 @@ static_assert(kAvErrAccess == AVERROR(EACCES), "AVERROR(EACCES) mirror drifted")
 #define NOMINMAX // keep std::min/std::max usable below
 #endif
 #include <windows.h>
-#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm)
+#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm); needs windows.h types first
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002 // Win10 1803+; define for older SDK headers
 #endif
@@ -112,6 +114,59 @@ void CountDecodeError(std::atomic<int64_t>& counter, const AVCodecContext* dec)
     }
 }
 
+// Route FFmpeg's libav* logging through the host logger (mirrors AssLogCallback for
+// libass). FFmpeg's default callback writes raw to stderr, bypassing our message
+// pattern *and* the IsSuppressed filter in Log.cpp; routing it through Log::* gives
+// it timestamps/colors, lands it in the Log Viewer buffer, and lets IsSuppressed drop
+// known-benign container noise (UDTA/chapter/codec-params) from stderr while keeping it
+// in the buffer. Only messages at or below the active av_log level reach us (default
+// AV_LOG_INFO), so verbose/debug spam never arrives unless explicitly enabled.
+void FFmpegLogCallback(void* /*avcl*/, int level, const char* fmt, va_list va)
+{
+    // A custom av_log callback is invoked for *every* message regardless of level —
+    // FFmpeg's level threshold is applied inside its default callback, not before
+    // dispatch. So we must gate on av_log_get_level() ourselves, or libav's VERBOSE/
+    // DEBUG internals (CUDA symbol loads, FFT transform-tree dumps, ...) flood the log.
+    if (level > av_log_get_level())
+    {
+        return;
+    }
+    char buf[1024];
+    std::vsnprintf(buf, sizeof(buf), fmt, va);
+    // FFmpeg messages usually carry a trailing newline; strip it so Log::* doesn't
+    // emit a blank line after each one.
+    for (size_t n = std::strlen(buf); n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'); --n)
+    {
+        buf[n - 1] = '\0';
+    }
+    if (buf[0] == '\0')
+    {
+        return;
+    }
+    if (level <= AV_LOG_ERROR)
+    {
+        Log::Error("FFmpeg: {}", buf);
+    }
+    else if (level <= AV_LOG_WARNING)
+    {
+        Log::Warn("FFmpeg: {}", buf);
+    }
+    else
+    {
+        Log::Info("FFmpeg: {}", buf);
+    }
+}
+
+// (Re)install our av_log callback. av_log_set_callback is global libav state, and on
+// Linux the Qt Multimedia FFmpeg backend (loaded lazily via QMediaDevices/QAudioSink)
+// shares the same libav* and clobbers it with its own handler — so a one-shot install
+// in the constructor doesn't stick. Re-assert it right before each open instead; the
+// call is cheap (just a function-pointer store) and idempotent.
+void InstallFFmpegLogCallback()
+{
+    av_log_set_callback(&FFmpegLogCallback);
+}
+
 // Presentation timestamp of a decoded frame in seconds (0 when unknown).
 double FramePtsSec(const AVFrame* f, AVRational tb)
 {
@@ -131,6 +186,9 @@ FFmpegPlayer::FFmpegPlayer()
       videoQ_(std::make_unique<FFmpegPacketQueue>()), subQ_(std::make_unique<FFmpegPacketQueue>(64)),
       subtitles_(std::make_unique<FFmpegSubtitles>())
 {
+    // Funnel libav* logging into the host logger. Re-asserted before each open in
+    // PlayFile too, since Qt Multimedia clobbers the global callback (see InstallFFmpegLogCallback).
+    InstallFFmpegLogCallback();
 #if defined(_WIN32)
     // Auto-reset event the video worker waits on alongside its frame-pacing timer;
     // Wake() signals it so pause/seek/load/shutdown interrupt the wait immediately.
@@ -142,7 +200,12 @@ FFmpegPlayer::FFmpegPlayer()
     audioQ_->SetBudget(&cache_);
     videoQ_->SetBudget(&cache_);
     subQ_->SetBudget(&cache_);
-    cache_.SetStallCallback([this](bool stalling) { EmitFlag(PlayerProperty::PausedForCache, stalling); });
+    cache_.SetStallCallback(
+        [this](bool stalling)
+        {
+            EmitFlag(PlayerProperty::PausedForCache, stalling);
+        }
+    );
     decodeThread_ = std::thread(&FFmpegPlayer::DecodeThreadMain, this);
 }
 
@@ -212,7 +275,13 @@ void FFmpegPlayer::DecodeThreadMain()
         double resume = 0.0;
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this] { return shutdown_.load() || hasPendingLoad_; });
+            cv_.wait(
+                lock,
+                [this]
+                {
+                    return shutdown_.load() || hasPendingLoad_;
+                }
+            );
             if (shutdown_.load())
             {
                 return;
@@ -220,6 +289,9 @@ void FFmpegPlayer::DecodeThreadMain()
             path = pendingPath_;
             resume = pendingResume_;
             hasPendingLoad_ = false;
+            // A load supersedes any prior Stop(): clear it here (rather than only when
+            // parking) so this fresh PlayFile isn't immediately seen as stop-requested.
+            stopRequested_ = false;
         }
 
         try
@@ -271,6 +343,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     UpdateCoreIdle();
 
     AVFormatContext* fmt = nullptr;
+    InstallFFmpegLogCallback(); // Qt may have clobbered the global callback since construction.
     if (const int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr); ret < 0)
     {
         Log::Error("FFmpegPlayer: failed to open {}", path);
@@ -386,8 +459,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     {
         std::lock_guard lock(mutex_);
         currentPath_ = path;
-        mediaTitle_ =
-            titleTag && titleTag->value ? titleTag->value : std::filesystem::path(path).filename().string();
+        mediaTitle_ = titleTag && titleTag->value ? titleTag->value : std::filesystem::path(path).filename().string();
     }
     QueueEvent(MakeLifecycle(MediaEventType::FileLoaded));
     EmitDouble(PlayerProperty::Duration, durationSec);
@@ -487,6 +559,13 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
                 {
                     std::lock_guard lock(mutex_);
                     videoClockSet_ = false;
+                    // Every applied seek (the RequestSeek kick *and* a demux-driven
+                    // re-seek during a held burst) resets the clocks here, so both gates
+                    // must re-arm: seekSettled_ so the worker re-paints before the next
+                    // re-seek, and seekClockValid_ so a held repeat anchors to seekTarget_
+                    // instead of reading GetMasterClock()==0 and re-targeting from 0.
+                    seekSettled_ = false;
+                    seekClockValid_ = false;
                     subtitleSeekClockOverride_ = seekTo;
                     subtitleSeekClockOverrideActive_ = true;
                 }
@@ -541,7 +620,10 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
             }
             {
                 std::lock_guard lock(mutex_);
-                if (hasPendingSeek_)
+                // Hold off re-seeking until the current seek has painted a frame, so a
+                // burst of held-key repeats steps visibly instead of restarting the
+                // decoder before anything is shown. seekSettled_ flips on the present.
+                if (hasPendingSeek_ && seekSettled_)
                 {
                     reason = Reason::Seek;
                     break;
@@ -635,12 +717,18 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         else if (isImage)
         {
             // Slideshow still: hold the configured duration unless interrupted.
-            const auto until = std::chrono::steady_clock::now() +
-                               std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                   std::chrono::duration<double>(imageDisplayDuration_.load()));
+            const auto until =
+                std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                       std::chrono::duration<double>(imageDisplayDuration_.load())
+                                                   );
             std::unique_lock lock(mutex_);
-            if (cv_.wait_until(lock, until,
-                               [this] { return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_; }))
+            if (cv_.wait_until(
+                    lock, until,
+                    [this]
+                    {
+                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
+                    }
+                ))
             {
                 emitEnd = false; // a seek/stop arrived first — handle it below
             }
@@ -654,10 +742,17 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         }
 
         // keep-open: hold the last frame here until a seek or stop. A playlist that
-        // advances on EndFile arrives as a new load (Stop); a manual seek resumes.
+        // advances on EndFile arrives as a new load (Stop); a manual seek resumes;
+        // an end-of-playlist Stop() sets stopRequested_ to break the hold and go idle.
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this] { return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_; });
+            cv_.wait(
+                lock,
+                [this]
+                {
+                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
+                }
+            );
         }
         if (StopRequested())
         {
@@ -669,7 +764,19 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     }
 
     av_packet_free(&pkt);
-    audioOut_->Close();
+    // Keep the audio device open when another file is already queued (the common playlist
+    // advance): the next PlayFile's OpenAudioBinding reuses the still-running QAudioSink
+    // when the output format matches, avoiding a device close/reopen per file. Only tear it
+    // down when we're genuinely stopping (shutdown), where the next open won't follow.
+    bool advancing = false;
+    {
+        std::lock_guard lock(mutex_);
+        advancing = hasPendingLoad_;
+    }
+    if (!advancing)
+    {
+        audioOut_->Close();
+    }
     avcodec_free_context(&vDec);
     if (aud.dec)
     {
@@ -723,6 +830,18 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         if (audioOut_->HasDevice())
         {
             ClearSubtitleSeekClockOverride();
+            std::lock_guard lock(mutex_);
+            // The audio clock is the master when a device is open, and this first
+            // post-seek Feed re-establishes it (lastQueuedPts_ ≈ target) — so the seek
+            // anchor may release now, regardless of whether the video frame has painted.
+            seekClockValid_ = true;
+            // Audio-only: this delivered frame is also the "presented" signal (no video
+            // worker to paint one). With video, the visible settle point is the video
+            // frame — don't let audio race ahead and let the video worker bail unpainted.
+            if (!hasVideo_)
+            {
+                seekSettled_ = true;
+            }
         }
 
         // For audio-only files there is no video worker to drive TimePos.
@@ -767,9 +886,10 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
                     std::lock_guard lock(mutex_);
                     params = normalizeParams_;
                 }
-                filterActive = normalizeEnabled_.load() &&
-                               filter.Configure(dec->sample_rate, dec->ch_layout, dec->sample_fmt, tb,
-                                                BuildAudioNormalizeGraph(params));
+                filterActive = normalizeEnabled_.load() && filter.Configure(
+                                                               dec->sample_rate, dec->ch_layout, dec->sample_fmt, tb,
+                                                               BuildAudioNormalizeGraph(params)
+                                                           );
                 if (!filterActive)
                 {
                     filter.Close();
@@ -841,11 +961,13 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     struct WinTimerScope
     {
         HANDLE timer = nullptr;
+
         WinTimerScope()
         {
             timeBeginPeriod(1);
             timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
         }
+
         ~WinTimerScope()
         {
             if (timer)
@@ -854,6 +976,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             }
             timeEndPeriod(1);
         }
+
         WinTimerScope(const WinTimerScope&) = delete;
         WinTimerScope& operator=(const WinTimerScope&) = delete;
     } winTimer;
@@ -922,6 +1045,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                 videoClockWall_ = std::chrono::steady_clock::now();
                 pauseWall_ = videoClockWall_;
                 subtitleSeekClockOverrideActive_ = false;
+                seekClockValid_ = true; // video wall clock is the master here — anchor may release
             }
         }
 
@@ -931,11 +1055,17 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                 std::unique_lock lock(mutex_);
                 // Hold while paused, but let a post-seek refresh present one frame so
                 // the seek target is shown even when paused.
-                cv_.wait(lock, [this] {
-                    return !paused_.load() || seekRefresh_.load() || shutdown_.load() || hasPendingLoad_ ||
-                           hasPendingSeek_;
-                });
-                if (shutdown_.load() || hasPendingLoad_ || hasPendingSeek_)
+                cv_.wait(
+                    lock,
+                    [this]
+                    {
+                        return !paused_.load() || seekRefresh_.load() || shutdown_.load() || hasPendingLoad_ ||
+                               hasPendingSeek_ || stopRequested_;
+                    }
+                );
+                // Honour a pending seek only once this one has painted (seekSettled_),
+                // so the target frame is shown before the loop bails to re-seek.
+                if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
                 {
                     return true;
                 }
@@ -981,13 +1111,19 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
 #endif
             {
                 const auto slice = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                    std::chrono::duration<double>(diff));
+                    std::chrono::duration<double>(diff)
+                );
                 std::unique_lock lock(mutex_);
-                cv_.wait_for(lock, slice, [this] {
-                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load();
-                });
+                cv_.wait_for(
+                    lock, slice,
+                    [this]
+                    {
+                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load() ||
+                               stopRequested_;
+                    }
+                );
             }
-            if (shutdown_.load() || hasPendingLoad_ || hasPendingSeek_)
+            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
             {
                 return true;
             }
@@ -1019,8 +1155,10 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         else
 #endif
         {
-            sws = sws_getCachedContext(sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), dstW, dstH,
-                                       AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
+            sws = sws_getCachedContext(
+                sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), dstW, dstH, AV_PIX_FMT_RGBA,
+                SWS_BILINEAR, nullptr, nullptr, nullptr
+            );
             if (!sws)
             {
                 return false;
@@ -1053,6 +1191,25 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         FRAMELIFT_PERF_END("seek");
 
         seekRefresh_ = false; // the post-seek frame has been shown
+        bool reseek = false;
+        {
+            // A frame is now on screen for the current seek: the position is live again
+            // (anchor for relative seeks) and the decode loop may honour the next pending
+            // seek. Set here — not at clock-establish — so a held key paints each step.
+            std::lock_guard lock(mutex_);
+            seekSettled_ = true;
+            reseek = hasPendingSeek_; // a newer target (e.g. held key) arrived mid-seek
+        }
+        if (reseek)
+        {
+            // Tear the session down so the decode loop re-seeks to the latest target. The
+            // Abort also frees a demuxer parked in a full Push() — without it the loop
+            // could hang one step short once the key is released (no more repeats to kick).
+            audioQ_->Abort();
+            videoQ_->Abort();
+            subQ_->Abort();
+            Wake();
+        }
 
         EmitDouble(PlayerProperty::TimePos, framePts);
         if (duration_.load() > 0.0)
@@ -1170,7 +1327,8 @@ void FFmpegPlayer::ScanExternalSources(const std::string& mediaPath)
         return;
     }
 
-    const auto lower = [](std::string s) {
+    const auto lower = [](std::string s)
+    {
         for (char& c : s)
         {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1200,8 +1358,15 @@ void FFmpegPlayer::ScanExternalSources(const std::string& mediaPath)
             continue; // fuzzy match: sidecar name must contain the media stem
         }
         const std::string ext = lower(p.extension().string());
-        const auto matches = [&ext](const auto& list) {
-            return std::find_if(list.begin(), list.end(), [&](const char* e) { return ext == e; }) != list.end();
+        const auto matches = [&ext](const auto& list)
+        {
+            return std::find_if(
+                       list.begin(), list.end(),
+                       [&](const char* e)
+                       {
+                           return ext == e;
+                       }
+                   ) != list.end();
         };
         if (subAutoLoad_ && matches(kSubExt))
         {
@@ -1408,11 +1573,15 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
         avformat_close_input(&aud.fmt);
     }
     aud = AudioBinding{};
-    audioOut_->Close();
+    // Note: the audio device is NOT closed here. FFmpegAudioOutput::Open() reuses a
+    // still-running sink when the new track's output format matches, so on the common
+    // file→file boundary the QAudioSink + its thread stay up. Every path below that ends
+    // without a live binding closes the device explicitly instead.
 
     TrackEntry e;
     if (id < 0 || !FindTrack(id, e) || e.kind != TrackKind::Audio)
     {
+        audioOut_->Close();
         return false;
     }
 
@@ -1426,20 +1595,24 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
     else
     {
         const std::string& srcPath = externalSources_[e.container - 1].path;
+        InstallFFmpegLogCallback(); // re-assert; Qt may have clobbered the global callback.
         if (avformat_open_input(&srcFmt, srcPath.c_str(), nullptr, nullptr) < 0)
         {
             Log::Warn("FFmpegPlayer: failed to open external audio {}", srcPath);
+            audioOut_->Close();
             return false;
         }
         if (avformat_find_stream_info(srcFmt, nullptr) < 0)
         {
             avformat_close_input(&srcFmt);
+            audioOut_->Close();
             return false;
         }
         streamIdx = av_find_best_stream(srcFmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
         if (streamIdx < 0)
         {
             avformat_close_input(&srcFmt);
+            audioOut_->Close();
             return false;
         }
     }
@@ -1453,12 +1626,12 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
         {
             avformat_close_input(&srcFmt);
         }
+        audioOut_->Close();
         return false;
     }
     avcodec_parameters_to_context(dec, st->codecpar);
     dec->pkt_timebase = st->time_base;
-    if (avcodec_open2(dec, codec, nullptr) != 0 ||
-        !audioOut_->Open(dec->sample_rate, dec->ch_layout, dec->sample_fmt))
+    if (avcodec_open2(dec, codec, nullptr) != 0 || !audioOut_->Open(dec->sample_rate, dec->ch_layout, dec->sample_fmt))
     {
         Log::Warn("FFmpegPlayer: audio decoder/output unavailable for track {}", id);
         avcodec_free_context(&dec);
@@ -1477,8 +1650,9 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
     aud.stream = st;
     aud.streamIndex = streamIdx;
     aud.external = e.external;
-    aud.startOffset =
-        e.external && st->start_time != AV_NOPTS_VALUE ? static_cast<double>(st->start_time) * av_q2d(st->time_base) : 0.0;
+    aud.startOffset = e.external && st->start_time != AV_NOPTS_VALUE
+                          ? static_cast<double>(st->start_time) * av_q2d(st->time_base)
+                          : 0.0;
 
     {
         std::lock_guard lock(tracksMutex_);
@@ -1488,8 +1662,10 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
     return true;
 }
 
-void FFmpegPlayer::OpenSubtitleBinding(int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx,
-                                       AVCodecContext*& sDec, AVStream*& sStream)
+void FFmpegPlayer::OpenSubtitleBinding(
+    int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx, AVCodecContext*& sDec,
+    AVStream*& sStream
+)
 {
     if (sDec)
     {
@@ -1666,13 +1842,17 @@ void FFmpegPlayer::UpdateCoreIdle()
 bool FFmpegPlayer::StopRequested()
 {
     std::lock_guard lock(mutex_);
-    return shutdown_.load() || hasPendingLoad_;
+    return shutdown_.load() || hasPendingLoad_ || stopRequested_;
 }
 
 double FFmpegPlayer::TakePendingSeek()
 {
     std::lock_guard lock(mutex_);
     hasPendingSeek_ = false;
+    // The committed seek's Flush() is about to zero the master clock; clear the
+    // anchor-release gate in the same lock so a held-key Seek() can't read a
+    // momentarily-0 GetMasterClock() and re-target from the start.
+    seekClockValid_ = false;
     return seekTarget_;
 }
 
@@ -1685,6 +1865,11 @@ void FFmpegPlayer::LoadFile(const char* path, double resumePos) noexcept
         pendingPath_ = path ? path : "";
         pendingResume_ = resumePos;
         hasPendingLoad_ = true;
+        // New file starts at a known origin; don't let a stale unsettled seek from the
+        // previous file anchor the first relative seek on this one.
+        seekSettled_ = true;
+        seekClockValid_ = true;
+        seekTarget_ = 0.0;
     }
     // Wake the decode thread and unblock any workers waiting on a queue so the
     // current file is abandoned promptly.
@@ -1692,6 +1877,32 @@ void FFmpegPlayer::LoadFile(const char* path, double resumePos) noexcept
     videoQ_->Abort();
     subQ_->Abort();
     Wake();
+}
+
+void FFmpegPlayer::Stop() noexcept
+{
+    {
+        std::lock_guard lock(mutex_);
+        if (idle_.load())
+        {
+            return; // nothing loaded — already idle
+        }
+        stopRequested_ = true;   // break the decode thread out of playback / EOF hold
+        hasPendingSeek_ = false; // drop any queued seek — there's nothing to resume
+    }
+    // Abandon the current file promptly (mirror LoadFile): unblock the workers and the
+    // decode thread so it tears the session down and parks. stopRequested_ lingers while
+    // parked (harmless — nothing consults it there) and is cleared by the next load.
+    audioQ_->Abort();
+    videoQ_->Abort();
+    subQ_->Abort();
+    Wake();
+
+    // Reflect idle immediately for the UI: clears the EOF-held frame's seekable state
+    // and raises IdleActive so the overlay shows the idle screen and hides the controls.
+    eofReached_ = false;
+    EmitFlag(PlayerProperty::EofReached, false);
+    SetIdle(true);
 }
 
 void FFmpegPlayer::SetPause(bool paused) noexcept
@@ -1740,7 +1951,22 @@ void FFmpegPlayer::Seek(double seconds) noexcept
     {
         return; // nothing loaded — ignore (avoids seeking the next file opened)
     }
-    RequestSeek(ClampSeekTarget(GetMasterClock() + seconds, duration_.load()));
+    // Accumulate relative seeks against the last requested target rather than the
+    // master clock whenever a seek is still settling: while a seek is in flight or its
+    // post-seek clock hasn't been re-established (e.g. a held arrow key auto-repeating),
+    // the master clock reads ~0, so basing off it would make a repeat re-target from the
+    // start instead of stepping further from the previous press.
+    bool useAnchor = false;
+    double anchor = 0.0;
+    {
+        std::lock_guard lock(mutex_);
+        // Anchor on seekClockValid_, not seekSettled_: the master clock (audio when a
+        // device is open) may still read 0 even after the video frame has painted.
+        useAnchor = hasPendingSeek_ || !seekClockValid_;
+        anchor = seekTarget_;
+    }
+    const double base = useAnchor ? anchor : GetMasterClock();
+    RequestSeek(ClampSeekTarget(base + seconds, duration_.load()));
 }
 
 void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
@@ -1754,18 +1980,33 @@ void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
 
 void FFmpegPlayer::RequestSeek(double target) noexcept
 {
+    // Only disturb the running pipeline when the previous seek has already painted a
+    // frame (or none is in flight). While a seek is mid-decode, a new request — e.g. a
+    // held arrow key auto-repeating ~30x/s — just updates the target (latest-wins) and
+    // lets the in-flight seek present first; the decode loop then re-seeks to the newer
+    // target. Aborting on every repeat instead would tear the decoder down before it ever
+    // reaches the target, freezing the picture until the key is released.
+    bool kick = false;
     {
         std::lock_guard lock(mutex_);
         seekTarget_ = target; // latest-wins: coalesces rapid seeks (seek-bar drags)
         hasPendingSeek_ = true;
+        kick = seekSettled_; // pipeline idle / already painted ⇒ safe to restart
+        if (kick)
+        {
+            seekSettled_ = false; // re-settled by the worker that presents the post-seek frame
+        }
     }
-    // Perf timing: measure from the latest request to the first post-seek frame.
-    FRAMELIFT_PERF_START("seek");
-    // Unblock the demux read loop / keep-open wait and any worker mid-present.
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
-    Wake();
+    if (kick)
+    {
+        // Perf timing: measure each applied seek (not each coalesced repeat) to its frame.
+        FRAMELIFT_PERF_START("seek");
+        // Unblock the demux read loop / keep-open wait and any worker mid-present.
+        audioQ_->Abort();
+        videoQ_->Abort();
+        subQ_->Abort();
+        Wake();
+    }
 }
 
 void FFmpegPlayer::SetImageDisplayDuration(double seconds) noexcept
@@ -1781,6 +2022,7 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     }
     normalizeEnabled_ = enabled;
     normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
+    EmitFlag(PlayerProperty::Normalize, enabled);
 
     if (idle_.load())
     {
@@ -1865,6 +2107,13 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         {
             break;
         }
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        // Vulkan video decode faults on the NVIDIA driver; let Auto fall through to NVDEC.
+        if (candidate == VideoDecodeMode::VulkanZeroCopy && vulkanAdapterIsNvidia_)
+        {
+            continue;
+        }
+#endif
         if (tryMode(candidate, false))
         {
             return true;
@@ -1906,8 +2155,8 @@ void FFmpegPlayer::SetAudioPreferences(const AudioPreferences& prefs) noexcept
     }
 
     audioSyncOffsetMs_ = prefs.syncOffsetMs;
-    const bool outputChanged = std::strcmp(old.outputDevice, prefs.outputDevice) != 0 ||
-                               old.channelMode != prefs.channelMode;
+    const bool outputChanged =
+        std::strcmp(old.outputDevice, prefs.outputDevice) != 0 || old.channelMode != prefs.channelMode;
     volume_ = std::clamp(prefs.defaultVolume, 0, 100);
     audioOut_->SetPreferences(prefs);
     audioOut_->SetVolume(volume_);
@@ -2235,6 +2484,9 @@ void FFmpegPlayer::ObserveProperty(PlayerProperty prop) noexcept
     case PlayerProperty::Mute:
         EmitFlag(prop, muteEnabled_);
         break;
+    case PlayerProperty::Normalize:
+        EmitFlag(prop, normalizeEnabled_.load());
+        break;
     case PlayerProperty::CoreIdle:
         EmitFlag(prop, coreIdle_.load());
         break;
@@ -2312,7 +2564,25 @@ void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
     {
         vkHwDevice_ = CreateVulkanHwDevice(vkInfo);
         vulkanZeroCopyAvailable_ = vkHwDevice_ != nullptr;
-        Log::Info("FFmpegPlayer: Vulkan zero-copy decode {}", vulkanZeroCopyAvailable_ ? "available" : "unavailable");
+        vulkanAdapterIsNvidia_ = backend->HasNvidiaAdapter();
+        if (vulkanZeroCopyAvailable_ && vulkanAdapterIsNvidia_)
+        {
+            Log::Debug("FFmpegPlayer: NVIDIA adapter — Auto decode prefers NVDEC over Vulkan zero-copy "
+                      "(VK_ERROR_DEVICE_LOST on the NVIDIA Vulkan video backend)");
+        }
+    }
+#endif
+}
+
+void FFmpegPlayer::ReleaseRender() noexcept
+{
+    rendererReady_ = false;
+    renderer_.reset();
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+    vulkanZeroCopyAvailable_ = false;
+    if (vkHwDevice_)
+    {
+        av_buffer_unref(&vkHwDevice_);
     }
 #endif
 }
@@ -2329,6 +2599,12 @@ bool FFmpegPlayer::HasNewFrame() noexcept
 }
 
 void FFmpegPlayer::RenderFrame(int w, int h) noexcept
+{
+    PrepareRenderFrame(w, h);
+    DrawPreparedFrame(w, h);
+}
+
+void FFmpegPlayer::PrepareRenderFrame(int w, int h) noexcept
 {
     bool haveNew = false;
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
@@ -2400,7 +2676,7 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
 
         // Render the libass subtitle overlay at the on-screen video size so it stays
         // crisp regardless of the source resolution, then composite it in Draw.
-        overlayActive_ = false;
+        preparedOverlayActive_ = false;
         const int videoW = static_cast<int>(displayWidth_.load());
         const int videoH = static_cast<int>(displayHeight_.load());
         if (subtitlesEnabled_ && subtitles_ && subtitles_->Ok() && videoW > 0 && videoH > 0)
@@ -2413,16 +2689,20 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
             if (res == FFmpegSubtitles::RenderResult::Updated)
             {
                 renderer_->UploadOverlay(overlayScratch_.data(), vp.w, vp.h);
-                overlayActive_ = true;
+                preparedOverlayActive_ = true;
             }
             else if (res == FFmpegSubtitles::RenderResult::Unchanged)
             {
-                overlayActive_ = true; // reuse the already-uploaded overlay texture
+                preparedOverlayActive_ = true; // reuse the already-uploaded overlay texture
             }
         }
-
-        renderer_->Draw(w, h, overlayActive_);
     }
-    // When the renderer failed to initialise there is nothing to draw; the graphics
-    // backend's BeginFrame() has already cleared the target to black.
+}
+
+void FFmpegPlayer::DrawPreparedFrame(int w, int h) noexcept
+{
+    if (rendererReady_)
+    {
+        renderer_->Draw(w, h, preparedOverlayActive_);
+    }
 }

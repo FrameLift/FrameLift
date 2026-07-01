@@ -1,22 +1,23 @@
 #pragma once
 
+#include <cstdlib>
 #include <string_view>
 
 #ifndef FRAMELIFT_MODULE_GRAPHICS_VULKAN
 #define FRAMELIFT_MODULE_GRAPHICS_VULKAN 1
 #endif
 
-// The graphics presentation backend the host renders through. Selected at startup
-// from the [graphics] backend setting. OpenGL is the only backend implemented today;
-// Vulkan is planned (see the OpenGL→Vulkan migration, issues #15–#18).
+// The graphics presentation backend the host renders through. Auto prefers Vulkan and
+// falls back to OpenGL; explicit selections never switch APIs silently.
 enum class GraphicsApi
 {
+    Auto,
     OpenGL,
     Vulkan,
 };
 
-// Parse a backend name (case-insensitive) from the settings file. Unknown / empty
-// values fall back to OpenGL. Pure (no SDL/GL) so it is unit-testable.
+// Parse a backend name (case-insensitive). Empty/auto selects auto mode when Vulkan is
+// built; unknown values fall back to OpenGL.
 inline GraphicsApi GraphicsApiFromString(std::string_view name)
 {
     // Tiny case-insensitive compare against the known names; the set is fixed and small.
@@ -46,12 +47,19 @@ inline GraphicsApi GraphicsApiFromString(std::string_view name)
     };
 
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+    if (name.empty() || iequals(name, "auto"))
+    {
+        return GraphicsApi::Auto;
+    }
     if (iequals(name, "vulkan") || iequals(name, "vk"))
     {
         return GraphicsApi::Vulkan;
     }
 #else
-    (void)name;
+    if (name.empty() || iequals(name, "auto"))
+    {
+        return GraphicsApi::OpenGL;
+    }
 #endif
     return GraphicsApi::OpenGL;
 }
@@ -61,6 +69,12 @@ inline const char* GraphicsApiName(GraphicsApi api)
 {
     switch (api)
     {
+    case GraphicsApi::Auto:
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        return "auto";
+#else
+        break;
+#endif
     case GraphicsApi::Vulkan:
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
         return "vulkan";
@@ -71,4 +85,14 @@ inline const char* GraphicsApiName(GraphicsApi api)
         break;
     }
     return "gl";
+}
+
+// The backend is selected from the FL_BACKEND environment variable (auto/vulkan/gl), read
+// once at startup before the window — and the Qt platform — exist. There is no on-disk
+// graphics setting: switching backend means relaunching, e.g. `FL_BACKEND=gl framelift`.
+// Unset/empty ⇒ auto.
+inline GraphicsApi GraphicsApiFromEnv()
+{
+    const char* env = std::getenv("FL_BACKEND");
+    return GraphicsApiFromString(env ? env : "");
 }

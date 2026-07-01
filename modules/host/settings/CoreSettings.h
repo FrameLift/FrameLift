@@ -4,13 +4,8 @@
 
 #include <string>
 
-// Host-core settings with no narrower owning module — general window behaviour,
-// file-type lists, and the core keybinds consumed directly by App.
-
-struct GeneralSettings
-{
-    float maxDisplayRatio = 0.8f;
-};
+// Host-core settings with no narrower owning module — file-type lists and the
+// core keybinds consumed directly by App.
 
 struct FilesSettings
 {
@@ -34,12 +29,6 @@ struct KeybindSettings
     std::string toggleSubtitles = "Shift+W";
     std::string openFileDialog = "Ctrl+F";
 };
-
-inline void RegisterGeneralSettings(SettingsRegistry& reg, GeneralSettings& s)
-{
-    reg.AddFloat("general.maxDisplayRatio", s.maxDisplayRatio,
-                 "Max fraction of the screen used when auto-sizing the window to the video (0.0-1.0).");
-}
 
 inline void RegisterFilesSettings(SettingsRegistry& reg, FilesSettings& s)
 {

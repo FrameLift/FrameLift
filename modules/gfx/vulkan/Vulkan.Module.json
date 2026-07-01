@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.graphics_vulkan",
+  "id": "framelift.graphics_vulkan",
   "name": "Vulkan",
   "description": "Vulkan graphics backend and zero-copy decode support.",
   "enabled": true,
@@ -13,7 +13,7 @@
   },
   "requires": {
     "modules": [
-      "framelift.host.graphics_core"
+      "framelift.graphics_core"
     ],
     "features": []
   },

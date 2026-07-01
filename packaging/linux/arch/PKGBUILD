@@ -1,0 +1,65 @@
+# Maintainer: FrameLift <https://github.com/FrameLift/FrameLift>
+pkgname=framelift-git
+_pkgname=framelift
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Qt 6 / Qt Quick video player using FFmpeg and libass (VCS build)"
+arch=('x86_64')
+url="https://github.com/FrameLift/FrameLift"
+license=('Zlib')
+provides=('framelift')
+conflicts=('framelift')
+depends=(
+  'qt6-base'
+  'qt6-declarative'
+  'qt6-multimedia'
+  'ffmpeg'
+  'libass'
+  'vulkan-icd-loader'
+  'hicolor-icon-theme'
+)
+makedepends=(
+  'git'
+  'cmake'
+  'ninja'
+  'glslang'
+  'vulkan-headers'
+)
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  # Latest tag plus commits since, e.g. 0.0.0.r12.gabc1234
+  git describe --long --tags --abbrev=7 2>/dev/null \
+    | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+    || printf '0.0.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  local _ver="${pkgver%%.r*}"
+  cmake -S "$_pkgname" -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DFRAMELIFT_BUILD_TESTS=OFF \
+    -DFRAMELIFT_VERSION="$_ver" \
+    -DFRAMELIFT_VERSION_DISPLAY="git-$(cd "$_pkgname" && git rev-parse --short=8 HEAD)"
+  cmake --build build
+}
+
+package() {
+  install -d "$pkgdir/usr/lib/framelift/plugins"
+  install -Dm755 build/framelift "$pkgdir/usr/lib/framelift/framelift"
+  install -Dm755 build/plugins/*.so -t "$pkgdir/usr/lib/framelift/plugins"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/framelift/framelift "$pkgdir/usr/bin/framelift"
+
+  install -Dm644 "$_pkgname/packaging/linux/framelift.desktop" \
+    "$pkgdir/usr/share/applications/framelift.desktop"
+  install -Dm644 "$_pkgname/assets/img/icon.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/framelift.svg"
+
+  install -Dm644 "$_pkgname/LICENSE" \
+    "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+}

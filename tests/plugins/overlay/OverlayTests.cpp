@@ -1,6 +1,8 @@
 #include "Overlay.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
+
+#include <QtTest/QtTest>
 
 namespace
 {
@@ -15,34 +17,48 @@ MediaEvent IdleEvent(const bool idle)
 }
 } // namespace
 
-TEST(OverlayTest, StartsIdle)
+class OverlayTest final : public QObject
 {
-    const Overlay o;
-    EXPECT_TRUE(o.IsIdle());
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void StartsIdle()
+    {
+        const Overlay o;
+        QVERIFY(o.IsIdle());
+    }
+
+    void IdleActivePropertyTogglesIdleState()
+    {
+        Overlay o;
+        o.OnMediaEvent(IdleEvent(false));
+        QVERIFY(!(o.IsIdle()));
+        o.OnMediaEvent(IdleEvent(true));
+        QVERIFY(o.IsIdle());
+    }
+
+    void ShowCommandWhileIdleDoesNotChangeIdleState()
+    {
+        Overlay o;
+        QVERIFY(o.IsIdle());             // no file loaded
+        o.ShowCommand("File not found"); // e.g. selecting a missing history item — must not crash
+        QVERIFY(o.IsIdle());
+    }
+
+    void NonPropertyEventsAreIgnored()
+    {
+        Overlay o;
+        MediaEvent e;
+        e.type = MediaEventType::EndFile; // not a PropertyChange
+        o.OnMediaEvent(e);
+        QVERIFY(o.IsIdle()); // unchanged
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<OverlayTest> kRegisterOverlayTest{"OverlayTest"};
 }
 
-TEST(OverlayTest, IdleActivePropertyTogglesIdleState)
-{
-    Overlay o;
-    o.OnMediaEvent(IdleEvent(false));
-    EXPECT_FALSE(o.IsIdle());
-    o.OnMediaEvent(IdleEvent(true));
-    EXPECT_TRUE(o.IsIdle());
-}
-
-TEST(OverlayTest, ShowCommandWhileIdleDoesNotChangeIdleState)
-{
-    Overlay o;
-    ASSERT_TRUE(o.IsIdle());          // no file loaded
-    o.ShowCommand("File not found");  // e.g. selecting a missing history item — must not crash
-    EXPECT_TRUE(o.IsIdle());
-}
-
-TEST(OverlayTest, NonPropertyEventsAreIgnored)
-{
-    Overlay o;
-    MediaEvent e;
-    e.type = MediaEventType::EndFile; // not a PropertyChange
-    o.OnMediaEvent(e);
-    EXPECT_TRUE(o.IsIdle()); // unchanged
-}
+#include "OverlayTests.moc"

@@ -1,21 +1,70 @@
 #include "JsonServiceImpl.h"
 
+#include <QtCore/QByteArray>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QJsonValue>
+#include <QtCore/QString>
+
 #include <cstring>
-#include <nlohmann/json.hpp>
+#include <memory>
+#include <mutex>
 #include <string>
-#include <utility>
+#include <vector>
+
+// Host JSON service backed by Qt's QJson. The ABI contract is that navigated read
+// nodes stay valid until FreeDocument — but QJson is value-
+// semantic (QJsonValue/Object/Array are copies, with no stable internal addresses).
+// So the document owns a pool of heap-allocated nodes: navigation (Member/ArrayItem)
+// allocates a JsonNode copy registered with the owning JsonDoc and hands back its
+// address; FreeDocument frees the root and the whole pool. A per-doc mutex guards the
+// pool so concurrent navigation of one document stays safe (the service's documented
+// thread-safety guarantee). Builders are independent value-holders.
 
 namespace
 {
-using Json = nlohmann::json;
+struct JsonDoc;
 
-const Json* AsNode(const void* p) noexcept
+// A parsed read node: a QJson value plus a back-pointer to its document, so
+// navigation off it can register freshly-allocated child nodes in the doc's pool.
+struct JsonNode
 {
-    return static_cast<const Json*>(p);
+    QJsonValue value;
+    JsonDoc* owner = nullptr;
+};
+
+struct JsonDoc
+{
+    JsonNode root; // also the handle ParseDocument returns
+    std::vector<std::unique_ptr<JsonNode>> pool;
+    std::mutex mutex;
+
+    // Allocate a child node owned by this document; returns a handle stable until
+    // the document is freed.
+    const void* Adopt(QJsonValue v)
+    {
+        auto node = std::make_unique<JsonNode>(JsonNode{std::move(v), this});
+        const void* handle = node.get();
+        const std::lock_guard<std::mutex> lock(mutex);
+        pool.push_back(std::move(node));
+        return handle;
+    }
+};
+
+// A mutable JSON value under construction (object, array, or scalar).
+struct JsonBuilder
+{
+    QJsonValue value;
+};
+
+const JsonNode* AsNode(const void* p) noexcept
+{
+    return static_cast<const JsonNode*>(p);
 }
-Json* AsBuilder(void* p) noexcept
+JsonBuilder* AsBuilder(void* p) noexcept
 {
-    return static_cast<Json*>(p);
+    return static_cast<JsonBuilder*>(p);
 }
 
 // Copy `s` into buf/cap per the ISettingsStore idiom: write ≤cap-1 chars + NUL,
@@ -41,64 +90,87 @@ const void* JsonServiceImpl::ParseDocument(const char* text, int len) noexcept
     {
         return nullptr;
     }
-    const std::size_t n = len < 0 ? std::strlen(text) : static_cast<std::size_t>(len);
-    try
-    {
-        auto parsed = Json::parse(text, text + n, nullptr, /*allow_exceptions=*/false);
-        if (parsed.is_discarded())
-        {
-            return nullptr;
-        }
-        return new Json(std::move(parsed));
-    }
-    catch (...)
+    const int n = len < 0 ? static_cast<int>(std::strlen(text)) : len;
+
+    QJsonParseError err{};
+    const QJsonDocument parsed = QJsonDocument::fromJson(QByteArray(text, n), &err);
+    if (err.error != QJsonParseError::NoError)
     {
         return nullptr;
     }
+
+    auto doc = std::make_unique<JsonDoc>();
+    doc->root.owner = doc.get();
+    if (parsed.isObject())
+    {
+        doc->root.value = parsed.object();
+    }
+    else if (parsed.isArray())
+    {
+        doc->root.value = parsed.array();
+    }
+    else
+    {
+        return nullptr; // QJsonDocument only roots object/array
+    }
+    return &doc.release()->root;
 }
 
 void JsonServiceImpl::FreeDocument(const void* doc) noexcept
 {
-    delete const_cast<Json*>(AsNode(doc));
+    if (const JsonNode* n = AsNode(doc))
+    {
+        delete n->owner;
+    }
 }
 
 bool JsonServiceImpl::IsArray(const void* node) const noexcept
 {
-    const Json* n = AsNode(node);
-    return n && n->is_array();
+    const JsonNode* n = AsNode(node);
+    return n && n->value.isArray();
 }
 
 int JsonServiceImpl::ArraySize(const void* node) const noexcept
 {
-    const Json* n = AsNode(node);
-    return (n && n->is_array()) ? static_cast<int>(n->size()) : 0;
+    const JsonNode* n = AsNode(node);
+    return (n && n->value.isArray()) ? static_cast<int>(n->value.toArray().size()) : 0;
 }
 
 const void* JsonServiceImpl::ArrayItem(const void* node, int index) const noexcept
 {
-    const Json* n = AsNode(node);
-    if (!n || !n->is_array() || index < 0 || index >= static_cast<int>(n->size()))
+    const JsonNode* n = AsNode(node);
+    if (!n || !n->value.isArray() || index < 0)
     {
         return nullptr;
     }
-    return &(*n)[static_cast<std::size_t>(index)];
+    const QJsonArray arr = n->value.toArray();
+    if (index >= static_cast<int>(arr.size()))
+    {
+        return nullptr;
+    }
+    return n->owner->Adopt(arr.at(index));
 }
 
 const void* JsonServiceImpl::Member(const void* node, const char* key) const noexcept
 {
-    const Json* n = AsNode(node);
-    if (!n || !n->is_object() || !key)
+    const JsonNode* n = AsNode(node);
+    if (!n || !n->value.isObject() || !key)
     {
         return nullptr;
     }
-    const auto it = n->find(key);
-    return it != n->end() ? &(*it) : nullptr;
+    const QJsonObject obj = n->value.toObject();
+    const auto it = obj.constFind(QString::fromUtf8(key));
+    if (it == obj.constEnd())
+    {
+        return nullptr;
+    }
+    return n->owner->Adopt(it.value());
 }
 
 int JsonServiceImpl::GetString(const void* node, char* buf, int cap) const noexcept
 {
-    const Json* n = AsNode(node);
-    if (!n || !n->is_string())
+    const JsonNode* n = AsNode(node);
+    if (!n || !n->value.isString())
     {
         if (buf && cap > 0)
         {
@@ -106,103 +178,87 @@ int JsonServiceImpl::GetString(const void* node, char* buf, int cap) const noexc
         }
         return 0;
     }
-    return CopyOut(n->get_ref<const std::string&>(), buf, cap);
+    return CopyOut(n->value.toString().toStdString(), buf, cap);
 }
 
 double JsonServiceImpl::GetDouble(const void* node, double def) const noexcept
 {
-    const Json* n = AsNode(node);
-    return (n && n->is_number()) ? n->get<double>() : def;
+    const JsonNode* n = AsNode(node);
+    return (n && n->value.isDouble()) ? n->value.toDouble(def) : def;
 }
 
 // ── Writing ─────────────────────────────────────────────────────────────────────
 
 void* JsonServiceImpl::NewArray() noexcept
 {
-    try
-    {
-        return new Json(Json::array());
-    }
-    catch (...)
-    {
-        return nullptr;
-    }
+    return new (std::nothrow) JsonBuilder{QJsonArray()};
 }
 
 void* JsonServiceImpl::NewObject() noexcept
 {
-    try
-    {
-        return new Json(Json::object());
-    }
-    catch (...)
-    {
-        return nullptr;
-    }
+    return new (std::nothrow) JsonBuilder{QJsonObject()};
 }
 
 void JsonServiceImpl::SetString(void* obj, const char* key, const char* val) noexcept
 {
-    Json* o = AsBuilder(obj);
-    if (!o || !key)
+    JsonBuilder* b = AsBuilder(obj);
+    if (!b || !key || !b->value.isObject())
     {
         return;
     }
-    try
-    {
-        (*o)[key] = val ? val : "";
-    }
-    catch (...)
-    {
-    }
+    QJsonObject o = b->value.toObject();
+    o.insert(QString::fromUtf8(key), QString::fromUtf8(val ? val : ""));
+    b->value = o;
 }
 
 void JsonServiceImpl::SetDouble(void* obj, const char* key, double val) noexcept
 {
-    Json* o = AsBuilder(obj);
-    if (!o || !key)
+    JsonBuilder* b = AsBuilder(obj);
+    if (!b || !key || !b->value.isObject())
     {
         return;
     }
-    try
-    {
-        (*o)[key] = val;
-    }
-    catch (...)
-    {
-    }
+    QJsonObject o = b->value.toObject();
+    o.insert(QString::fromUtf8(key), val);
+    b->value = o;
 }
 
 void JsonServiceImpl::Append(void* arr, void* child) noexcept
 {
-    Json* a = AsBuilder(arr);
-    Json* c = AsBuilder(child);
-    if (a && c)
+    JsonBuilder* a = AsBuilder(arr);
+    JsonBuilder* c = AsBuilder(child);
+    if (a && c && a->value.isArray())
     {
-        try
-        {
-            a->push_back(std::move(*c));
-        }
-        catch (...)
-        {
-        }
+        QJsonArray array = a->value.toArray();
+        array.append(c->value);
+        a->value = array;
     }
     delete c; // child is consumed regardless of success
 }
 
 int JsonServiceImpl::Serialize(void* builder, int indent, char* buf, int cap) noexcept
 {
-    Json* b = AsBuilder(builder);
+    JsonBuilder* b = AsBuilder(builder);
     if (b)
     {
-        try
+        QJsonDocument doc;
+        if (b->value.isObject())
         {
-            const std::string s = indent > 0 ? b->dump(indent) : b->dump();
-            return CopyOut(s, buf, cap);
+            doc.setObject(b->value.toObject());
         }
-        catch (...)
+        else if (b->value.isArray())
         {
+            doc.setArray(b->value.toArray());
         }
+        // Qt's indent width is fixed at 4 (the `indent` count isn't honoured), and
+        // Indented mode appends a trailing newline — strip it to match the compact,
+        // no-trailing-newline shape callers expect.
+        QByteArray out = doc.toJson(indent > 0 ? QJsonDocument::Indented : QJsonDocument::Compact);
+        if (out.endsWith('\n'))
+        {
+            out.chop(1);
+        }
+        return CopyOut(std::string(out.constData(), static_cast<std::size_t>(out.size())), buf, cap);
     }
     if (buf && cap > 0)
     {

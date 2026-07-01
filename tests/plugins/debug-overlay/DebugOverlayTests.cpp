@@ -1,25 +1,40 @@
 #include "DebugOverlay.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(DebugOverlayTest, TogglesVisibility)
+#include <QtTest/QtTest>
+
+class DebugOverlayTest final : public QObject
 {
-    DebugOverlay d;
-    EXPECT_FALSE(d.IsOpen()); // closed by default
-    d.Toggle();
-    EXPECT_TRUE(d.IsOpen());
-    d.Toggle();
-    EXPECT_FALSE(d.IsOpen());
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void TogglesVisibility()
+    {
+        DebugOverlay d;
+        QVERIFY(!(d.IsOpen())); // closed by default
+        d.Toggle();
+        QVERIFY(d.IsOpen());
+        d.Toggle();
+        QVERIFY(!(d.IsOpen()));
+    }
+
+    void MediaEventsDoNotCrashWhileClosed()
+    {
+        DebugOverlay d;
+        MediaEvent e;
+        e.type = MediaEventType::PropertyChange;
+        e.property.prop = PlayerProperty::IdleActive;
+        e.property.type = PropertyType::Flag;
+        e.property.value.flag = 1;
+        d.OnMediaEvent(e); // must be safe with no player/context
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<DebugOverlayTest> kRegisterDebugOverlayTest{"DebugOverlayTest"};
 }
 
-TEST(DebugOverlayTest, MediaEventsDoNotCrashWhileClosed)
-{
-    DebugOverlay d;
-    MediaEvent e;
-    e.type = MediaEventType::PropertyChange;
-    e.property.prop = PlayerProperty::IdleActive;
-    e.property.type = PropertyType::Flag;
-    e.property.value.flag = 1;
-    d.OnMediaEvent(e); // must be safe with no player/context
-    SUCCEED();
-}
+#include "DebugOverlayTests.moc"

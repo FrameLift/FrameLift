@@ -1,11 +1,11 @@
 # FrameLift
 
-An **extensible** video player built on Dear ImGui, SDL3, FFmpeg, and libass — where user-facing
+An **extensible** Qt/QML video player built on Qt 6, FFmpeg, and libass — where user-facing
 features are runtime-loaded plugins. The host application has no compile-time knowledge of any of
 them: playback controls, playlists, history, settings, network streaming, and updates are all plugin
 DLLs loaded at startup over a stable, versioned binary ABI; the window, decode/playback engine, and
 platform integration are built-in modules compiled into the host. Add or remove plugin features by
-dropping a DLL in or out of the `packages/` folder.
+dropping a DLL/SO in or out of the `plugins/` folder.
 
 ## Features
 
@@ -35,12 +35,13 @@ dropping a DLL in or out of the `packages/` folder.
 Download the latest release archive from the [Releases](../../releases) page, extract, and run
 `FrameLift`. No installer needed — the archive is self-contained.
 
-**Platforms:** Windows (x86_64) and Linux (X11/Wayland via SDL3).
+**Platforms:** Windows (x86_64) and Linux (X11/Wayland via Qt).
 
 **Requirements:** a GPU supporting **Vulkan 1.1+** *or* **OpenGL 3.3** (FrameLift auto-selects Vulkan
 and falls back to OpenGL when needed; zero-copy GPU decode additionally needs a Vulkan 1.3 video-decode
-capable GPU). On Linux, install SDL3, FFmpeg, and libass from your distribution (e.g. `libsdl3-0`,
-`libavcodec`, `libavformat`, `libavfilter`, `libass9`) plus a Vulkan loader (`libvulkan1`).
+capable GPU). On Linux, install Qt 6, FFmpeg, and libass from your distribution (e.g. `qt6-base`,
+`qt6-declarative`, `qt6-multimedia`, `libavcodec`, `libavformat`, `libavfilter`, `libass9`) plus a
+Vulkan loader (`libvulkan1`).
 
 ## Configuration
 
@@ -62,25 +63,26 @@ current list of options.
 
 ## Extending FrameLift (Plugin SDK)
 
-Each FrameLift plugin ships as a **package** — one runtime-loaded DLL under the `packages/` folder
-next to the executable. A *plugin* (what you build with the SDK) ships as a package: a `.Plugin.json`
-plus its `.Module.json`(s), compiled into one DLL that carries one or more **modules**, each declaring
-the **features** it provides and requires. A package may carry several modules, and each module can be
-enabled or disabled independently from the Settings → Plugins page (persisted per module id in
-`packages.ini`). You can build your own against the **dependency-free plugin SDK**
-(`framelift-sdk-<ver>.zip`, published as a Release asset on every version tag).
+Each FrameLift plugin ships as exactly one runtime-loaded Qt plugin DLL/SO under the `plugins/` folder
+next to the executable. A *plugin* (what you build with the SDK) is a single `.Plugin.json` that
+returns one **module** (`IModule`) and declares the **features** it provides and requires. Its artifact
+name is the lowercase plugin id (e.g. `framelift.playlist.so`), and it is enabled or disabled from the
+Settings → Plugins page (persisted by plugin id in `plugins.ini`). You can build your own against the
+**dependency-free plugin SDK** (`framelift-sdk-<ver>.zip`, published as a Release asset on every
+version tag).
 
 - **Stable binary boundary.** The host↔plugin boundary is a COM-like binary ABI: pure abstract
-  interfaces, POD-only method signatures, and `extern "C"` entry points. A plugin built with any
-  compatible Windows compiler loads regardless of how the host was built. The ABI is a single integer,
-  `FRAMELIFT_ABI_VERSION`, matched exactly; new host capabilities arrive as new discoverable service
-  interfaces (capability discovery), so they never bump it.
-- **JSON-authored metadata.** Plugin packages declare package/module/feature metadata in
-  `[Plugin].Plugin.json` and `[Module].Module.json` files, including `fileVersion`, package `version`,
-  and `abi`. CMake validates those files and embeds the resulting POD metadata into the
-  plugin DLL; runtime does not read JSON sidecars.
-- **Small surface.** Plugins include only the umbrella headers `<framelift/core.h>`, `<framelift/ui.h>`,
-  `<framelift/services.h>`, and `<framelift/platform.h>` — never host internals.
+  interfaces and POD-only method signatures, fronted by a Qt plugin factory (`IPlugin` +
+  `Q_PLUGIN_METADATA`). A plugin built with any compatible compiler loads regardless of how the host
+  was built. The ABI is a single integer, `FRAMELIFT_ABI_VERSION`, matched exactly; new host
+  capabilities arrive as new discoverable service interfaces (capability discovery), so they never
+  bump it.
+- **JSON-authored metadata.** Each plugin declares its id, version, `abi`, features, and dependencies
+  in a single `[Plugin].Plugin.json`. CMake validates it and embeds the resulting metadata into the
+  plugin's `Q_PLUGIN_METADATA`, which the host reads before any vtable is touched; runtime does not
+  read JSON sidecars.
+- **Small surface.** Plugins include only the umbrella headers `<framelift/core.h>`,
+  `<framelift/services.h>`, and `<framelift/platform.h>` plus Qt/QML headers — never host internals.
 - **Cross-plugin communication.** Plugins never link against each other; they interact through the
   module context via pub/sub events and capability services discovered with `ctx.GetService<T>()` —
   `IHistory`, the settings split (`ISettingsStore`/`ISettingsRegistry`), and platform interface
@@ -95,24 +97,22 @@ repository for worked example plugins to copy from.
 FrameLift/
 ├── sdk/                    # Public plugin SDK — everything a plugin author needs
 │   ├── include/framelift/  # Public headers (include path: sdk/include)
-│   │   ├── core.h          # Umbrella: module lifecycle, context, ABI, events, hotkeys
-│   │   ├── ui.h            # Umbrella: IRenderable, Panel, UIContext, widgets
+│   │   ├── core.h          # Umbrella: module lifecycle, plugin entry, context, ABI, events, hotkeys
 │   │   ├── services.h      # Umbrella: cross-plugin service interfaces
-│   │   ├── platform.h      # Umbrella: media playback + window interface families, IDirWatcher, IFileDialog
+│   │   ├── platform.h      # Umbrella: media playback + window interface families, IFileDialog
 │   │   ├── services/       # Per-plugin service interfaces (IHistory, …)
 │   │   ├── platform/       # Platform service interfaces
-│   │   └── ui/             # UI helper headers (Panel, UIContext, Widgets, …)
 │   └── src/                # SDK helper sources compiled into each plugin
 │       # (worked examples live in the separate FrameLift-Examples repo)
 │
 ├── src/                    # Host entry point (framelift.exe): App, CLI, main — owns only the loop
 │
 ├── modules/                # Built-in modules compiled into the host (not shipped as DLLs)
-│   ├── host/               # playback, audio, settings, services, controls, fonts, read-ahead, ui, logging, module-runtime
+│   ├── host/               # playback, audio, settings, services, controls, logging, read-ahead, ui, module-runtime
 │   ├── gfx/                # Graphics backends (graphics-core, opengl, vulkan) and video renderers
-│   └── platform/           # SDL3 window (window-sdl) and per-OS dir watchers (dir-watch)
+│   └── platform/           # Qt window integration and platform shell services
 │
-├── plugins/                # Plugins — each builds one package (DLL) emitted into packages/
+├── plugins/                # Plugins — each builds one Qt plugin DLL/SO emitted into plugins/
 │   ├── overlay/            # Playback controls, idle screen, notifications
 │   ├── playlist/           # Folder playlist and file navigation
 │   ├── history/            # Recently played + resume positions
@@ -120,19 +120,17 @@ FrameLift/
 │   ├── debug-overlay/      # Live playback stats
 │   ├── benchmark/          # Performance / system-stats benchmark overlay
 │   ├── remote-stream/      # Remote network streams (http/https/rtsp + encrypted)
-│   ├── context-menu/       # Shared right-click context-menu service
-│   └── updater/            # Auto-update (Windows-only)
+│   └── context-menu/       # Shared right-click context-menu service
 │
 ├── cmake/                  # Dependency fetch, shader compile, and SDK packaging modules
-├── vcpkg.json              # Windows native libs (SDL3, FFmpeg, libass) — vcpkg manifest
+├── vcpkg.json              # Windows native libs (Qt, FFmpeg, libass) — vcpkg manifest
 └── CMakeLists.txt
 ```
 
-The host (`src/`) has no compile-time knowledge of specific plugins; every package is loaded at
-runtime from a DLL such as `packages/framelift.playlist.core.dll`, dependency-resolved and ABI-checked
-before any module object is constructed. Each module a package carries is instantiated unless its id is
-disabled in `packages.ini` (one `framelift.playlist.core=enabled|disabled` row per module; absent ⇒
-enabled).
+The host (`src/`) has no compile-time knowledge of specific plugins; every plugin is loaded at
+runtime from a DLL/SO such as `plugins/framelift.playlist.so`, dependency-resolved and ABI-checked
+before any module object is constructed. Each plugin is instantiated unless its id is disabled in
+`plugins.ini` (one `framelift.playlist=enabled|disabled` row per plugin; absent ⇒ enabled).
 
 ## Building from Source
 
@@ -143,11 +141,12 @@ enabled).
 - `glslang` on PATH (the `glslang-tools` package) — compiles the GLSL shaders to SPIR-V at build time.
   CMake fetches and builds glslang as a fallback only when it isn't found on PATH.
 - `clang-format` on PATH (for the pre-commit hook)
-- **Linux only:** development packages for SDL3, FFmpeg, libass, Vulkan, and OpenGL
-  (e.g. on Ubuntu 25.04+: `sudo apt install libsdl3-dev libavformat-dev libavcodec-dev libavutil-dev
+- **Linux only:** development packages for Qt 6, FFmpeg, libass, Vulkan, and OpenGL
+  (e.g. on Ubuntu 25.04+: `sudo apt install qt6-base-dev qt6-declarative-dev qml6-module-qtquick
+  qml6-module-qtquick-controls qt6-multimedia-dev libavformat-dev libavcodec-dev libavutil-dev
   libswscale-dev libswresample-dev libavfilter-dev libass-dev libvulkan-dev libgl1-mesa-dev
   glslang-tools pkg-config`).
-- **Windows only:** [vcpkg](https://vcpkg.io) (`VCPKG_ROOT` set) — SDL3, FFmpeg, and libass are
+- **Windows only:** [vcpkg](https://vcpkg.io) (`VCPKG_ROOT` set) — Qt, FFmpeg, and libass are
   resolved from the manifest in `vcpkg.json`. Configure with the vcpkg preset (`CMakePresets.json`).
 
 ### Steps
@@ -160,16 +159,15 @@ cd FrameLift
 git config core.hooksPath .github/hooks
 
 # Configure and build
-cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
-cmake --build cmake-build-debug --config Debug
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug
 ```
 
 Output: `cmake-build-debug/framelift` (`.exe` on Windows). On Windows the required shared libraries
-are copied next to the executable; on Linux SDL3/FFmpeg/libass are resolved from the system. Package
-DLLs are placed under `cmake-build-debug/packages/` (`.dll` on Windows, `.so` on Linux).
-The auto-updater package declares Windows-only platform support and is disabled automatically elsewhere.
-The Vulkan and OpenGL loaders are resolved at
-runtime (no link-time `libvulkan` dependency), so only a GPU driver is needed to run.
+are copied next to the executable; on Linux Qt/FFmpeg/libass are resolved from the system. Plugin
+DLLs/SOs are placed under `cmake-build-debug/plugins/` (`.dll` on Windows, `.so` on Linux).
+The Vulkan backend links the official Vulkan loader when enabled; a Vulkan runtime
+(`libvulkan.so.1` / `vulkan-1.dll`) is required for Vulkan-enabled builds.
 
 #### Lean builds
 
@@ -178,8 +176,8 @@ Each built-in module exposes a `FRAMELIFT_MODULE_<NAME>` CMake option whose defa
 dependencies from the build — for example, a Vulkan-free build that keeps only the OpenGL backend:
 
 ```sh
-cmake -B cmake-build-lean -DCMAKE_BUILD_TYPE=Debug -DFRAMELIFT_MODULE_GRAPHICS_VULKAN=OFF
-cmake --build cmake-build-lean
+cmake -B build-lean -DCMAKE_BUILD_TYPE=Debug -DFRAMELIFT_MODULE_GRAPHICS_VULKAN=OFF
+cmake --build build-lean
 ```
 
 CMake prints the enabled/disabled module table at configure time. Modules unsupported on the current
@@ -192,17 +190,12 @@ CMake via `FetchContent`.
 
 | Library          | Version           | Source        |
 |------------------|-------------------|---------------|
-| SDL3             | vcpkg / system    | vcpkg/system  |
+| Qt 6             | vcpkg / system    | vcpkg/system  |
 | FFmpeg           | vcpkg / system    | vcpkg/system  |
 | libass           | vcpkg / system    | vcpkg/system  |
-| Dear ImGui       | 1.92.8-docking    | FetchContent  |
-| spdlog           | 1.17.0            | FetchContent  |
-| nlohmann/json    | 3.11.3            | FetchContent  |
-| stb              | master            | FetchContent  |
 | Vulkan-Headers   | 1.4.354           | FetchContent  |
-| volk             | 1.4.350           | FetchContent  |
 | VulkanMemoryAllocator | 3.4.0        | FetchContent  |
-| glslang          | 15.0.0 (build-time, fallback) | PATH / FetchContent |
+| glslang          | build-time, fallback | PATH / FetchContent |
 
 ## License
 

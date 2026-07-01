@@ -1,0 +1,25 @@
+pkgbase = framelift-git
+	pkgdesc = Qt 6 / Qt Quick video player using FFmpeg and libass (VCS build)
+	pkgver = 0.3.1
+	pkgrel = 1
+	url = https://github.com/FrameLift/FrameLift
+	arch = x86_64
+	license = Zlib
+	makedepends = git
+	makedepends = cmake
+	makedepends = ninja
+	makedepends = glslang
+	makedepends = vulkan-headers
+	depends = qt6-base
+	depends = qt6-declarative
+	depends = qt6-multimedia
+	depends = ffmpeg
+	depends = libass
+	depends = vulkan-icd-loader
+	depends = hicolor-icon-theme
+	provides = framelift
+	conflicts = framelift
+	source = framelift::git+https://github.com/FrameLift/FrameLift.git#branch=feat/qt
+	sha256sums = SKIP
+
+pkgname = framelift-git

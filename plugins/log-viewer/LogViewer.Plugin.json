@@ -6,7 +6,19 @@
   "description": "In-app log and performance viewer",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "log.viewer"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": []
+  },
+  "platforms": []
 }

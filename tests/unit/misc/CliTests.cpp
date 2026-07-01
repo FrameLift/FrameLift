@@ -1,6 +1,8 @@
 #include "Cli.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
+
+#include <QtTest/QtTest>
 
 namespace
 {
@@ -11,38 +13,52 @@ std::string Parse(const std::initializer_list<const char*> args)
 }
 } // namespace
 
-TEST(CliTest, ReturnsLocalPath)
+class CliTest final : public QObject
 {
-    EXPECT_EQ(Parse({"FrameLift", "movie.mkv"}), "movie.mkv");
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void ReturnsLocalPath()
+    {
+        QVERIFY((Parse({"FrameLift", "movie.mkv"})) == ("movie.mkv"));
+    }
+
+    void ReturnsUrl()
+    {
+        QVERIFY((Parse({"FrameLift", "https://example.com/stream.m3u8"})) == ("https://example.com/stream.m3u8"));
+    }
+
+    void EmptyWhenNoArgs()
+    {
+        QVERIFY((Parse({"FrameLift"})) == (""));
+    }
+
+    void SkipsLeadingFlags()
+    {
+        QVERIFY((Parse({"FrameLift", "--verbose", "-x", "movie.mkv"})) == ("movie.mkv"));
+    }
+
+    void EmptyWhenOnlyFlags()
+    {
+        QVERIFY((Parse({"FrameLift", "--help", "-v"})) == (""));
+    }
+
+    void FirstPositionalWinsOverLaterArgs()
+    {
+        QVERIFY((Parse({"FrameLift", "first.mkv", "second.mkv"})) == ("first.mkv"));
+    }
+
+    void HandlesNullArgvAndZeroArgc()
+    {
+        QVERIFY((ParseOpenTarget(0, nullptr)) == (""));
+        QVERIFY((ParseOpenTarget(5, nullptr)) == (""));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<CliTest> kRegisterCliTest{"CliTest"};
 }
 
-TEST(CliTest, ReturnsUrl)
-{
-    EXPECT_EQ(Parse({"FrameLift", "https://example.com/stream.m3u8"}), "https://example.com/stream.m3u8");
-}
-
-TEST(CliTest, EmptyWhenNoArgs)
-{
-    EXPECT_EQ(Parse({"FrameLift"}), "");
-}
-
-TEST(CliTest, SkipsLeadingFlags)
-{
-    EXPECT_EQ(Parse({"FrameLift", "--verbose", "-x", "movie.mkv"}), "movie.mkv");
-}
-
-TEST(CliTest, EmptyWhenOnlyFlags)
-{
-    EXPECT_EQ(Parse({"FrameLift", "--help", "-v"}), "");
-}
-
-TEST(CliTest, FirstPositionalWinsOverLaterArgs)
-{
-    EXPECT_EQ(Parse({"FrameLift", "first.mkv", "second.mkv"}), "first.mkv");
-}
-
-TEST(CliTest, HandlesNullArgvAndZeroArgc)
-{
-    EXPECT_EQ(ParseOpenTarget(0, nullptr), "");
-    EXPECT_EQ(ParseOpenTarget(5, nullptr), "");
-}
+#include "CliTests.moc"

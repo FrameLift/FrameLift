@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.graphics_core",
+  "id": "framelift.graphics_core",
   "name": "Graphics Core",
   "description": "Graphics API selection and renderer interfaces.",
   "enabled": true,

@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
-// ── Pure theme/color helpers (no imgui, no SDL) ───────────────────────────────
+// ── Pure theme/color helpers ──────────────────────────────────────────────────
 // Shared by the host UI module, the SettingsMenu plugin, and unit tests.
 // Header-only so it compiles into every translation unit that needs it without a
 // shared library — consistent with how the SDK helper sources are compiled in.

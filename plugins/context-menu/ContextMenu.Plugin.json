@@ -6,7 +6,19 @@
   "description": "Right-click context menu for the video area",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": []
+  },
+  "platforms": []
 }

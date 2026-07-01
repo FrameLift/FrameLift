@@ -5,7 +5,7 @@
 // Module bootstrap context. Passed into IModule::Install(). Deliberately tiny: it
 // only carries the service registry and the pub/sub bus — the two things every
 // module needs before it can discover anything else. All host functionality
-// (settings, keybind/page registration, the package catalogue, fonts, paths, media
+// (settings, keybind/page registration, the plugin catalogue, paths, media
 // playback, the window) is reached through capability services fetched with
 // GetService<T>(); see <framelift/services.h> and <framelift/platform.h>.
 //

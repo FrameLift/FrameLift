@@ -6,13 +6,6 @@
 
 #include <cstdint>
 
-// Suppress Vulkan prototype declarations: this TU calls NO vkXxx functions (only av_*),
-// so we want the types/enums/structs from <vulkan/vulkan.h> without the function symbols,
-// which would otherwise collide with volk's function-pointer globals elsewhere in the exe.
-#ifndef VK_NO_PROTOTYPES
-#define VK_NO_PROTOTYPES
-#endif
-
 extern "C"
 {
 #include <libavutil/hwcontext.h>
@@ -21,7 +14,7 @@ extern "C"
 
 // Scoped suppression of deprecated-field writes (cross-compiler).
 #if defined(__GNUC__) || defined(__clang__)
-#define FFVK_PUSH_IGNORE_DEPRECATED                                                                                     \
+#define FFVK_PUSH_IGNORE_DEPRECATED                                                                                    \
     _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
 #define FFVK_POP_IGNORE_DEPRECATED _Pragma("GCC diagnostic pop")
 #elif defined(_MSC_VER)
@@ -114,7 +107,9 @@ AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info)
         vk->qf[n].idx = info.graphicsQueueFamily;
         vk->qf[n].num = 1;
         vk->qf[n].flags = static_cast<VkQueueFlagBits>(info.graphicsQueueFlags);
-        vk->qf[n].video_caps = static_cast<VkVideoCodecOperationFlagBitsKHR>(0);
+        vk->qf[n].video_caps = info.graphicsQueueFamily == info.videoDecodeQueueFamily
+                                   ? static_cast<VkVideoCodecOperationFlagBitsKHR>(info.videoDecodeCaps)
+                                   : static_cast<VkVideoCodecOperationFlagBitsKHR>(0);
         ++n;
     }
     if (info.videoDecodeQueueFamily >= 0 && info.videoDecodeQueueFamily != info.graphicsQueueFamily)

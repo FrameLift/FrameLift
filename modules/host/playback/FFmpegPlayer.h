@@ -2,9 +2,9 @@
 
 #include <framelift/platform/IMediaPlayer.h>
 
-#include "ReadAheadCache.h"
-#include "IVideoRenderer.h"
 #include "FFmpegSubtitles.h"
+#include "IVideoRenderer.h"
+#include "ReadAheadCache.h"
 #include "VideoDecodeMode.h"
 
 #include <array>
@@ -32,15 +32,16 @@ class FFmpegPacketQueue;
 class FFmpegHwDecode;
 class Settings;
 
-// Concrete FFmpeg + libass implementation of the media playback interface family
-// (IMediaPlayback / IMediaProperties / IVideoOutput / IAudioControl / ISubtitleControl).
+// Concrete external FFmpeg + libass implementation of the media playback interface
+// family (IMediaPlayback / IMediaProperties / IVideoOutput / IAudioControl /
+// ISubtitleControl).
 //
 // This and FFmpeg* siblings are the ONLY files that may #include <libav*/...> or
 // <ass/...> headers.
 //
-// Phase 4 status: audio + A/V sync + seeking. Per file, a demux thread fans
-// packets into bounded audio/video queues and spawns an audio worker (resamples
-// to an SDL3 device — the master clock) and a video worker (swscale → present,
+// Per file, a demux thread fans packets into bounded audio/video queues and
+// spawns an audio worker (resamples to Qt's raw PCM sink — the master clock) and
+// a video worker (swscale → present,
 // synced to the clock). A session loop performs keyframe/exact seeks between
 // worker spawns, holds the last frame on EOF (still seekable), and handles still
 // images / slideshows. Pause, volume/mute and the full host-consumed property set
@@ -59,6 +60,10 @@ public:
     FFmpegPlayer& operator=(const FFmpegPlayer&) = delete;
 
     void LoadFile(const char* path, double resumePos = 0.0) noexcept override;
+    // Abandon the current file and return to the idle state (idle screen, no held
+    // frame). Host-only (concrete): used at end-of-playlist so a finished last item
+    // doesn't linger as a seekable held frame. No-op when already idle.
+    void Stop() noexcept;
     void SetPause(bool paused) noexcept override;
     void TogglePause() noexcept override;
     void ToggleMute() noexcept override;
@@ -122,9 +127,12 @@ public:
     void EnumerateAudioOutputDevices(void (*visit)(const AudioOutputDevice*, void*), void* ud) const noexcept override;
 
     void InitRender(void* graphicsBackend) noexcept override;
+    void ReleaseRender() noexcept;
     void SetRenderUpdateCallback(void (*cb)(void*), void* ud) noexcept override;
     [[nodiscard]] bool HasNewFrame() noexcept override;
     void RenderFrame(int w, int h) noexcept override;
+    void PrepareRenderFrame(int w, int h) noexcept;
+    void DrawPreparedFrame(int w, int h) noexcept;
 
 private:
     // Background decode/playback thread: waits for a load request, then drives the
@@ -226,8 +234,10 @@ private:
     bool OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioBinding& aud);
     // Apply subtitle selection `id` (-1 == off): open/rebuild the embedded subtitle
     // decoder (out via sDec/sStream/subIdx) or pre-load an external file into libass.
-    void OpenSubtitleBinding(int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx,
-                             AVCodecContext*& sDec, AVStream*& sStream);
+    void OpenSubtitleBinding(
+        int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx, AVCodecContext*& sDec,
+        AVStream*& sStream
+    );
     // Resolve a track id to its entry (copy) under tracksMutex_; returns false if absent.
     bool FindTrack(int64_t id, TrackEntry& out) const;
 
@@ -253,6 +263,10 @@ private:
     // CPU-RGBA8 path runs). vulkanZeroCopyAvailable_ gates per-file selection in PlayFile.
     AVBufferRef* vkHwDevice_ = nullptr;
     bool vulkanZeroCopyAvailable_ = false;
+    // FFmpeg's Vulkan video-decode backend faults (VK_ERROR_DEVICE_LOST) on the NVIDIA
+    // driver, so Auto mode must not auto-select it there — NVDEC/CUDA is NVIDIA's reliable
+    // path and comes next in AutoVideoDecodePreference(). Explicit VulkanZeroCopy still tries.
+    bool vulkanAdapterIsNvidia_ = false;
 #endif
 
     std::thread decodeThread_;
@@ -264,7 +278,7 @@ private:
     void* videoWakeEvent_ = nullptr;
 
     // Audio output + per-file packet queues (forward-declared; defined in the .cpp
-    // so libav/SDL stay out of this header).
+    // so libav stays out of this header).
     // Shared memory-bounded read-ahead budget + hit/miss metrics for the three
     // queues. Declared before the queues so it outlives them: their
     // destructors Flush() and touch this via their budget_ pointer.
@@ -286,6 +300,10 @@ private:
     std::string pendingPath_;
     double pendingResume_ = 0.0;
     bool hasPendingLoad_ = false;
+    // Set by Stop() to abandon the current file and return to idle without loading a
+    // new one (StopRequested() folds it in). Lingers harmlessly while the decode thread
+    // is parked; cleared when the next load is consumed.
+    bool stopRequested_ = false;
     std::string currentPath_;
 
     // Events queued for the main thread to drain via PollEvent(). Guarded by mutex_.
@@ -310,6 +328,7 @@ private:
     bool pendingIsVulkan_ = false;
     bool displayIsVulkan_ = false; // render-thread-owned: last frame handed to the renderer
 #endif
+    bool preparedOverlayActive_ = false;
 
     // Observable / queryable state.
     std::atomic<int64_t> displayWidth_{0};
@@ -322,8 +341,8 @@ private:
     std::atomic<bool> eofReached_{false};
     std::atomic<bool> coreIdle_{true};
     std::atomic<double> duration_{0.0};
-    double speed_ = 1.0;   // read-only: no setter exists in IMediaPlayer (yet)
-    int volume_ = 100;     // canonical 0–100 volume, mirrored to the audio device
+    double speed_ = 1.0;    // read-only: no setter exists in IMediaPlayer (yet)
+    int volume_ = 100;      // canonical 0–100 volume, mirrored to the audio device
     bool hasVideo_ = false; // set by PlayFile; audio worker drives TimePos when false
 
     // Seeking. seekTarget_/hasPendingSeek_ are a request from the main thread to
@@ -332,14 +351,27 @@ private:
     // before it. seekRefresh_ lets the video worker present one frame while paused.
     bool hasPendingSeek_ = false;
     double seekTarget_ = 0.0;
+    // Held-key seek state (all guarded by mutex_). Two distinct release points, so two
+    // flags — conflating them re-introduces the jump-to-0 on files with audio:
+    //  • seekSettled_  — a post-seek *frame has been painted*. Gates the held-step
+    //    pipeline: the decode loop / workers must show the current seek's frame before
+    //    honouring the next pending seek, so a held key steps visibly instead of freezing.
+    //    Set at the video present (audio deliver for audio-only files).
+    //  • seekClockValid_ — the *authoritative master clock* is re-established (audio clock
+    //    when a device is open, else the video wall clock). Gates the relative-seek anchor
+    //    in Seek(): until true, GetMasterClock() reads ~0, so a repeat must accumulate
+    //    against seekTarget_ instead of re-targeting from the start. The video frame can
+    //    paint before the audio worker re-feeds, so this must NOT key off the video frame.
+    bool seekSettled_ = true;
+    bool seekClockValid_ = true;
     double seekSkipPts_ = -1e18;
     std::atomic<bool> seekRefresh_{false};
-    std::atomic<bool> hrSeek_{true};                 // PlaybackOptions.hrSeek (exact vs keyframe)
-    std::atomic<bool> hwdec_{true};                  // PlaybackOptions.hwdec (try hardware decode on load)
+    std::atomic<bool> hrSeek_{true}; // PlaybackOptions.hrSeek (exact vs keyframe)
+    std::atomic<bool> hwdec_{true};  // PlaybackOptions.hwdec (try hardware decode on load)
     std::atomic<VideoDecodeMode> videoDecodeMode_{VideoDecodeMode::Auto};
-    std::atomic<double> imageDisplayDuration_{0.0};  // <= 0 ⇒ hold a still image indefinitely
-    std::string mediaTitle_;                         // metadata title (guarded by mutex_)
-    std::string hwDecName_ = "no";                   // active hw decoder name / "no" (guarded by mutex_)
+    std::atomic<double> imageDisplayDuration_{0.0}; // <= 0 ⇒ hold a still image indefinitely
+    std::string mediaTitle_;                        // metadata title (guarded by mutex_)
+    std::string hwDecName_ = "no";                  // active hw decoder name / "no" (guarded by mutex_)
 
     // Which properties the host/plugins have subscribed to (indexed by enum value).
     std::array<std::atomic<bool>, kPropCount> observed_{};
@@ -385,11 +417,11 @@ private:
     bool hasPendingSubSwitch_ = false;
 
     // Subtitle rendering state.
-    std::atomic<double> subtitleDelay_{0.0}; // seconds; positive delays subtitles
-    std::vector<unsigned char> overlayScratch_; // render-thread-owned overlay pixels
-    bool overlayActive_ = false;                // render-thread-owned: draw overlay this frame
+    std::atomic<double> subtitleDelay_{0.0};       // seconds; positive delays subtitles
+    std::vector<unsigned char> overlayScratch_;    // render-thread-owned overlay pixels
+    bool overlayActive_ = false;                   // render-thread-owned: draw overlay this frame
     bool subtitleSeekClockOverrideActive_ = false; // guarded by mutex_
-    double subtitleSeekClockOverride_ = 0.0;        // guarded by mutex_
+    double subtitleSeekClockOverride_ = 0.0;       // guarded by mutex_
 
     // User subtitle preferences. Styling is forwarded to libass on change; the
     // behavior fields (preferredLang/preferForced) drive BuildTrackList. Guarded by

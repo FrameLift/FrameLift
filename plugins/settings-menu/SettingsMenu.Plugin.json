@@ -6,7 +6,23 @@
   "description": "Settings and keybind editor",
   "version": "project",
   "abi": 1,
-  "modules": [
-    "core/Core.Module.json"
-  ]
+  "enabled": true,
+  "provides": {
+    "features": [
+      "settings.menu",
+      "settings.plugins",
+      "settings.keybinds"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": [
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
 }

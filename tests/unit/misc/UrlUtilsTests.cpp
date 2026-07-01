@@ -1,51 +1,67 @@
 #include <framelift/UrlUtils.h>
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
+
+#include <QtTest/QtTest>
 
 using framelift::IsRemoteUrl;
 using framelift::UrlScheme;
 
-TEST(UrlUtilsTest, HttpAndHttpsAreRemote)
+class UrlUtilsTest final : public QObject
 {
-    EXPECT_TRUE(IsRemoteUrl("http://example.com/a.mp4"));
-    EXPECT_TRUE(IsRemoteUrl("https://example.com/a.m3u8"));
-    EXPECT_EQ(UrlScheme("http://example.com/a.mp4"), "http");
-    EXPECT_EQ(UrlScheme("https://example.com/a.m3u8"), "https");
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void HttpAndHttpsAreRemote()
+    {
+        QVERIFY(IsRemoteUrl("http://example.com/a.mp4"));
+        QVERIFY(IsRemoteUrl("https://example.com/a.m3u8"));
+        QVERIFY((UrlScheme("http://example.com/a.mp4")) == ("http"));
+        QVERIFY((UrlScheme("https://example.com/a.m3u8")) == ("https"));
+    }
+
+    void OtherNetworkSchemesAreRemote()
+    {
+        QVERIFY(IsRemoteUrl("rtsp://host/stream"));
+        QVERIFY(IsRemoteUrl("rtmp://host/live"));
+        QVERIFY((UrlScheme("rtsp://host/stream")) == ("rtsp"));
+    }
+
+    void DedicatedSecureSchemeIsRemoteAndNamed()
+    {
+        QVERIFY(IsRemoteUrl("flsec://vault/clip.enc"));
+        QVERIFY((UrlScheme("flsec://vault/clip.enc")) == (framelift::kSecureStreamScheme));
+    }
+
+    void SchemeIsLowercased()
+    {
+        QVERIFY((UrlScheme("HTTPS://Example.com")) == ("https"));
+        QVERIFY(IsRemoteUrl("HtTp://x"));
+    }
+
+    void LocalPathsAreNotRemote()
+    {
+        QVERIFY(!(IsRemoteUrl("C:\\Users\\me\\movie.mkv")));
+        QVERIFY(!(IsRemoteUrl("C:/Users/me/movie.mkv")));
+        QVERIFY(!(IsRemoteUrl("/home/me/movie.mkv")));
+        QVERIFY(!(IsRemoteUrl("movie.mp4")));
+        QVERIFY(!(IsRemoteUrl("./rel/path.mp4")));
+        QVERIFY((UrlScheme("C:\\Users\\me\\movie.mkv")) == (""));
+    }
+
+    void EdgeCases()
+    {
+        QVERIFY(!(IsRemoteUrl(nullptr)));
+        QVERIFY(!(IsRemoteUrl("")));
+        QVERIFY(!(IsRemoteUrl("://no-scheme")));       // empty scheme
+        QVERIFY(!(IsRemoteUrl("weird path://thing"))); // space invalidates the scheme
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<UrlUtilsTest> kRegisterUrlUtilsTest{"UrlUtilsTest"};
 }
 
-TEST(UrlUtilsTest, OtherNetworkSchemesAreRemote)
-{
-    EXPECT_TRUE(IsRemoteUrl("rtsp://host/stream"));
-    EXPECT_TRUE(IsRemoteUrl("rtmp://host/live"));
-    EXPECT_EQ(UrlScheme("rtsp://host/stream"), "rtsp");
-}
-
-TEST(UrlUtilsTest, DedicatedSecureSchemeIsRemoteAndNamed)
-{
-    EXPECT_TRUE(IsRemoteUrl("flsec://vault/clip.enc"));
-    EXPECT_EQ(UrlScheme("flsec://vault/clip.enc"), framelift::kSecureStreamScheme);
-}
-
-TEST(UrlUtilsTest, SchemeIsLowercased)
-{
-    EXPECT_EQ(UrlScheme("HTTPS://Example.com"), "https");
-    EXPECT_TRUE(IsRemoteUrl("HtTp://x"));
-}
-
-TEST(UrlUtilsTest, LocalPathsAreNotRemote)
-{
-    EXPECT_FALSE(IsRemoteUrl("C:\\Users\\me\\movie.mkv"));
-    EXPECT_FALSE(IsRemoteUrl("C:/Users/me/movie.mkv"));
-    EXPECT_FALSE(IsRemoteUrl("/home/me/movie.mkv"));
-    EXPECT_FALSE(IsRemoteUrl("movie.mp4"));
-    EXPECT_FALSE(IsRemoteUrl("./rel/path.mp4"));
-    EXPECT_EQ(UrlScheme("C:\\Users\\me\\movie.mkv"), "");
-}
-
-TEST(UrlUtilsTest, EdgeCases)
-{
-    EXPECT_FALSE(IsRemoteUrl(nullptr));
-    EXPECT_FALSE(IsRemoteUrl(""));
-    EXPECT_FALSE(IsRemoteUrl("://no-scheme"));      // empty scheme
-    EXPECT_FALSE(IsRemoteUrl("weird path://thing")); // space invalidates the scheme
-}
+#include "UrlUtilsTests.moc"

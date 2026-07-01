@@ -15,14 +15,15 @@ env:
   DEBIAN_FRONTEND: noninteractive
   BUILD_DIR: build
   CMAKE_VERSION: "4.3.0"
+  QT_VERSION: "6.11.1"
   # vcpkg commit the manifest pins via builtin-baseline (vcpkg.json). The Windows
-  # build checks vcpkg out at this commit so the FFmpeg + libass versions are
-  # reproducible; bump alongside the manifest baseline.
+  # build fetches this commit so the FFmpeg + libass versions are reproducible;
+  # bump alongside the manifest baseline.
   VCPKG_BASELINE: "d592849579fb1fb22f87406b2184522ea21a8783"
 
 jobs:
   # ── Unit tests ──────────────────────────────────────────────────────────────
-  # Native-Linux GoogleTest suite over the platform-independent logic. Runs first;
+  # Native-Linux QtTest suite over the platform-independent logic. Runs first;
   # the build jobs depend on it via `needs:`.
   test:
     runs-on: ubuntu-latest
@@ -37,7 +38,8 @@ jobs:
             cmake \
             ninja-build \
             git \
-            ca-certificates
+            ca-certificates \
+            qt6-base-dev
       - name: Build & run tests
         run: |
           cmake -S tests -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -51,86 +53,81 @@ jobs:
           name: test-results
           path: build-tests/junit.xml
 
-  # ── Windows build (MinGW cross-compile) ─────────────────────────────────────
-  # Produces FrameLift-win64.zip. SDL3, FFmpeg, and libass all come from the vcpkg
-  # manifest (vcpkg.json), built for the x64-mingw-dynamic triplet so they
-  # cross-compile in this Linux container.
+  # ── Windows build (native MSVC) ─────────────────────────────────────────────
+  # Produces FrameLift-win64.zip on a native Windows runner with MSVC. The
+  # windows-latest image ships CMake, Ninja, vcpkg, and the VS 2026 MSVC toolset
+  # preinstalled. Qt comes from the official prebuilt MSVC package; FFmpeg and
+  # libass come from the vcpkg manifest (vcpkg.json) for the release-only
+  # x64-windows triplet. Keeping Qt out of vcpkg avoids source-building Qt on
+  # cache misses, which can exhaust the Windows runner disk.
   build-windows:
     needs: test
-    runs-on: ubuntu-latest
-    container: ubuntu:24.04
+    runs-on: windows-latest
     permissions:
       contents: read
       packages: write
+    defaults:
+      run:
+        shell: bash
     env:
       USERNAME: ${{ github.repository_owner }}
-      VCPKG_ROOT: ${{ github.workspace }}/.cache/vcpkg
-      VCPKG_EXE: ${{ github.workspace }}/.cache/vcpkg/vcpkg
       FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
       # vcpkg's binary cache is a GitHub Packages NuGet feed so heavy libraries
       # such as FFmpeg do not rebuild from source on every run.
       VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite"
-      # mingw-dynamic for the target libs; host tools (build-time) use native Linux.
-      VCPKG_DEFAULT_TRIPLET: x64-mingw-dynamic
-      VCPKG_DEFAULT_HOST_TRIPLET: x64-linux
+      # Release-only triplet
+      VCPKG_TRIPLET: x64-windows-release
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
-        # mingw-w64 toolchain (target) + native g++ (vcpkg builds host-triplet
-        # x64-linux build tools when cross-compiling) + vcpkg's source-build toolchain
-        # (nasm/meson/ninja/etc. for FFmpeg's dav1d and codec deps). vcpkg's
-        # NuGet binary cache uses nuget.exe, which needs Mono on Linux runners.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install patched aqtinstall
+        run: python -m pip install --upgrade --force-reinstall --no-cache-dir git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
+      - name: Install prebuilt Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          setup-python: false
+          aqtsource: git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          dir: ${{ runner.temp }}/qt
+          # Qt Declarative/QML/Quick is part of the base desktop package; only
+          # install add-on modules here.
+          modules: qtmultimedia
+      - name: Set up MSVC environment
+        # Locate the preinstalled VS toolset with vswhere and export its vcvars64
+        # environment so the Ninja single-config build picks up cl.exe — matching
+        # the CMake presets used elsewhere, with no third-party setup action.
+        shell: pwsh
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            git \
-            ninja-build \
-            make \
-            g++ \
-            mingw-w64 \
-            curl \
-            tar \
-            zip \
-            unzip \
-            p7zip-full \
-            ca-certificates \
-            pkg-config \
-            libicu-dev \
-            nasm \
-            meson \
-            python3 \
-            bison \
-            flex \
-            autoconf \
-            automake \
-            libtool-bin \
-            glslang-tools \
-            mono-complete
-          curl -fL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh" \
-            -o /tmp/cmake-install.sh
-          chmod +x /tmp/cmake-install.sh
-          /tmp/cmake-install.sh --skip-license --prefix=/usr/local
-      - name: Bootstrap vcpkg
-        # vcpkg, pinned to the manifest's builtin-baseline for reproducible deps.
-        run: |
-          if [ ! -d "$VCPKG_ROOT/.git" ]; then
-            git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
-          fi
-          git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_BASELINE"
-          git -C "$VCPKG_ROOT" checkout "$VCPKG_BASELINE"
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          cmd /c "`"$vsPath\VC\Auxiliary\Build\vcvars64.bat`" && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+      - name: Pin vcpkg baseline
+        # The runner ships a prebuilt vcpkg; fetch the manifest's pinned baseline
+        # commit so builtin-baseline resolves to reproducible library versions.
+        run: git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin "$VCPKG_BASELINE"
       - name: Configure vcpkg binary cache
         env:
           VCPKG_NUGET_TOKEN: ${{ secrets.VCPKG_PAT_TOKEN }}
         run: |
-          nuget="$("$VCPKG_EXE" fetch nuget | tail -n 1)"
-          mono "$nuget" sources add \
+          # nuget.exe runs natively on Windows — no Mono shim needed.
+          nuget="$("$VCPKG_INSTALLATION_ROOT/vcpkg.exe" fetch nuget | tail -n 1)"
+          "$nuget" sources add \
             -Source "$FEED_URL" \
             -StorePasswordInClearText \
             -Name "$USERNAME" \
             -UserName "$USERNAME" \
             -Password "$VCPKG_NUGET_TOKEN"
-          mono "$nuget" setapikey "$VCPKG_NUGET_TOKEN" \
+          "$nuget" setapikey "$VCPKG_NUGET_TOKEN" \
             -Source "$FEED_URL"
       - name: Configure
         run: |
@@ -142,35 +139,41 @@ jobs:
             VERSION="0.0.0"
             VERSION_DISPLAY="git-$(echo "$GITHUB_SHA" | cut -c1-8)"
           fi
-          # Manifest mode: configuring installs ffmpeg + libass (vcpkg.json) for the
-          # target triplet before the host build proceeds.
+          # Manifest mode installs FFmpeg + libass (vcpkg.json) for the
+          # release-only triplet before the host build proceeds. Qt is resolved
+          # from the prebuilt MSVC package installed above.
           cmake -S . -B "$BUILD_DIR" -G Ninja \
-            -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic \
-            -DVCPKG_HOST_TRIPLET=x64-linux \
-            -DVCPKG_APPLOCAL_DEPS=OFF \
-            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
-            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DVCPKG_HOST_TRIPLET="$VCPKG_TRIPLET" \
+            -DQt6_DIR="$Qt6_DIR" \
+            -DCMAKE_C_COMPILER=cl \
+            -DCMAKE_CXX_COMPILER=cl \
             -DCMAKE_BUILD_TYPE=Release \
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
       - name: Build
+        run: cmake --build "$BUILD_DIR" --parallel
+      - name: Package
         run: |
-          cmake --build "$BUILD_DIR" --parallel
-          # vcpkg's app-local DLL deployment is MSVC-only, so stage the mingw-dynamic
-          # runtime DLLs (SDL3.dll, avcodec-*.dll, ass-*.dll + transitive deps) next to the exe.
-          cp "$BUILD_DIR"/vcpkg_installed/x64-mingw-dynamic/bin/*.dll "$BUILD_DIR"/
-          # The vcpkg-built DLLs (x64-mingw-dynamic) dynamically link the MinGW toolchain
-          # runtimes (libgcc_s_seh-1, libstdc++-6, libwinpthread-1). These aren't in
-          # vcpkg's bin dir, so locate them via the compiler and stage them too.
-          GCC_LIBDIR=$(dirname "$(x86_64-w64-mingw32-gcc-posix -print-file-name=libgcc_s_seh-1.dll)")
-          cp "$GCC_LIBDIR/libgcc_s_seh-1.dll" "$BUILD_DIR/"
-          [ -f "$GCC_LIBDIR/libstdc++-6.dll" ] && cp "$GCC_LIBDIR/libstdc++-6.dll" "$BUILD_DIR/"
-          WINPTHREAD=$(x86_64-w64-mingw32-gcc-posix -print-file-name=libwinpthread-1.dll)
-          [ -f "$WINPTHREAD" ] && cp "$WINPTHREAD" "$BUILD_DIR/"
-          (cd "$BUILD_DIR" && 7z a FrameLift-win64.zip framelift.exe *.dll packages)
+          WINDEPLOYQT="$(command -v windeployqt.exe)"
+          STAGE="$RUNNER_TEMP/stage"
+          mkdir -p "$STAGE/plugins"
+          cp "$BUILD_DIR/framelift.exe" "$STAGE/"
+          cp "$BUILD_DIR"/plugins/*.dll "$STAGE/plugins/"
+          # Stage the Qt runtime: platform/imageformat/tls plugins plus the QML
+          # modules. The plugins' Qt Quick surfaces are compiled into resources, so
+          # point --qmldir at the source tree for windeployqt's import scan.
+          "$WINDEPLOYQT" --release --compiler-runtime --qmldir "$PWD" --dir "$STAGE" "$STAGE/framelift.exe"
+          for p in "$STAGE"/plugins/*.dll; do
+            "$WINDEPLOYQT" --release --no-compiler-runtime --qmldir "$PWD" --dir "$STAGE" "$p"
+          done
+          # FFmpeg/libass runtime DLLs (+ transitive deps) from vcpkg. Copy
+          # after windeployqt so FrameLift's FFmpeg wins any filename overlap
+          # with Qt Multimedia's backend runtime.
+          cp "$BUILD_DIR"/vcpkg_installed/$VCPKG_TRIPLET/bin/*.dll "$STAGE/"
+          (cd "$STAGE" && 7z a "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-win64.zip" .)
           # The SDK is packaged by the dedicated `build-sdk` job.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -179,11 +182,11 @@ jobs:
           path: ${{ env.BUILD_DIR }}/FrameLift-win64.zip
 
   # ── Native Linux build ──────────────────────────────────────────────────────
-  # Builds the host + cross-platform plugins natively against system SDL3/FFmpeg.
+  # Builds the host + cross-platform plugins natively against system Qt/FFmpeg.
   # Windows-only plugins are disabled by module platform metadata.
   # Produces FrameLift-linux-x64.tar.gz.
   #
-  # ubuntu:25.04 because libsdl3-dev first ships there (24.04 LTS has only SDL2).
+  # ubuntu:25.04 carries the Qt 6 development stack used by the native build.
   build-linux:
     needs: test
     runs-on: ubuntu-latest
@@ -205,12 +208,15 @@ jobs:
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DFRAMELIFT_BUILD_TESTS=OFF \
+            -DFRAMELIFT_BUILD_LAUNCH_TESTS=ON \
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
+          cmake --build "$BUILD_DIR" --target all_qmllint
           cmake --build "$BUILD_DIR" --parallel
           test -f "$BUILD_DIR/framelift"
-          test -f "$BUILD_DIR/packages/framelift.playlist.core.so"
-          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz framelift packages)
+          test -f "$BUILD_DIR/plugins/framelift.playlist.so"
+          ctest --test-dir "$BUILD_DIR" -L launch --output-on-failure
+          (cd "$BUILD_DIR" && tar -czf FrameLift-linux-x64.tar.gz framelift plugins)
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

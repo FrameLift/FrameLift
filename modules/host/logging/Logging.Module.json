@@ -1,13 +1,13 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.logging",
-  "name": "Host Logging",
-  "description": "Host logging backend (spdlog) and the plugin log-sink bridge.",
+  "id": "framelift.logging",
+  "name": "Logging",
+  "description": "Host logging sink and in-memory ring buffer backing Log::* and the LogViewer plugin.",
   "enabled": true,
   "required": true,
   "provides": {
     "features": [
-      "services.logging"
+      "logging.core"
     ]
   },
   "requires": {

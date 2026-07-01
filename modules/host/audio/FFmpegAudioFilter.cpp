@@ -97,7 +97,6 @@ bool FFmpegAudioFilter::Configure(int rate, const AVChannelLayout& layout, AVSam
         return false;
     }
 
-    Log::Info("FFmpegAudioFilter: configured graph [{}]", graphDesc);
     return true;
 }
 

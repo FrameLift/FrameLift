@@ -1,0 +1,25 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.window_qt",
+  "name": "Qt Window",
+  "description": "Qt6 (Qt Quick) window backend, app event translation, and scene-graph video integration.",
+  "enabled": true,
+  "required": true,
+  "provides": {
+    "features": [
+      "window.qt",
+      "events.qt"
+    ]
+  },
+  "requires": {
+    "modules": [
+      "framelift.graphics_core"
+    ],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

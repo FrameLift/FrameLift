@@ -74,7 +74,7 @@ const std::unordered_map<std::string, Key>& KeyMap()
         {"z", Keys::Z},
         {"space", Keys::Space},
         {"return", Keys::Return},
-        {"enter", Keys::Return},
+        {"enter", Keys::Enter},
         {"tab", Keys::Tab},
         {"backspace", Keys::Backspace},
         {"escape", Keys::Escape},
@@ -188,6 +188,25 @@ std::optional<KeyBind> ParseOne(std::string_view raw)
         return {};
     }
     return KeyBind{key, mods};
+}
+
+// Keys whose held auto-repeat should re-fire their bound action. Limited to the
+// navigation/arrow keys: repeating a seek or step is natural, but repeating a toggle
+// (play/pause, fullscreen, mute) bound to a held letter key is not.
+bool IsRepeatableKey(Key key)
+{
+    switch (key)
+    {
+    case Keys::Left:
+    case Keys::Right:
+    case Keys::Up:
+    case Keys::Down:
+    case Keys::PageUp:
+    case Keys::PageDown:
+        return true;
+    default:
+        return false;
+    }
 }
 
 std::vector<KeyBind> ParseKeyBindList(std::string_view s)
@@ -443,6 +462,12 @@ bool HotkeysImpl::Handle(const AppEvent& e) const noexcept
         return false;
     }
     const AppEvent::KeyPayload& kp = e.AsKey();
+    // An OS auto-repeat only re-fires for the navigation keys; every other binding is
+    // once-per-press so held toggles don't chatter.
+    if (kp.repeat && !IsRepeatableKey(kp.key))
+    {
+        return false;
+    }
     for (const auto& b : bindings_)
     {
         if (b.key != kp.key)

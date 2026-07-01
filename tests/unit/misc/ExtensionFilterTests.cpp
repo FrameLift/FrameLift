@@ -1,44 +1,60 @@
 #include "ExtensionFilter.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(ExtensionFilterTest, MatchesListedExtension)
+#include <QtTest/QtTest>
+
+class ExtensionFilterTest final : public QObject
 {
-    EXPECT_TRUE(ExtensionInList("video.mp4", "mp4;mkv;webm"));
-    EXPECT_TRUE(ExtensionInList("clip.mkv", "mp4;mkv;webm"));   // middle
-    EXPECT_TRUE(ExtensionInList("movie.webm", "mp4;mkv;webm")); // last
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void MatchesListedExtension()
+    {
+        QVERIFY(ExtensionInList("video.mp4", "mp4;mkv;webm"));
+        QVERIFY(ExtensionInList("clip.mkv", "mp4;mkv;webm"));   // middle
+        QVERIFY(ExtensionInList("movie.webm", "mp4;mkv;webm")); // last
+    }
+
+    void IsCaseInsensitive()
+    {
+        QVERIFY(ExtensionInList("VIDEO.MP4", "mp4;mkv"));
+        QVERIFY(ExtensionInList("Photo.PnG", "png;jpg"));
+    }
+
+    void RejectsUnlistedExtension()
+    {
+        QVERIFY(!(ExtensionInList("image.png", "mp4;mkv")));
+        QVERIFY(!(ExtensionInList("archive.zip", "mp4;mkv;webm")));
+    }
+
+    void HandlesPathsWithDirectories()
+    {
+        QVERIFY(ExtensionInList("/home/user/My Videos/clip.mp4", "mp4"));
+    }
+
+    void NoExtensionDoesNotMatch()
+    {
+        QVERIFY(!(ExtensionInList("README", "mp4;mkv")));
+    }
+
+    void EmptyListMatchesNothing()
+    {
+        QVERIFY(!(ExtensionInList("video.mp4", "")));
+    }
+
+    void DoesNotPartialMatch()
+    {
+        // "mp4" must not match "mp" or vice versa.
+        QVERIFY(!(ExtensionInList("video.mp", "mp4")));
+        QVERIFY(!(ExtensionInList("video.mp4", "mp")));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<ExtensionFilterTest> kRegisterExtensionFilterTest{"ExtensionFilterTest"};
 }
 
-TEST(ExtensionFilterTest, IsCaseInsensitive)
-{
-    EXPECT_TRUE(ExtensionInList("VIDEO.MP4", "mp4;mkv"));
-    EXPECT_TRUE(ExtensionInList("Photo.PnG", "png;jpg"));
-}
-
-TEST(ExtensionFilterTest, RejectsUnlistedExtension)
-{
-    EXPECT_FALSE(ExtensionInList("image.png", "mp4;mkv"));
-    EXPECT_FALSE(ExtensionInList("archive.zip", "mp4;mkv;webm"));
-}
-
-TEST(ExtensionFilterTest, HandlesPathsWithDirectories)
-{
-    EXPECT_TRUE(ExtensionInList("/home/user/My Videos/clip.mp4", "mp4"));
-}
-
-TEST(ExtensionFilterTest, NoExtensionDoesNotMatch)
-{
-    EXPECT_FALSE(ExtensionInList("README", "mp4;mkv"));
-}
-
-TEST(ExtensionFilterTest, EmptyListMatchesNothing)
-{
-    EXPECT_FALSE(ExtensionInList("video.mp4", ""));
-}
-
-TEST(ExtensionFilterTest, DoesNotPartialMatch)
-{
-    // "mp4" must not match "mp" or vice versa.
-    EXPECT_FALSE(ExtensionInList("video.mp", "mp4"));
-    EXPECT_FALSE(ExtensionInList("video.mp4", "mp"));
-}
+#include "ExtensionFilterTests.moc"

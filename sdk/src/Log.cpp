@@ -1,6 +1,9 @@
 #include <framelift/Log.h>
 
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -16,6 +19,80 @@ Log::SinkFn g_sink = nullptr;
 // host); mutex-guarded because a timer may be started and ended on different threads.
 std::mutex g_perfMutex;
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_perfTimers;
+
+// Runtime gating, read once per translation unit from the environment. Host and every
+// plugin live in one process, so they all observe the same FL_LOG_LEVEL / FL_LOG_PERF
+// and gate consistently — no need to push a level across the plugin ABI.
+struct LogConfig
+{
+    Log::Level minLevel = Log::Level::Info; // Debug hidden by default
+    bool perf = false;                      // Perf logs/timers off by default
+};
+
+bool EnvTruthy(const char* v)
+{
+    if (!v)
+    {
+        return false;
+    }
+    return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 || std::strcmp(v, "on") == 0 ||
+           std::strcmp(v, "yes") == 0;
+}
+
+LogConfig ParseEnv()
+{
+    LogConfig cfg;
+
+    if (const char* lvl = std::getenv("FL_LOG_LEVEL"))
+    {
+        std::string s(lvl);
+        for (char& c : s)
+        {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (s == "debug")
+        {
+            cfg.minLevel = Log::Level::Debug;
+        }
+        else if (s == "info")
+        {
+            cfg.minLevel = Log::Level::Info;
+        }
+        else if (s == "warn" || s == "warning")
+        {
+            cfg.minLevel = Log::Level::Warn;
+        }
+        else if (s == "error")
+        {
+            cfg.minLevel = Log::Level::Error;
+        }
+        // Unknown/empty ⇒ leave the Info default.
+    }
+
+    cfg.perf = EnvTruthy(std::getenv("FL_LOG_PERF"));
+    return cfg;
+}
+
+const LogConfig& Config()
+{
+    static const LogConfig cfg = ParseEnv(); // thread-safe init, computed once
+    return cfg;
+}
+} // namespace
+
+bool Log::IsEnabled(const Level level)
+{
+    const LogConfig& cfg = Config();
+    if (level == Level::Perf)
+    {
+        return cfg.perf; // Perf is its own switch, not part of the severity ladder
+    }
+    return static_cast<int>(level) >= static_cast<int>(cfg.minLevel);
+}
+
+bool Log::PerfActive()
+{
+    return Config().perf;
 }
 
 void Log::SetSink(const SinkFn fn)
@@ -33,12 +110,12 @@ void Log::Emit(const Level level, const std::string& msg)
 
 void Log::Perf(const char* name, const double ms)
 {
-    Info("[perf] {} {:.1f} ms", name ? name : "", ms);
+    Emit(Level::Perf, std::format("{} {:.1f} ms", name ? name : "", ms));
 }
 
 void Log::PerfStart(const char* name)
 {
-    if (!name)
+    if (!name || !PerfActive())
     {
         return;
     }
@@ -49,6 +126,10 @@ void Log::PerfStart(const char* name)
 
 double Log::PerfEnd(const char* name)
 {
+    if (!PerfActive())
+    {
+        return -1.0;
+    }
     const auto now = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point start;
     {

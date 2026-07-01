@@ -2,14 +2,17 @@
 #include "JsonServiceImpl.h"
 #include "TempIni.h"
 
+#include "QtTestRunner.h"
 #include <chrono>
-#include <gtest/gtest.h>
+
+#include <QtTest/QtTest>
 #include <thread>
 
 namespace
 {
-// Real nlohmann-backed host JSON service shared by the persistence tests. Stateless,
-// so a single instance is safe across the suite (including detached writer threads).
+// Real QJson-backed host JSON service shared by the persistence tests. The service
+// object is stateless, so a single instance is safe across the suite (including
+// detached writer threads).
 JsonServiceImpl g_json;
 
 std::string MostRecent(const History& h)
@@ -45,104 +48,118 @@ std::string WaitForPersistedMostRecent(const std::string& path, const std::strin
 }
 } // namespace
 
-TEST(HistoryTest, EmptyHasNoMostRecent)
+class HistoryTest final : public QObject
 {
-    const History h;
-    EXPECT_EQ(h.GetMostRecent(nullptr, 0), 0);
-    EXPECT_EQ(MostRecent(h), "");
-}
+    Q_OBJECT
 
-TEST(HistoryTest, AddEntrySetsMostRecent)
-{
-    History h;
-    h.AddEntry("/movies/a.mp4");
-    EXPECT_EQ(MostRecent(h), "/movies/a.mp4");
-    h.AddEntry("/movies/b.mkv");
-    EXPECT_EQ(MostRecent(h), "/movies/b.mkv");
-}
+private Q_SLOTS:
 
-TEST(HistoryTest, ReAddingDeduplicatesAndMovesToFront)
-{
-    History h;
-    h.AddEntry("/a.mp4");
-    h.AddEntry("/b.mp4");
-    h.AddEntry("/a.mp4"); // re-add → front, no duplicate
-    EXPECT_EQ(MostRecent(h), "/a.mp4");
-}
-
-TEST(HistoryTest, ResumePositionRoundTrips)
-{
-    History h;
-    h.AddEntry("/a.mp4");
-    h.UpdateResumePos("/a.mp4", 42.5);
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/a.mp4"), 42.5);
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/missing.mp4"), 0.0); // unknown → 0
-}
-
-TEST(HistoryTest, ResumePositionSurvivesReAdd)
-{
-    History h;
-    h.AddEntry("/a.mp4");
-    h.UpdateResumePos("/a.mp4", 12.0);
-    h.AddEntry("/b.mp4");
-    h.AddEntry("/a.mp4"); // dedup must preserve the saved resume position
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/a.mp4"), 12.0);
-}
-
-TEST(HistoryTest, CapsAtMaxEntries)
-{
-    History h; // default maxEntries_ == 200
-    h.AddEntry("/old.mp4");
-    h.UpdateResumePos("/old.mp4", 99.0);
-
-    for (int i = 0; i < 199; ++i) // total 200 — still within cap
+    void EmptyHasNoMostRecent()
     {
-        h.AddEntry(("/f" + std::to_string(i) + ".mp4").c_str());
-    }
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/old.mp4"), 99.0); // still present
-
-    h.AddEntry("/overflow.mp4");                       // total 201 → oldest ("/old.mp4") evicted
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/old.mp4"), 0.0); // gone
-}
-
-TEST(HistoryTest, LoadsEntriesFromJson)
-{
-    const TempFile f(R"([{"p":"/x/y.mp4","r":42.5,"d":"2024-01-01 00:00:00"}])");
-
-    History h;
-    h.SetJsonService(&g_json);
-    h.SetStoragePath(f.str()); // triggers Load()
-
-    EXPECT_EQ(MostRecent(h), "/x/y.mp4");
-    EXPECT_DOUBLE_EQ(h.GetResumePos("/x/y.mp4"), 42.5);
-}
-
-TEST(HistoryTest, SaveRoundTripsToDisk)
-{
-    const TempFile f; // owns a unique path; not yet written
-
-    History h;
-    h.SetJsonService(&g_json);
-    h.SetStoragePath(f.str()); // empty load (file absent)
-    h.AddEntry("/a.mp4");      // triggers Save() on a detached thread
-
-    EXPECT_EQ(WaitForPersistedMostRecent(f.str(), "/a.mp4"), "/a.mp4");
-}
-
-// Several rapid saves race on the detached writer thread; atomic temp-file +
-// rename must guarantee the destination is always a complete, parseable file
-// (never truncated/empty), so a reload recovers the latest entry intact.
-TEST(HistoryTest, ConcurrentSavesNeverCorruptFile)
-{
-    const TempFile f;
-
-    History h;
-    h.SetJsonService(&g_json);
-    h.SetStoragePath(f.str());
-    for (int i = 0; i < 20; ++i)
-    {
-        h.AddEntry(("/f" + std::to_string(i) + ".mp4").c_str());
+        const History h;
+        QVERIFY((h.GetMostRecent(nullptr, 0)) == (0));
+        QVERIFY((MostRecent(h)) == (""));
     }
 
-    EXPECT_EQ(WaitForPersistedMostRecent(f.str(), "/f19.mp4"), "/f19.mp4");
+    void AddEntrySetsMostRecent()
+    {
+        History h;
+        h.AddEntry("/movies/a.mp4");
+        QVERIFY((MostRecent(h)) == ("/movies/a.mp4"));
+        h.AddEntry("/movies/b.mkv");
+        QVERIFY((MostRecent(h)) == ("/movies/b.mkv"));
+    }
+
+    void ReAddingDeduplicatesAndMovesToFront()
+    {
+        History h;
+        h.AddEntry("/a.mp4");
+        h.AddEntry("/b.mp4");
+        h.AddEntry("/a.mp4"); // re-add → front, no duplicate
+        QVERIFY((MostRecent(h)) == ("/a.mp4"));
+    }
+
+    void ResumePositionRoundTrips()
+    {
+        History h;
+        h.AddEntry("/a.mp4");
+        h.UpdateResumePos("/a.mp4", 42.5);
+        QCOMPARE(h.GetResumePos("/a.mp4"), 42.5);
+        QCOMPARE(h.GetResumePos("/missing.mp4"), 0.0); // unknown → 0
+    }
+
+    void ResumePositionSurvivesReAdd()
+    {
+        History h;
+        h.AddEntry("/a.mp4");
+        h.UpdateResumePos("/a.mp4", 12.0);
+        h.AddEntry("/b.mp4");
+        h.AddEntry("/a.mp4"); // dedup must preserve the saved resume position
+        QCOMPARE(h.GetResumePos("/a.mp4"), 12.0);
+    }
+
+    void CapsAtMaxEntries()
+    {
+        History h; // default maxEntries_ == 200
+        h.AddEntry("/old.mp4");
+        h.UpdateResumePos("/old.mp4", 99.0);
+
+        for (int i = 0; i < 199; ++i) // total 200 — still within cap
+        {
+            h.AddEntry(("/f" + std::to_string(i) + ".mp4").c_str());
+        }
+        QCOMPARE(h.GetResumePos("/old.mp4"), 99.0); // still present
+
+        h.AddEntry("/overflow.mp4");               // total 201 → oldest ("/old.mp4") evicted
+        QCOMPARE(h.GetResumePos("/old.mp4"), 0.0); // gone
+    }
+
+    void LoadsEntriesFromJson()
+    {
+        const TempFile f(R"([{"p":"/x/y.mp4","r":42.5,"d":"2024-01-01 00:00:00"}])");
+
+        History h;
+        h.SetJsonService(&g_json);
+        h.SetStoragePath(f.str()); // triggers Load()
+
+        QVERIFY((MostRecent(h)) == ("/x/y.mp4"));
+        QCOMPARE(h.GetResumePos("/x/y.mp4"), 42.5);
+    }
+
+    void SaveRoundTripsToDisk()
+    {
+        const TempFile f; // owns a unique path; not yet written
+
+        History h;
+        h.SetJsonService(&g_json);
+        h.SetStoragePath(f.str()); // empty load (file absent)
+        h.AddEntry("/a.mp4");      // triggers Save() on a detached thread
+
+        QVERIFY((WaitForPersistedMostRecent(f.str(), "/a.mp4")) == ("/a.mp4"));
+    }
+
+    // Several rapid saves race on the detached writer thread; atomic temp-file +
+    // rename must guarantee the destination is always a complete, parseable file
+    // (never truncated/empty), so a reload recovers the latest entry intact.
+    void ConcurrentSavesNeverCorruptFile()
+    {
+        const TempFile f;
+
+        History h;
+        h.SetJsonService(&g_json);
+        h.SetStoragePath(f.str());
+        for (int i = 0; i < 20; ++i)
+        {
+            h.AddEntry(("/f" + std::to_string(i) + ".mp4").c_str());
+        }
+
+        QVERIFY((WaitForPersistedMostRecent(f.str(), "/f19.mp4")) == ("/f19.mp4"));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<HistoryTest> kRegisterHistoryTest{"HistoryTest"};
 }
+
+#include "HistoryTests.moc"

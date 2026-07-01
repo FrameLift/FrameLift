@@ -1,7 +1,5 @@
 #pragma once
 
-#include <volk.h>
-
 #include <array>
 #include <cstdint>
 #include <unordered_map>
@@ -21,7 +19,7 @@ typedef struct VmaAllocation_T* VmaAllocation;
 // A single persistent image per stream (video + overlay), like GlVideoRenderer, so the
 // last uploaded frame stays on screen across presents (paused / low-fps content). The
 // upload's blocking transfer (Phase 2 parity; zero-copy in Phase 3) barriers against
-// prior fragment-shader reads on the graphics queue, so overwriting is hazard-free.
+    // prior fragment-shader reads on the graphics queue, so overwriting is hazard-free.
 class VulkanVideoRenderer final : public IVideoRenderer
 {
 public:
@@ -66,6 +64,7 @@ private:
     // decoded VkFormat / colorspace / range; cheap no-op when unchanged.
     bool EnsureYcbcr(int vkFormat, int colorSpace, int colorRange);
     void DestroyYcbcr();
+
     // Get (or create + cache, keyed by VkImage handle) the view + descriptor set for one
     // pooled decode image. Views/sets live until the format changes or shutdown.
     struct FrameTex
@@ -73,14 +72,14 @@ private:
         VkImageView view = VK_NULL_HANDLE;
         VkDescriptorSet set = VK_NULL_HANDLE;
     };
+
     const FrameTex* EnsureFrameTexture(uint64_t image);
     // Record the frame image's transition (decode→sample layout, queue-ownership acquire)
     // into its own command buffer and register it with the backend to run, in the single
     // per-frame submit, just before the main render CB. Must run OUTSIDE the render pass,
-    // hence its own command buffer (Draw runs inside the pass). NOT submitted separately —
-    // a standalone submit here would stall the queue ahead of ImGui's multi-viewport
-    // submits and freeze the app (#26).
-    void RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
+    // hence its own command buffer (Draw runs inside the pass). NOT submitted separately:
+    // a standalone submit here would stall the queue ahead of Qt Quick's scene-graph work.
+    VkCommandBuffer RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
     void DrawVulkanFrame();
 
     VulkanGraphicsBackend* backend_ = nullptr;

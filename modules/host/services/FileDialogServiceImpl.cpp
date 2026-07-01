@@ -1,21 +1,19 @@
 #include "FileDialogServiceImpl.h"
-#include "CoreSettings.h"
-#include "Settings.h"
+#include "CoreSettings.h" // FilesSettings (video/image extension lists)
+#include "Settings.h"     // host aggregate settings
 #include <framelift/platform/IAppWindow.h>
 
-#include <SDL3/SDL.h>
+#include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtWidgets/QFileDialog>
+
 #include <memory>
 #include <string>
-#include <vector>
 
-// FileDialogServiceImpl.cpp is intentionally SDL-aware: the platform picker API
-// (SDL_ShowOpenFileDialog) is inherently backend-specific. All other code uses
-// IAppWindow / the IFileDialog service.
-
-// ── Internal payload ──────────────────────────────────────────────────────────
-// Allocated per OpenFile call, ownership transferred to SDL, reclaimed in
-// HandleEvent. Carries the window + event type so the (free) SDL callback can
-// route the result back onto the main thread.
+// Qt native open-file picker. The modal QFileDialog runs synchronously on the GUI
+// thread, then the chosen path is posted back through the queued custom-event
+// round-trip so the caller's callback fires on a later turn — never reentrantly
+// inside OpenFile, matching the host/plugin contract.
 
 namespace
 {
@@ -23,22 +21,23 @@ struct Payload
 {
     void (*cb)(const char* path, bool ok, void* ud) = nullptr;
     void* ud = nullptr;
-    IEventPump* events = nullptr;
-    uint32_t eventType = 0;
     std::string path;
-    std::vector<SDL_DialogFileFilter> sdlFilters; // kept alive until the callback fires
 };
 
-// ── SDL async callback (may be called from any thread) ────────────────────────
-
-void SDLCALL SdlCallback(void* userdata, const char* const* fileList, int /*filter*/)
+// Build a Qt name-filter clause ("Video files (*.mp4 *.mkv ...)") from a host
+// semicolon-separated extension list ("mp4;mkv;..."). Empty input ⇒ empty string.
+QString MakeFilter(const char* label, const std::string& extensions)
 {
-    auto* p = static_cast<Payload*>(userdata);
-    if (fileList && fileList[0])
+    QStringList globs;
+    for (const QString& ext : QString::fromStdString(extensions).split(';', Qt::SkipEmptyParts))
     {
-        p->path = fileList[0];
+        globs << "*." + ext.trimmed();
     }
-    p->events->PushCustomEvent(p->eventType, p);
+    if (globs.isEmpty())
+    {
+        return {};
+    }
+    return QString("%1 (%2)").arg(QLatin1String(label), globs.join(' '));
 }
 } // namespace
 
@@ -53,24 +52,34 @@ void FileDialogServiceImpl::Init(IAppWindow* appWindow, IEventPump* events) noex
 
 void FileDialogServiceImpl::OpenFile(void (*cb)(const char* path, bool ok, void* ud), void* ud) noexcept
 {
-    if (!appWindow_)
+    if (!appWindow_ || !events_)
     {
         return;
     }
 
-    auto* p = new Payload{cb, ud, events_, eventType_, {}, {}};
+    QStringList filters;
     if (settings_)
     {
         const FilesSettings& files = settings_->Get<FilesSettings>();
-        p->sdlFilters.push_back({"Video files", files.videoExtensions.c_str()});
-        p->sdlFilters.push_back({"Image files", files.imageExtensions.c_str()});
+        if (const QString f = MakeFilter("Video files", files.videoExtensions); !f.isEmpty())
+        {
+            filters << f;
+        }
+        if (const QString f = MakeFilter("Image files", files.imageExtensions); !f.isEmpty())
+        {
+            filters << f;
+        }
     }
+    filters << "All files (*)";
 
-    SDL_ShowOpenFileDialog(
-        SdlCallback, p, static_cast<SDL_Window*>(appWindow_->GetNativeHandle()),
-        p->sdlFilters.empty() ? nullptr : p->sdlFilters.data(), static_cast<int>(p->sdlFilters.size()), nullptr, false
-    );
-    // Ownership transferred to the SDL callback; reclaimed in HandleEvent().
+    // Modal native picker — blocks on a nested event loop until the user chooses
+    // or cancels. Cancel returns an empty string ⇒ ok=false downstream.
+    const QString chosen = QFileDialog::getOpenFileName(
+        nullptr, "Open File", QString(), filters.join(";;"));
+
+    // Defer delivery through the event loop so the callback never fires reentrantly.
+    auto* p = new Payload{cb, ud, chosen.toStdString()};
+    events_->PushCustomEvent(eventType_, p);
 }
 
 bool FileDialogServiceImpl::HandleEvent(const AppEvent& e) noexcept

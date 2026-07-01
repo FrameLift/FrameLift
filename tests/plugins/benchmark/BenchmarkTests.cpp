@@ -1,45 +1,60 @@
 #include "Benchmark.h"
 #include "SysStats.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(BenchmarkTest, TogglesVisibility)
+#include <QtTest/QtTest>
+
+class BenchmarkTest final : public QObject
 {
-    Benchmark b;
-    EXPECT_FALSE(b.IsOpen()); // closed by default
-    b.Toggle();
-    EXPECT_TRUE(b.IsOpen());
-    b.Toggle();
-    EXPECT_FALSE(b.IsOpen());
-}
+    Q_OBJECT
 
-TEST(BenchmarkTest, MediaEventsDoNotCrashWhileClosed)
-{
-    Benchmark b;
-    MediaEvent e;
-    e.type = MediaEventType::PropertyChange;
-    e.property.prop = PlayerProperty::IdleActive;
-    e.property.type = PropertyType::Flag;
-    e.property.value.flag = 1;
-    b.OnMediaEvent(e); // must be safe with no player/context
-    SUCCEED();
-}
+private Q_SLOTS:
 
-TEST(BenchmarkTest, SamplerReportsNormalizedValues)
-{
-    SysSampler sampler;
-    const SysSample first = sampler.Sample(); // primes the rate counters
-    const SysSample second = sampler.Sample();
-
-    // CPU is normalized across cores and clamped; memory is non-negative.
-    EXPECT_GE(second.cpuPercent, 0.0);
-    EXPECT_LE(second.cpuPercent, 100.0);
-    EXPECT_GE(first.memBytes, 0u);
-
-    // GPU is best-effort: when reported it must be a sane percentage.
-    if (second.gpuValid)
+    void TogglesVisibility()
     {
-        EXPECT_GE(second.gpuPercent, 0.0);
-        EXPECT_LE(second.gpuPercent, 100.0);
+        Benchmark b;
+        QVERIFY(!(b.IsOpen())); // closed by default
+        b.Toggle();
+        QVERIFY(b.IsOpen());
+        b.Toggle();
+        QVERIFY(!(b.IsOpen()));
     }
+
+    void MediaEventsDoNotCrashWhileClosed()
+    {
+        Benchmark b;
+        MediaEvent e;
+        e.type = MediaEventType::PropertyChange;
+        e.property.prop = PlayerProperty::IdleActive;
+        e.property.type = PropertyType::Flag;
+        e.property.value.flag = 1;
+        b.OnMediaEvent(e); // must be safe with no player/context
+    }
+
+    void SamplerReportsNormalizedValues()
+    {
+        SysSampler sampler;
+        const SysSample first = sampler.Sample(); // primes the rate counters
+        const SysSample second = sampler.Sample();
+
+        // CPU is normalized across cores and clamped; memory is non-negative.
+        QVERIFY((second.cpuPercent) >= (0.0));
+        QVERIFY((second.cpuPercent) <= (100.0));
+        QVERIFY((first.memBytes) >= (0u));
+
+        // GPU is best-effort: when reported it must be a sane percentage.
+        if (second.gpuValid)
+        {
+            QVERIFY((second.gpuPercent) >= (0.0));
+            QVERIFY((second.gpuPercent) <= (100.0));
+        }
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<BenchmarkTest> kRegisterBenchmarkTest{"BenchmarkTest"};
 }
+
+#include "BenchmarkTests.moc"

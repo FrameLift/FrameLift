@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FrameLift
+GenericName=Video Player
+Comment=Qt video player using FFmpeg and libass
+Exec=framelift %F
+Icon=framelift
+Terminal=false
+Categories=AudioVideo;Player;Video;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mpeg;
+StartupNotify=true
+StartupWMClass=framelift

@@ -1,38 +1,54 @@
-// Unit tests for graphics-backend selection parsing (OpenGL→Vulkan migration, #16).
-// GraphicsApi.h is free of SDL/GL so it builds in the standalone native suite.
+// Unit tests for graphics-backend selection parsing.
+// GraphicsApi.h is free of window-system and GL types so it builds in the standalone native suite.
 
 #include "GraphicsApi.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(GraphicsApiTests, DefaultsToOpenGL)
+#include <QtTest/QtTest>
+
+class GraphicsApiTests final : public QObject
 {
-    EXPECT_EQ(GraphicsApiFromString("gl"), GraphicsApi::OpenGL);
-    EXPECT_EQ(GraphicsApiFromString("opengl"), GraphicsApi::OpenGL);
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void DefaultsToOpenGL()
+    {
+        QVERIFY((GraphicsApiFromString("gl")) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString("opengl")) == (GraphicsApi::OpenGL));
+    }
+
+    void ParsesVulkan()
+    {
+        QVERIFY((GraphicsApiFromString("vulkan")) == (GraphicsApi::Vulkan));
+        QVERIFY((GraphicsApiFromString("vk")) == (GraphicsApi::Vulkan));
+    }
+
+    void IsCaseInsensitive()
+    {
+        QVERIFY((GraphicsApiFromString("Vulkan")) == (GraphicsApi::Vulkan));
+        QVERIFY((GraphicsApiFromString("VULKAN")) == (GraphicsApi::Vulkan));
+        QVERIFY((GraphicsApiFromString("VK")) == (GraphicsApi::Vulkan));
+    }
+
+    void UnknownFallsBackToOpenGLAndEmptyUsesAuto()
+    {
+        QVERIFY((GraphicsApiFromString("")) == (GraphicsApi::Auto));
+        QVERIFY((GraphicsApiFromString("metal")) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString("d3d12")) == (GraphicsApi::OpenGL));
+    }
+
+    void NameRoundTrips()
+    {
+        QVERIFY((GraphicsApiFromString(GraphicsApiName(GraphicsApi::OpenGL))) == (GraphicsApi::OpenGL));
+        QVERIFY((GraphicsApiFromString(GraphicsApiName(GraphicsApi::Vulkan))) == (GraphicsApi::Vulkan));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<GraphicsApiTests> kRegisterGraphicsApiTests{"GraphicsApiTests"};
 }
 
-TEST(GraphicsApiTests, ParsesVulkan)
-{
-    EXPECT_EQ(GraphicsApiFromString("vulkan"), GraphicsApi::Vulkan);
-    EXPECT_EQ(GraphicsApiFromString("vk"), GraphicsApi::Vulkan);
-}
-
-TEST(GraphicsApiTests, IsCaseInsensitive)
-{
-    EXPECT_EQ(GraphicsApiFromString("Vulkan"), GraphicsApi::Vulkan);
-    EXPECT_EQ(GraphicsApiFromString("VULKAN"), GraphicsApi::Vulkan);
-    EXPECT_EQ(GraphicsApiFromString("VK"), GraphicsApi::Vulkan);
-}
-
-TEST(GraphicsApiTests, UnknownAndEmptyFallBackToOpenGL)
-{
-    EXPECT_EQ(GraphicsApiFromString(""), GraphicsApi::OpenGL);
-    EXPECT_EQ(GraphicsApiFromString("metal"), GraphicsApi::OpenGL);
-    EXPECT_EQ(GraphicsApiFromString("d3d12"), GraphicsApi::OpenGL);
-}
-
-TEST(GraphicsApiTests, NameRoundTrips)
-{
-    EXPECT_EQ(GraphicsApiFromString(GraphicsApiName(GraphicsApi::OpenGL)), GraphicsApi::OpenGL);
-    EXPECT_EQ(GraphicsApiFromString(GraphicsApiName(GraphicsApi::Vulkan)), GraphicsApi::Vulkan);
-}
+#include "GraphicsApiTests.moc"

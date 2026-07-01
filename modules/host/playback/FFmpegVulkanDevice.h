@@ -4,11 +4,10 @@
 
 struct AVBufferRef;
 
-// Bridge between the volk-based Vulkan renderer and FFmpeg's Vulkan hwaccel (Phase 3,
-// #18). This is the ONLY place that mixes libav's Vulkan headers with our handles, so
-// it lives in its own TU that never includes volk (the two are mutually exclusive in a
-// single translation unit). Callers pass neutral PODs (VulkanDeviceInfo / VulkanFrameInfo
-// from VulkanDeviceInfo.h); this side reinterprets the raw handles back to Vulkan types.
+// Bridge between the Vulkan renderer and FFmpeg's Vulkan hwaccel (Phase 3, #18).
+// This is the ONLY place that mixes libav's Vulkan headers with our handles. Callers
+// pass neutral PODs (VulkanDeviceInfo / VulkanFrameInfo from VulkanDeviceInfo.h);
+// this side reinterprets the raw handles back to Vulkan types.
 
 // Build an AV_HWDEVICE_TYPE_VULKAN device context that WRAPS the renderer's existing
 // instance/physical-device/device/queues (never lets FFmpeg create its own — the decoded

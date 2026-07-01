@@ -42,11 +42,11 @@ public:
     // addresses, so a SettingsRegistry already bound to this instance stays valid.
     void ResetToDefaults();
 
-    // Read settings from an ini-style "section.name=value" file at path.
-    // Missing keys are left at their defaults; unknown keys are silently ignored.
+    // Read settings from the INI file at path via QSettings. Missing keys are left
+    // at their defaults; unknown keys are silently ignored.
     void Load(const std::string& path);
-    // Write all settings to path synchronously, merging around sections and
-    // keys owned by plugins so their data is preserved.
+    // Write all settings to path via QSettings (IniFormat). QSettings merges around
+    // sections and keys owned by plugins so their data is preserved.
     void Save(const std::string& path);
 
 private:

@@ -125,7 +125,7 @@ bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec,
     dec->hw_device_ctx = av_buffer_ref(device_);
     dec->opaque = this;
     dec->get_format = GetFormatCb;
-    Log::Info("FFmpegHwDecode: hardware decode via {}", deviceName_);
+    Log::Debug("FFmpegHwDecode: hardware decode via {}", deviceName_);
     return true;
 }
 
@@ -167,7 +167,7 @@ bool FFmpegHwDecode::TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, 
     dec->hw_device_ctx = av_buffer_ref(device_);
     dec->opaque = this;
     dec->get_format = GetFormatCb;
-    Log::Info("FFmpegHwDecode: zero-copy Vulkan video decode");
+    Log::Debug("FFmpegHwDecode: zero-copy Vulkan video decode");
     return true;
 }
 

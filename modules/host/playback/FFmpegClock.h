@@ -4,9 +4,9 @@
 
 // Pure A/V-sync math for the FFmpeg backend (issue #8, Phase 3).
 //
-// Deliberately free of any libav / SDL include so it can be unit-tested with the
-// native compiler (tests/FFmpegClockTests.cpp) — the standalone CI test build has
-// neither FFmpeg nor SDL available. Everything here operates on plain seconds /
+// Deliberately free of any libav / platform-audio include so it can be unit-tested
+// with the native compiler (tests/FFmpegClockTests.cpp) — the standalone CI test
+// build has neither FFmpeg nor Qt Multimedia available. Everything here operates on plain seconds /
 // bytes and is therefore trivially exercised in isolation.
 
 // The audio clock is the master clock. We know the presentation timestamp of the

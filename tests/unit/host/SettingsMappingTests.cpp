@@ -1,189 +1,205 @@
-#include "SettingsMapping.h"
 #include "FFmpegAudioOptions.h"
+#include "SettingsMapping.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(SettingsMappingTest, AudioParamsFromDefaults)
+#include <QtTest/QtTest>
+
+class SettingsMappingTest final : public QObject
 {
-    const AudioSettings s;
-    const AudioNormalizeParams p = ToAudioNormalizeParams(s);
-    EXPECT_EQ(p.frameLen, s.dynaudnormFrameLen);
-    EXPECT_EQ(p.gaussSize, s.dynaudnormGaussSize);
-    EXPECT_FLOAT_EQ(p.peak, s.dynaudnormPeak);
-    EXPECT_FLOAT_EQ(p.maxGain, s.dynaudnormMaxGain);
-    EXPECT_FLOAT_EQ(p.volume, s.dynaudnormVolume);
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void AudioParamsFromDefaults()
+    {
+        const AudioSettings s;
+        const AudioNormalizeParams p = ToAudioNormalizeParams(s);
+        QVERIFY((p.frameLen) == (s.dynaudnormFrameLen));
+        QVERIFY((p.gaussSize) == (s.dynaudnormGaussSize));
+        QCOMPARE(p.peak, s.dynaudnormPeak);
+        QCOMPARE(p.maxGain, s.dynaudnormMaxGain);
+        QCOMPARE(p.volume, s.dynaudnormVolume);
+    }
+
+    void AudioParamsTrackEditedSettings()
+    {
+        AudioSettings s;
+        s.dynaudnormFrameLen = 321;
+        s.dynaudnormVolume = 2.25f;
+        const AudioNormalizeParams p = ToAudioNormalizeParams(s);
+        QVERIFY((p.frameLen) == (321));
+        QCOMPARE(p.volume, 2.25f);
+    }
+
+    void AudioPreferencesMapDefaults()
+    {
+        const AudioSettings s;
+        const AudioPreferences p = ToAudioPreferences(s);
+        QVERIFY(::framelift::test::CStringEqual(p.preferredLang, ""));
+        QVERIFY(::framelift::test::CStringEqual(p.outputDevice, ""));
+        QVERIFY((p.defaultVolume) == (100));
+        QVERIFY((p.syncOffsetMs) == (0));
+        QVERIFY((p.channelMode) == (AudioChannelMode::Auto));
+        QVERIFY(!(p.duckingEnabled));
+        QVERIFY((p.duckingLevel) == (50));
+    }
+
+    void AudioPreferencesClampAndCopyFields()
+    {
+        AudioSettings s;
+        s.defaultLanguage = "english-too-long";
+        s.outputDevice = "Headphones";
+        s.defaultVolume = 150;
+        s.syncOffsetMs = -125;
+        s.channelMode = 99;
+        s.duckingEnabled = true;
+        s.duckingLevel = -5;
+
+        const AudioPreferences p = ToAudioPreferences(s);
+        QVERIFY(::framelift::test::CStringEqual(p.preferredLang, "english"));
+        QVERIFY(::framelift::test::CStringEqual(p.outputDevice, "Headphones"));
+        QVERIFY((p.defaultVolume) == (100));
+        QVERIFY((p.syncOffsetMs) == (-125));
+        QVERIFY((p.channelMode) == (AudioChannelMode::Surround));
+        QVERIFY(p.duckingEnabled);
+        QVERIFY((p.duckingLevel) == (0));
+    }
+
+    void AudioChannelModeMapsToOutputChannels()
+    {
+        QVERIFY((AudioOutputChannelsForMode(AudioChannelMode::Auto)) == (2));
+        QVERIFY((AudioOutputChannelsForMode(AudioChannelMode::Mono)) == (1));
+        QVERIFY((AudioOutputChannelsForMode(AudioChannelMode::Stereo)) == (2));
+        QVERIFY((AudioOutputChannelsForMode(AudioChannelMode::Surround)) == (6));
+    }
+
+    void PlaybackOptionsMapBooleans()
+    {
+        PlaybackSettings s;
+        s.hwdec = false;
+        s.hwdecMode = "off";
+        s.hrSeek = true;
+        s.subAutoLoad = true;
+        s.audioFileAutoLoad = false;
+
+        const PlaybackOptions o = ToPlaybackOptions(s);
+        QVERIFY(!(o.hwdec));
+        QVERIFY(o.hrSeek);
+        QVERIFY(o.subAutoLoad);
+        QVERIFY(!(o.audioFileAutoLoad));
+    }
+
+    void PlaybackOptionsTreatHwdecModeOffAsDisabled()
+    {
+        PlaybackSettings s;
+        s.hwdec = true;
+        s.hwdecMode = "off";
+
+        const PlaybackOptions o = ToPlaybackOptions(s);
+        QVERIFY(!(o.hwdec));
+        QVERIFY((ToVideoDecodeMode(s)) == (VideoDecodeMode::Off));
+    }
+
+    void VideoDecodeModeMapsFromSettings()
+    {
+        PlaybackSettings s;
+        s.hwdecMode = "vulkan-zero-copy";
+        QVERIFY((ToVideoDecodeMode(s)) == (VideoDecodeMode::VulkanZeroCopy));
+
+        s.hwdec = false;
+        QVERIFY((ToVideoDecodeMode(s)) == (VideoDecodeMode::Off));
+    }
+
+    void ReadAheadDefaultsConvertMbToBytes()
+    {
+        const CacheSettings s;
+        const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
+        QVERIFY(o.enabled);
+        QVERIFY((o.maxBytes) == (static_cast<int64_t>(s.readAheadSizeMB) * 1024 * 1024));
+    }
+
+    void ReadAheadTracksEditedSettings()
+    {
+        CacheSettings s;
+        s.readAheadEnabled = false;
+        s.readAheadSizeMB = 128;
+        const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
+        QVERIFY(!(o.enabled));
+        QVERIFY((o.maxBytes) == (int64_t{128} * 1024 * 1024));
+    }
+
+    void ReadAheadClampsNegativeSizeToZero()
+    {
+        CacheSettings s;
+        s.readAheadSizeMB = -10;
+        const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
+        QVERIFY((o.maxBytes) == (0));
+    }
+
+    void SubtitleColorsPackToAssRgba()
+    {
+        SubtitleSettings s;
+        s.textColor = "#FF8040"; // R=255 G=128 B=64
+        s.outlineColor = "#000000";
+        const SubtitleStyle st = ToSubtitleStyle(s);
+        // 0xRRGGBBAA, AA = transparency; text/outline are fully opaque (AA = 0x00).
+        QVERIFY((st.textColor) == (0xFF8040'00u));
+        QVERIFY((st.outlineColor) == (0x000000'00u));
+    }
+
+    void SubtitleBackOpacityFoldsIntoAlpha()
+    {
+        SubtitleSettings s;
+        s.backColor = "#102030";
+        s.backOpacity = 1.0f; // fully opaque ⇒ alpha byte 0x00
+        QVERIFY((ToSubtitleStyle(s).backColor) == (0x102030'00u));
+
+        s.backOpacity = 0.0f; // fully transparent ⇒ alpha byte 0xFF
+        QVERIFY((ToSubtitleStyle(s).backColor & 0xFFu) == (0xFFu));
+
+        s.backOpacity = 0.5f; // ~half ⇒ alpha byte 255 - round(0.5*255) = 255 - 128 = 127
+        QVERIFY((ToSubtitleStyle(s).backColor & 0xFFu) == (127u));
+    }
+
+    void SubtitleStyleTracksFieldsAndDefaults()
+    {
+        const SubtitleSettings def;
+        const SubtitleStyle dst = ToSubtitleStyle(def);
+        QVERIFY(!(dst.overrideEnabled));
+        QVERIFY((dst.edgeStyle) == (SubtitleEdgeStyle::Outline));
+        QVERIFY((dst.alignment) == (2));
+        QVERIFY(::framelift::test::CStringEqual(dst.fontFamily, ""));
+
+        SubtitleSettings s;
+        s.overrideStyle = true;
+        s.fontScale = 1.5f;
+        s.fontFamily = "Arial";
+        s.edgeStyle = 3;
+        s.alignment = 0; // file default
+        s.defaultLanguage = "eng";
+        s.preferForced = true;
+        const SubtitleStyle st = ToSubtitleStyle(s);
+        QVERIFY(st.overrideEnabled);
+        QCOMPARE(st.fontScale, 1.5f);
+        QVERIFY(::framelift::test::CStringEqual(st.fontFamily, "Arial"));
+        QVERIFY((st.edgeStyle) == (SubtitleEdgeStyle::OpaqueBox));
+        QVERIFY((st.alignment) == (0));
+        QVERIFY(::framelift::test::CStringEqual(st.preferredLang, "eng"));
+        QVERIFY(st.preferForced);
+    }
+
+    void SubtitleAlignmentClampsOutOfRangeToFileDefault()
+    {
+        SubtitleSettings s;
+        s.alignment = 42; // invalid \an value
+        QVERIFY((ToSubtitleStyle(s).alignment) == (0));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<SettingsMappingTest> kRegisterSettingsMappingTest{"SettingsMappingTest"};
 }
 
-TEST(SettingsMappingTest, AudioParamsTrackEditedSettings)
-{
-    AudioSettings s;
-    s.dynaudnormFrameLen = 321;
-    s.dynaudnormVolume = 2.25f;
-    const AudioNormalizeParams p = ToAudioNormalizeParams(s);
-    EXPECT_EQ(p.frameLen, 321);
-    EXPECT_FLOAT_EQ(p.volume, 2.25f);
-}
-
-TEST(SettingsMappingTest, AudioPreferencesMapDefaults)
-{
-    const AudioSettings s;
-    const AudioPreferences p = ToAudioPreferences(s);
-    EXPECT_STREQ(p.preferredLang, "");
-    EXPECT_STREQ(p.outputDevice, "");
-    EXPECT_EQ(p.defaultVolume, 100);
-    EXPECT_EQ(p.syncOffsetMs, 0);
-    EXPECT_EQ(p.channelMode, AudioChannelMode::Auto);
-    EXPECT_FALSE(p.duckingEnabled);
-    EXPECT_EQ(p.duckingLevel, 50);
-}
-
-TEST(SettingsMappingTest, AudioPreferencesClampAndCopyFields)
-{
-    AudioSettings s;
-    s.defaultLanguage = "english-too-long";
-    s.outputDevice = "Headphones";
-    s.defaultVolume = 150;
-    s.syncOffsetMs = -125;
-    s.channelMode = 99;
-    s.duckingEnabled = true;
-    s.duckingLevel = -5;
-
-    const AudioPreferences p = ToAudioPreferences(s);
-    EXPECT_STREQ(p.preferredLang, "english");
-    EXPECT_STREQ(p.outputDevice, "Headphones");
-    EXPECT_EQ(p.defaultVolume, 100);
-    EXPECT_EQ(p.syncOffsetMs, -125);
-    EXPECT_EQ(p.channelMode, AudioChannelMode::Surround);
-    EXPECT_TRUE(p.duckingEnabled);
-    EXPECT_EQ(p.duckingLevel, 0);
-}
-
-TEST(SettingsMappingTest, AudioChannelModeMapsToOutputChannels)
-{
-    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Auto), 2);
-    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Mono), 1);
-    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Stereo), 2);
-    EXPECT_EQ(AudioOutputChannelsForMode(AudioChannelMode::Surround), 6);
-}
-
-TEST(SettingsMappingTest, PlaybackOptionsMapBooleans)
-{
-    PlaybackSettings s;
-    s.hwdec = false;
-    s.hwdecMode = "off";
-    s.hrSeek = true;
-    s.subAutoLoad = true;
-    s.audioFileAutoLoad = false;
-
-    const PlaybackOptions o = ToPlaybackOptions(s);
-    EXPECT_FALSE(o.hwdec);
-    EXPECT_TRUE(o.hrSeek);
-    EXPECT_TRUE(o.subAutoLoad);
-    EXPECT_FALSE(o.audioFileAutoLoad);
-}
-
-TEST(SettingsMappingTest, PlaybackOptionsTreatHwdecModeOffAsDisabled)
-{
-    PlaybackSettings s;
-    s.hwdec = true;
-    s.hwdecMode = "off";
-
-    const PlaybackOptions o = ToPlaybackOptions(s);
-    EXPECT_FALSE(o.hwdec);
-    EXPECT_EQ(ToVideoDecodeMode(s), VideoDecodeMode::Off);
-}
-
-TEST(SettingsMappingTest, VideoDecodeModeMapsFromSettings)
-{
-    PlaybackSettings s;
-    s.hwdecMode = "vulkan-zero-copy";
-    EXPECT_EQ(ToVideoDecodeMode(s), VideoDecodeMode::VulkanZeroCopy);
-
-    s.hwdec = false;
-    EXPECT_EQ(ToVideoDecodeMode(s), VideoDecodeMode::Off);
-}
-
-TEST(SettingsMappingTest, ReadAheadDefaultsConvertMbToBytes)
-{
-    const CacheSettings s;
-    const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
-    EXPECT_TRUE(o.enabled);
-    EXPECT_EQ(o.maxBytes, static_cast<int64_t>(s.readAheadSizeMB) * 1024 * 1024);
-}
-
-TEST(SettingsMappingTest, ReadAheadTracksEditedSettings)
-{
-    CacheSettings s;
-    s.readAheadEnabled = false;
-    s.readAheadSizeMB = 128;
-    const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
-    EXPECT_FALSE(o.enabled);
-    EXPECT_EQ(o.maxBytes, int64_t{128} * 1024 * 1024);
-}
-
-TEST(SettingsMappingTest, ReadAheadClampsNegativeSizeToZero)
-{
-    CacheSettings s;
-    s.readAheadSizeMB = -10;
-    const ReadAheadCacheOptions o = ToReadAheadCacheOptions(s);
-    EXPECT_EQ(o.maxBytes, 0);
-}
-
-TEST(SettingsMappingTest, SubtitleColorsPackToAssRgba)
-{
-    SubtitleSettings s;
-    s.textColor = "#FF8040"; // R=255 G=128 B=64
-    s.outlineColor = "#000000";
-    const SubtitleStyle st = ToSubtitleStyle(s);
-    // 0xRRGGBBAA, AA = transparency; text/outline are fully opaque (AA = 0x00).
-    EXPECT_EQ(st.textColor, 0xFF8040'00u);
-    EXPECT_EQ(st.outlineColor, 0x000000'00u);
-}
-
-TEST(SettingsMappingTest, SubtitleBackOpacityFoldsIntoAlpha)
-{
-    SubtitleSettings s;
-    s.backColor = "#102030";
-    s.backOpacity = 1.0f; // fully opaque ⇒ alpha byte 0x00
-    EXPECT_EQ(ToSubtitleStyle(s).backColor, 0x102030'00u);
-
-    s.backOpacity = 0.0f; // fully transparent ⇒ alpha byte 0xFF
-    EXPECT_EQ(ToSubtitleStyle(s).backColor & 0xFFu, 0xFFu);
-
-    s.backOpacity = 0.5f; // ~half ⇒ alpha byte 255 - round(0.5*255) = 255 - 128 = 127
-    EXPECT_EQ(ToSubtitleStyle(s).backColor & 0xFFu, 127u);
-}
-
-TEST(SettingsMappingTest, SubtitleStyleTracksFieldsAndDefaults)
-{
-    const SubtitleSettings def;
-    const SubtitleStyle dst = ToSubtitleStyle(def);
-    EXPECT_FALSE(dst.overrideEnabled);
-    EXPECT_EQ(dst.edgeStyle, SubtitleEdgeStyle::Outline);
-    EXPECT_EQ(dst.alignment, 2);
-    EXPECT_STREQ(dst.fontFamily, "");
-
-    SubtitleSettings s;
-    s.overrideStyle = true;
-    s.fontScale = 1.5f;
-    s.fontFamily = "Arial";
-    s.edgeStyle = 3;
-    s.alignment = 0; // file default
-    s.defaultLanguage = "eng";
-    s.preferForced = true;
-    const SubtitleStyle st = ToSubtitleStyle(s);
-    EXPECT_TRUE(st.overrideEnabled);
-    EXPECT_FLOAT_EQ(st.fontScale, 1.5f);
-    EXPECT_STREQ(st.fontFamily, "Arial");
-    EXPECT_EQ(st.edgeStyle, SubtitleEdgeStyle::OpaqueBox);
-    EXPECT_EQ(st.alignment, 0);
-    EXPECT_STREQ(st.preferredLang, "eng");
-    EXPECT_TRUE(st.preferForced);
-}
-
-TEST(SettingsMappingTest, SubtitleAlignmentClampsOutOfRangeToFileDefault)
-{
-    SubtitleSettings s;
-    s.alignment = 42; // invalid \an value
-    EXPECT_EQ(ToSubtitleStyle(s).alignment, 0);
-}
+#include "SettingsMappingTests.moc"

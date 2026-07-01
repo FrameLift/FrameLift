@@ -4,16 +4,15 @@
 #include <cstdint>
 #include <mutex>
 
-// Serializes access to Vulkan queues shared by FrameLift's render thread,
-// ImGui's platform-window renderer, and FFmpeg's decode thread. A VkQueue is not
+// Serializes access to Vulkan queues shared by Qt Quick's render thread,
+// FrameLift's renderer, and FFmpeg's decode thread. A VkQueue is not
 // thread-safe: every vkQueueSubmit / vkQueuePresentKHR / vkQueueWaitIdle on a
 // given queue must be externally synchronized.
 //
-// Deliberately Vulkan-type-free so it can be included from both the volk-based
-// backend and the FFmpeg hwaccel bridge. The lock is keyed by queue family and
-// queue index because FFmpeg's lock_queue(ctx, family, index) callback supplies
-// both, and the Vulkan backend may reserve graphics-family queue index 1 for
-// ImGui platform windows.
+// Deliberately Vulkan-type-free so it can be included from both the backend and the
+// FFmpeg hwaccel bridge. The lock is keyed by queue family and queue index because
+// FFmpeg's lock_queue(ctx, family, index) callback supplies both, and the Vulkan
+// backend may reserve graphics-family queue index 1 for Qt Quick.
 class VulkanQueueLock
 {
 public:

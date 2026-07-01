@@ -1,9 +1,12 @@
 add_framelift_plugin(History
         PLUGIN_JSON "${CMAKE_CURRENT_SOURCE_DIR}/History.Plugin.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/core/History.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/core/History.h"
+        QML_URI FrameLift.Plugins.History
+        QML_ENTRY "${CMAKE_CURRENT_SOURCE_DIR}/History.qml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/History.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/History.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/HistorySettings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/HistorySettings.h"
         ${FRAMELIFT_SDK_SOURCES}
+        QML_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/HistorySettings.qml"
 )
-target_include_directories(History PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/core")
-# History persists its entries as JSON via the host IJson service (ctx.GetService<IJson>())
-# — no JSON library is linked into the plugin.

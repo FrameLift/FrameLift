@@ -1,6 +1,6 @@
 #pragma once
 
-// Host JSON capability. A single host-owned implementation (nlohmann today) lives
+// Host JSON capability. A single host-owned implementation (Qt QJson today) lives
 // behind this service so the backend can be swapped in one place; plugins never link
 // a JSON library themselves. A capability service — discover it with
 // ctx.GetService<IJson>() and null-check before use. For ergonomic call sites, prefer

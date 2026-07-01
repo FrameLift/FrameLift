@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.controls",
+  "id": "framelift.controls",
   "name": "Playback Controls",
   "description": "Host playback/app hotkeys and their actions (pause, volume, seek, mute, fullscreen, open-file).",
   "enabled": true,
@@ -12,8 +12,8 @@
   },
   "requires": {
     "modules": [
-      "framelift.host.services",
-      "framelift.host.settings"
+      "framelift.services",
+      "framelift.settings"
     ],
     "features": []
   },

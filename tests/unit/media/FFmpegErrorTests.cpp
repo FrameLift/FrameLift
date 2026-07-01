@@ -4,48 +4,64 @@
 
 #include "FFmpegError.h"
 
-#include <gtest/gtest.h>
+#include "QtTestRunner.h"
 
-TEST(FFmpegErrorTests, MissingOrInaccessibleFileIsNotFound)
+#include <QtTest/QtTest>
+
+class FFmpegErrorTests final : public QObject
 {
-    EXPECT_EQ(ClassifyAvError(kAvErrNoEnt), EndFileReason::NotFound);
-    EXPECT_EQ(ClassifyAvError(kAvErrAccess), EndFileReason::NotFound);
+    Q_OBJECT
+
+private Q_SLOTS:
+
+    void MissingOrInaccessibleFileIsNotFound()
+    {
+        QVERIFY((ClassifyAvError(kAvErrNoEnt)) == (EndFileReason::NotFound));
+        QVERIFY((ClassifyAvError(kAvErrAccess)) == (EndFileReason::NotFound));
+    }
+
+    void MissingDemuxerDecoderProtocolBsfIsUnsupported()
+    {
+        QVERIFY((ClassifyAvError(kAvErrDemuxerNotFound)) == (EndFileReason::Unsupported));
+        QVERIFY((ClassifyAvError(kAvErrDecoderNotFound)) == (EndFileReason::Unsupported));
+        QVERIFY((ClassifyAvError(kAvErrProtocolNotFound)) == (EndFileReason::Unsupported));
+        QVERIFY((ClassifyAvError(kAvErrBsfNotFound)) == (EndFileReason::Unsupported));
+    }
+
+    void InvalidOrTruncatedDataIsCorrupt()
+    {
+        QVERIFY((ClassifyAvError(kAvErrInvalidData)) == (EndFileReason::Corrupt));
+        QVERIFY((ClassifyAvError(kAvErrEof)) == (EndFileReason::Corrupt));
+    }
+
+    void StreamNotFoundIsNoStream()
+    {
+        QVERIFY((ClassifyAvError(kAvErrStreamNotFound)) == (EndFileReason::NoStream));
+    }
+
+    void UnrecognisedCodeFallsBackToError()
+    {
+        // An arbitrary code we don't classify must not regress to a misleading reason.
+        QVERIFY((ClassifyAvError(-9999)) == (EndFileReason::Error));
+        QVERIFY((ClassifyAvError(0)) == (EndFileReason::Error));
+    }
+
+    // The mirrored constants are FFERRTAG-computed; pin a couple of well-known values so a
+    // refactor of the MkTag/FfErrTag helpers can't silently change them. (FfErrTag negates
+    // MKTAG; e.g. AVERROR_EOF == -('E' | 'O'<<8 | 'F'<<16 | ' '<<24).)
+    void MirroredTagsMatchFFmpegFormula()
+    {
+        const int eof = -static_cast<int>('E' | ('O' << 8) | ('F' << 16) | (static_cast<unsigned>(' ') << 24));
+        QVERIFY((kAvErrEof) == (eof));
+
+        const int indata = -static_cast<int>('I' | ('N' << 8) | ('D' << 16) | (static_cast<unsigned>('A') << 24));
+        QVERIFY((kAvErrInvalidData) == (indata));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<FFmpegErrorTests> kRegisterFFmpegErrorTests{"FFmpegErrorTests"};
 }
 
-TEST(FFmpegErrorTests, MissingDemuxerDecoderProtocolBsfIsUnsupported)
-{
-    EXPECT_EQ(ClassifyAvError(kAvErrDemuxerNotFound), EndFileReason::Unsupported);
-    EXPECT_EQ(ClassifyAvError(kAvErrDecoderNotFound), EndFileReason::Unsupported);
-    EXPECT_EQ(ClassifyAvError(kAvErrProtocolNotFound), EndFileReason::Unsupported);
-    EXPECT_EQ(ClassifyAvError(kAvErrBsfNotFound), EndFileReason::Unsupported);
-}
-
-TEST(FFmpegErrorTests, InvalidOrTruncatedDataIsCorrupt)
-{
-    EXPECT_EQ(ClassifyAvError(kAvErrInvalidData), EndFileReason::Corrupt);
-    EXPECT_EQ(ClassifyAvError(kAvErrEof), EndFileReason::Corrupt);
-}
-
-TEST(FFmpegErrorTests, StreamNotFoundIsNoStream)
-{
-    EXPECT_EQ(ClassifyAvError(kAvErrStreamNotFound), EndFileReason::NoStream);
-}
-
-TEST(FFmpegErrorTests, UnrecognisedCodeFallsBackToError)
-{
-    // An arbitrary code we don't classify must not regress to a misleading reason.
-    EXPECT_EQ(ClassifyAvError(-9999), EndFileReason::Error);
-    EXPECT_EQ(ClassifyAvError(0), EndFileReason::Error);
-}
-
-// The mirrored constants are FFERRTAG-computed; pin a couple of well-known values so a
-// refactor of the MkTag/FfErrTag helpers can't silently change them. (FfErrTag negates
-// MKTAG; e.g. AVERROR_EOF == -('E' | 'O'<<8 | 'F'<<16 | ' '<<24).)
-TEST(FFmpegErrorTests, MirroredTagsMatchFFmpegFormula)
-{
-    const int eof = -static_cast<int>('E' | ('O' << 8) | ('F' << 16) | (static_cast<unsigned>(' ') << 24));
-    EXPECT_EQ(kAvErrEof, eof);
-
-    const int indata = -static_cast<int>('I' | ('N' << 8) | ('D' << 16) | (static_cast<unsigned>('A') << 24));
-    EXPECT_EQ(kAvErrInvalidData, indata);
-}
+#include "FFmpegErrorTests.moc"

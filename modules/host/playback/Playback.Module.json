@@ -1,6 +1,6 @@
 {
   "fileVersion": 1,
-  "id": "framelift.host.playback",
+  "id": "framelift.playback",
   "name": "Media Playback",
   "description": "FFmpeg-backed media playback, subtitles, and hardware decode helpers.",
   "enabled": true,
@@ -15,14 +15,14 @@
   },
   "requires": {
     "modules": [
-      "framelift.host.read_ahead",
-      "framelift.host.audio"
+      "framelift.read_ahead",
+      "framelift.audio"
     ],
     "features": []
   },
   "optional": {
     "modules": [
-      "framelift.host.graphics_vulkan"
+      "framelift.graphics_vulkan"
     ],
     "features": [
       "graphics.backend.vulkan",

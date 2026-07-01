@@ -1,11 +1,11 @@
 #pragma once
 #include <cstddef>
-#include <functional>
 #include <framelift/Guard.h>
 #include <framelift/IModuleContext.h>
 #include <framelift/services/IAppPaths.h>
 #include <framelift/services/ISettingsRegistry.h>
 #include <framelift/services/ISettingsStore.h>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -119,7 +119,12 @@ inline std::string GetPrefPath(const IModuleContext& ctx)
 
 // Register a keybind backed by a std::string member.
 // Avoids having to write the get/set lambdas for each binding.
-inline void RegisterKeybindEntry(IModuleContext& ctx, const char* label, const char* actionName, std::string& bindStr)
+//   group       — owning module's display name (for per-plugin grouping in the UI).
+//   defaultBind — the factory-default bind list (for "reset to default").
+inline void RegisterKeybindEntry(
+    IModuleContext& ctx, const char* label, const char* actionName, std::string& bindStr, const char* group = nullptr,
+    const char* defaultBind = nullptr
+)
 {
     struct Acc
     {
@@ -142,7 +147,7 @@ inline void RegisterKeybindEntry(IModuleContext& ctx, const char* label, const c
 
     if (auto* registry = ctx.GetService<ISettingsRegistry>())
     {
-        registry->RegisterKeybindEntry(label, actionName, Acc::get, Acc::set, &bindStr);
+        registry->RegisterKeybindEntry(label, actionName, Acc::get, Acc::set, &bindStr, group, defaultBind);
     }
 }
 

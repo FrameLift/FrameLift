@@ -29,6 +29,11 @@ public:
 
     // Register a callback invoked after settings are committed. cleanup(ud) is
     // called on plugin unload.
+    //
+    // Thread affinity: the callback runs SYNCHRONOUSLY on the thread that calls
+    // SaveSettings()/ReloadSettings() — in practice the GUI thread, since both are
+    // driven from the settings UI. It is therefore safe to touch QML/UI state from
+    // the callback; conversely, do not invoke Save/Reload off the GUI thread.
     virtual void RegisterSettingsChangeCallback(
         void (*cb)(void* ud), void* ud, void (*cleanup)(void* ud) = nullptr
     ) noexcept = 0;

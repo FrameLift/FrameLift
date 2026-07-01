@@ -1,10 +1,12 @@
 #pragma once
 #include <framelift/services/IJson.h>
 
-// Host JSON service backed by nlohmann/json — the single place the JSON backend is
+// Host JSON service backed by Qt's QJson — the single place the JSON backend is
 // chosen. Plugins reach it via ctx.GetService<IJson>() and never link a JSON library
-// themselves. Stateless: every call operates only on the handle passed in, so it is
-// safe to use from plugin worker threads.
+// themselves. The service object is stateless; state lives in the per-document/
+// per-builder handles. Read documents own their navigated nodes (QJson is value-
+// semantic) and guard that pool with a mutex, so calls are safe from plugin worker
+// threads.
 class JsonServiceImpl final : public IJson
 {
 public:

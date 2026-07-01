@@ -1,75 +1,113 @@
 #include "App.h"
 #include "Cli.h"
-#include "IconData.h"
 #include "CoreSettings.h"
-#include "GraphicsApi.h"
-#include "GraphicsSettings.h"
-#include "IGraphicsBackend.h"
-#include "DirWatcher.h"
 #include "FFmpegPlayer.h"
+#include "GraphicsApi.h"
+#include "IGraphicsBackend.h"
 #include "LogBuffer.h"
-#include "SdlAppWindow.h"
+#include "QtAppWindow.h"
 #if FRAMELIFT_MODULE_WIN_SHELL
 #include "WinShell.h"
 #endif
-#include <framelift/Log.h>
+#include <framelift/ContextHelpers.h>
 #include <framelift/Events.h>
 #include <framelift/IModule.h>
+#include <framelift/Log.h>
 #include <framelift/services/ILogBuffer.h>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#if FRAMELIFT_BUILD_LAUNCH_TESTS
+#include <QtCore/QTimer>
+#endif
+
 #include <algorithm>
-#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <ranges>
 #include <unordered_set>
 
 namespace
 {
-// Wait cap while a UI animation / live panel is asking for more frames (redrawPending_).
-// A continuous RequestRedraw() must not free-run the loop, so each such frame waits at
-// least this long — ~60 fps — instead of spinning at the display rate.
-constexpr int kUiRedrawIntervalMs = 16;
+std::string LegacyPluginId(std::string id)
+{
+    if (id.ends_with(".core"))
+    {
+        id.erase(id.size() - 5);
+    }
+    return id;
+}
+
+void MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& pluginConfig)
+{
+    std::ifstream file(legacyPath);
+    if (!file)
+    {
+        return;
+    }
+
+    std::string line;
+    while (std::getline(file, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        if (line.empty() || line.front() == '#')
+        {
+            continue;
+        }
+
+        const auto eq = line.find('=');
+        if (eq == std::string::npos)
+        {
+            continue;
+        }
+
+        const std::string id = LegacyPluginId(line.substr(0, eq));
+        const std::string value = line.substr(eq + 1);
+        if (!id.empty())
+        {
+            pluginConfig.Set(id, value != "disabled");
+        }
+    }
+}
 } // namespace
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
-App::App(const char* title, const int width, const int height, const int cliArgc, const char* const* cliArgv)
-    : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>()),
-      dirWatcher_(CreateDirWatcher())
+App::App(
+    const char* title, const int width, const int height, const GraphicsApi graphicsApi, const int cliArgc,
+    const char* const* cliArgv
+)
+    : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>())
 {
     FRAMELIFT_PERF_START("app-start");
 
     ffmpeg_ = player_.get();
 
-    // Resolve the pref dir up front: the graphics backend — and thus the SDL window
-    // flag (SDL_WINDOW_OPENGL vs SDL_WINDOW_VULKAN) — is fixed at window-creation
-    // time, so graphics.backend must be loaded from settings before InitPlatform.
     char prefBuf[512] = {};
-    (void)SdlAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
+    (void)QtAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
     const std::string prefDir = prefBuf;
     const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
-    packagesPath_ = prefDir.empty() ? "packages.ini" : prefDir + "packages.ini";
+    pluginsPath_ = prefDir.empty() ? "plugins.ini" : prefDir + "plugins.ini";
 
-    InitPlatform(title, width, height, prefDir, settingsPath);
+    InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath);
     InitServices(prefDir, settingsPath);
 
-    // The ContextMenu module owns the right-click menu: it registers the ContextMenu
-    // service that other modules extend, and assembles its core items plus their
-    // sections on its first frame.
-    LoadPackages();
+    // The ContextMenu plugin owns the right-click menu: it registers the ContextMenu
+    // service that other plugins extend, and assembles its items on its first frame.
+    LoadPlugins();
 
-    BuildRenderables();
+    BuildPluginViews();
 }
 
 App::~App()
 {
-    appWindow_->ImGuiShutdown();
-
-    // Clear all DLL-owned lambdas before packageLoader_ calls FreeLibrary.
-    // packageLoader_ destructs after this body (declared after moduleCtx_),
+    // Clear all DLL-owned lambdas before pluginLoader_ calls FreeLibrary.
+    // pluginLoader_ destructs after this body (declared after moduleCtx_),
     // so modules can still call ctx_->GetService() in their destructors.
     if (moduleCtx_)
     {
@@ -77,46 +115,46 @@ App::~App()
     }
     keys_.Clear();
 
-    player_.reset(); // destroy the player's render context before the GL context is torn down
+    if (appWindow_)
+    {
+        appWindow_->SetEventSink({});
+        appWindow_->SetPlayerWakeupHandler({});
+        appWindow_->SetGraphicsInvalidatedHandler({});
+        appWindow_->SetVideoRenderCallbacks({}, {});
+    }
+    player_.reset();    // destroy the player's render context before the GL context is torn down
+    appWindow_.reset(); // destroy QML roots before pluginLoader_ unloads plugin DLLs/view models
 }
 
 // ── Construction phases ─────────────────────────────────────────────────────────
 
-void App::InitPlatform(const char* title, const int width, const int height, const std::string& prefDir,
-                       const std::string& settingsPath)
+void App::InitPlatform(
+    const char* title, const int width, const int height, const GraphicsApi graphicsApi, const std::string& prefDir,
+    const std::string& settingsPath
+)
 {
     // App owns the Settings instance; load it before any module sees it.
     settings_.Load(settingsPath);
 
-    // User package enablement manifest (opt-out): load before packages are scanned.
-    packageConfig_.Load(packagesPath_);
+    // User plugin enablement manifest (opt-out): load before plugins are scanned.
+    pluginConfig_.Load(pluginsPath_);
+    const std::string legacyPath = std::filesystem::path(pluginsPath_).parent_path().empty()
+                                       ? std::string("packages.ini")
+                                       : (std::filesystem::path(pluginsPath_).parent_path() / "packages.ini").string();
+    MigrateLegacyPluginConfig(legacyPath, pluginConfig_);
 
-    appWindow_ =
-        std::make_unique<SdlAppWindow>(title, width, height, GraphicsApiFromString(settings_.Get<GraphicsSettings>().backend));
+    appWindow_ = std::make_unique<QtAppWindow>(title, width, height, graphicsApi);
 
-    // Let the UI context create package-icon textures through the active backend.
-    uiCtx_.SetGraphicsBackend(static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()));
+    (void)appWindow_->SetWindowIcon(":/framelift/assets/icon.svg");
 
-    if (!prefDir.empty())
-    {
-        const std::string iniPath = prefDir + "imgui.ini";
-        appWindow_->SetImGuiIniPath(iniPath.c_str());
-    }
-    (void)appWindow_->SetWindowIconFromMemory(kIconData, kIconDataSize);
-
-    InitRender();
-    InitImGui();
-
-    // Apply the persisted theme before the first frame (GL context is current,
-    // NewFrame has not run yet) and seed the controller's snapshot.
-    themeController_.ApplyInitial(settings_.Get<ThemeSettings>());
+    SetupPlayerCallbacks();
 
     fileDialogService_.Init(appWindow_.get(), appWindow_.get());
 }
 
 void App::InitServices(const std::string& prefDir, const std::string& settingsPath)
 {
-    moduleCtx_ = std::make_unique<ModuleContext>(prefDir, &settings_, settingsPath, &packageConfig_, packagesPath_);
+    moduleCtx_ = std::make_unique<ModuleContext>(prefDir, &settings_, settingsPath, &pluginConfig_, pluginsPath_);
 
     // The one FFmpegPlayer is registered under each capability interface it implements.
     // Register each separately: the variadic RegisterService can't sibling-cast a
@@ -126,225 +164,237 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<IVideoOutput>(player_.get());
     moduleCtx_->RegisterService<IAudioControl>(player_.get());
     moduleCtx_->RegisterService<ISubtitleControl>(player_.get());
-    // The one SdlAppWindow is registered under each window facet it implements.
+    // The one QtAppWindow is registered under each plugin-visible window facet it implements.
     moduleCtx_->RegisterService<IAppWindow>(appWindow_.get());
-    moduleCtx_->RegisterService<IGraphicsSurface>(appWindow_.get());
     moduleCtx_->RegisterService<IEventPump>(appWindow_.get());
-    moduleCtx_->RegisterService<IDirWatcher>(dirWatcher_.get());
     moduleCtx_->RegisterService<Hotkeys>(&keys_);
-    moduleCtx_->RegisterService<FocusManager>(&focus_);
     moduleCtx_->RegisterService<IFileDialog>(&fileDialogService_);
     moduleCtx_->RegisterService<IJson>(&jsonService_);
     moduleCtx_->RegisterService<ILogBuffer>(&HostLogBuffer());
+    graphicsInfo_ = std::make_unique<GraphicsInfoService>(appWindow_.get());
+    moduleCtx_->RegisterService<IGraphicsInfo>(graphicsInfo_.get());
 
     // Controllers own their own event-bus wiring (settings re-apply, audio ducking,
     // theme reaction) so App holds no subscriptions.
-    playbackControls_ =
-        std::make_unique<PlaybackControls>(
-            keys_, settings_, *ffmpeg_, *appWindow_, *appWindow_, *appWindow_, fileDialogService_, *moduleCtx_
-        );
+    playbackControls_ = std::make_unique<PlaybackControls>(
+        keys_, settings_, *ffmpeg_, *appWindow_, *appWindow_, fileDialogService_, *moduleCtx_
+    );
     playbackControls_->Connect();
-    themeController_.Connect(*moduleCtx_, settings_);
+
+    // With plugins excluded this phase, no module turns an OpenFileRequestEvent (from the
+    // CLI arg, drag-drop, or the file dialog) into an actual load — the Playlist plugin
+    // normally does. Subscribe here so the host opens the requested file directly, which is
+    // what makes the Phase-1 "video plays" milestone reachable without plugins.
+    framelift::Subscribe<OpenFileRequestEvent>(
+        *moduleCtx_,
+        [this](const OpenFileRequestEvent& e)
+        {
+            if (e.path && e.path[0])
+            {
+                ffmpeg_->LoadFile(e.path, 0.0);
+            }
+        }
+    );
+
+    // Playlist publishes this when its last item ends with nothing to advance to.
+    // Stop the player so it returns to the idle screen rather than holding the final
+    // frame in a seekable "playing" state.
+    framelift::Subscribe<StopPlaybackRequestEvent>(
+        *moduleCtx_,
+        [this](const StopPlaybackRequestEvent&)
+        {
+            ffmpeg_->Stop();
+        }
+    );
+
+    // Qt owns the loop: route the window's GUI-thread hooks back into App. Input/events
+    // → Dispatch; player worker wakeups → OnPlayerWakeup (drain media events); the
+    // scene-graph video node → RenderVideo (the host video draw).
+    appWindow_->SetEventSink(
+        [this](const AppEvent& e)
+        {
+            Dispatch(e);
+        }
+    );
+    appWindow_->SetPlayerWakeupHandler(
+        [this]
+        {
+            OnPlayerWakeup();
+        }
+    );
+    appWindow_->SetGraphicsInvalidatedHandler(
+        [this]
+        {
+            player_->ReleaseRender();
+            renderInit_ = false;
+        }
+    );
+    appWindow_->SetVideoRenderCallbacks(
+        [this](int fbW, int fbH)
+        {
+            PrepareVideo(fbW, fbH);
+        },
+        [this](int fbW, int fbH)
+        {
+            RenderVideo(fbW, fbH);
+        }
+    );
 
 #if FRAMELIFT_MODULE_WIN_SHELL
     // Windows shell integration consumes the same services/events; wire it after
     // they're registered so its Connect() can resolve them.
-    winShell_ = std::make_unique<WinShell>(appWindow_->GetWin32Hwnd());
+    winShell_ = std::make_unique<WinShell>();
     winShell_->Connect(*moduleCtx_);
 #endif
 }
 
-// ── Package loading ─────────────────────────────────────────────────────────────
+// ── Plugin loading ──────────────────────────────────────────────────────────────
 
-void App::LoadPackages()
+void App::LoadPlugins()
 {
-    // Load every package present in the packages/ subdirectory. Per-module enablement
-    // comes from packages.ini (keyed by module id); the loader resolves dependencies
-    // and load order from embedded metadata, then instantiates each enabled module.
-    // Each module registers its own context menu sections etc. during Install().
+    // Load every plugin present in the plugins/ subdirectory. Plugin enablement
+    // comes from plugins.ini (keyed by plugin id); the loader resolves dependencies
+    // and load order from embedded metadata, then instantiates each enabled plugin's
+    // single module.
     char baseBuf[512] = {};
     (void)appWindow_->GetBasePath(baseBuf, sizeof(baseBuf));
-    const std::string packagesDir = std::string(baseBuf) + "packages/";
-    packageLoader_.LoadAll(packagesDir, packageConfig_.DisabledIds());
+    const std::string pluginsDir = std::string(baseBuf) + "plugins/";
+    pluginLoader_.LoadAll(pluginsDir, pluginConfig_.DisabledIds());
 
-    // What actually got instantiated this session, by package id and module id.
-    std::unordered_set<std::string> loadedPackageIds;
-    std::unordered_set<std::string> loadedModuleIds;
-    for (const auto& p : packageLoader_.Packages())
+    // What actually got instantiated this session, by plugin id.
+    std::unordered_set<std::string> loadedPluginIds;
+    for (const auto& p : pluginLoader_.Plugins())
     {
-        loadedPackageIds.insert(p.name);
-        for (const auto& m : p.modules)
-        {
-            loadedModuleIds.insert(m.moduleId);
-        }
+        loadedPluginIds.insert(p.pluginId);
     }
 
-    // Build the catalogue from every discovered package (loaded or not) so the
-    // settings UI can list and toggle each module. Populate it before Install() so a
-    // module may enumerate peers during it.
-    std::vector<std::string> discoveredModuleIds;
-    for (auto& pkg : PackageLoader::DiscoverAvailable(packagesDir))
+    // Build the catalogue from every discovered plugin (loaded or not) so the
+    // settings UI can list and toggle each plugin. Populate it before Install() so a
+    // plugin module may enumerate peers during it.
+    std::vector<std::string> discoveredPluginIds;
+    for (auto& plugin : PluginLoader::DiscoverAvailable(pluginsDir))
     {
-        ModuleContext::PackageCatalogEntry entry;
-        entry.id = pkg.packageId;
-        entry.displayName = std::move(pkg.displayName);
-        entry.version[0] = pkg.version[0];
-        entry.version[1] = pkg.version[1];
-        entry.version[2] = pkg.version[2];
-        entry.publisher = std::move(pkg.publisher);
-        entry.description = std::move(pkg.description);
-        entry.loaded = loadedPackageIds.contains(pkg.packageId);
-        for (auto& mod : pkg.modules)
-        {
-            ModuleContext::ModuleCatalogEntry me;
-            discoveredModuleIds.push_back(mod.id);
-            // enabled=false ⇒ user-disabled (unchecked in the UI); enabled=true but
-            // not loaded ⇒ resolver-rejected/failed (surfaces as a load failure).
-            me.enabled = packageConfig_.IsEnabled(mod.id);
-            me.loaded = loadedModuleIds.contains(mod.id);
-            me.id = std::move(mod.id);
-            me.name = std::move(mod.name);
-            me.description = std::move(mod.description);
-            entry.modules.push_back(std::move(me));
-        }
-        moduleCtx_->AddPackage(std::move(entry));
+        PluginCatalog::PluginCatalogEntry entry;
+        entry.id = plugin.pluginId;
+        discoveredPluginIds.push_back(plugin.pluginId);
+        entry.displayName = std::move(plugin.displayName);
+        entry.version[0] = plugin.version[0];
+        entry.version[1] = plugin.version[1];
+        entry.version[2] = plugin.version[2];
+        entry.publisher = std::move(plugin.publisher);
+        entry.description = std::move(plugin.description);
+        entry.enabled = pluginConfig_.IsEnabled(entry.id);
+        entry.loaded = loadedPluginIds.contains(entry.id);
+        moduleCtx_->Catalog().AddPlugin(std::move(entry));
     }
 
-    // Install each loaded module (every module of every loaded package).
-    for (auto& p : packageLoader_.Packages())
+    // Install each loaded plugin module.
+    for (auto& p : pluginLoader_.Plugins())
     {
-        for (auto& m : p.modules)
-        {
-            registry_.Add(m.module, *moduleCtx_);
-        }
+        registry_.Add(p.module, *moduleCtx_);
     }
 
-    // Refresh the manifest so it lists every discovered module (new ones default to
-    // enabled), keeping packages.ini a complete, hand-editable record.
-    packageConfig_.EnsureKnown(discoveredModuleIds);
-    packageConfig_.Save(packagesPath_);
+    // Refresh the manifest so it lists every discovered plugin (new ones default to
+    // enabled), keeping plugins.ini a complete, hand-editable record.
+    pluginConfig_.EnsureKnown(discoveredPluginIds);
+    pluginConfig_.Save(pluginsPath_);
 
     registry_.BindHotkeys(keys_);
     playbackControls_->Bind();
 
     // Materialize module settings + keybinds on first run: modules populate their
     // ModuleSettingsImpl caches during Install(), but those reach disk only via
-    // SaveSettings(). The startup Settings::Save (InitPlatform, before packages)
+    // SaveSettings(). The startup Settings::Save (InitPlatform, before plugins)
     // writes host sections only, so without this flush module sections appear only
     // after the user presses Save in the Settings menu.
-    moduleCtx_->SaveSettings();
+    moduleCtx_->Settings().SaveSettings();
 }
 
 // ── Renderables ───────────────────────────────────────────────────────────────
 
-void App::BuildRenderables()
+void App::BuildPluginViews()
 {
-    // Collect (order, renderable) pairs from packages and sort. The context menu is
-    // itself a module (renderOrder 30), so it sorts in alongside the rest.
-    using OrderedR = std::pair<int, IRenderable*>;
-    std::vector<OrderedR> items;
+    std::vector<QmlViewSpec> views;
 
-    for (const auto& p : packageLoader_.Packages())
+    for (const auto& p : pluginLoader_.Plugins())
     {
-        for (const auto& m : p.modules)
+        if (p.viewModel && !p.qmlEntryUrl.empty())
         {
-            if (m.renderable)
-            {
-                items.emplace_back(m.renderOrder, m.renderable);
-            }
+            views.push_back(
+                {QString::fromStdString(p.pluginId), QString::fromStdString(p.qmlEntryUrl), p.viewModel, p.renderOrder}
+            );
         }
     }
-
-    std::ranges::stable_sort(
-        items,
-        [](const OrderedR& a, const OrderedR& b)
-        {
-            return a.first < b.first;
-        }
-    );
-
-    renderables_.clear();
-    for (auto& r : items | std::views::values)
-    {
-        renderables_.push_back(r);
-    }
+    appWindow_->SetPluginViews(std::move(views));
 }
 
 // ── Render setup ──────────────────────────────────────────────────────────────
 
-void App::InitRender() const
+void App::SetupPlayerCallbacks()
 {
-    // Hand the player the active graphics backend (opaque IGraphicsBackend*); it
-    // builds its matching video renderer from it (GL or Vulkan).
-    player_->InitRender(appWindow_->GetGraphicsBackend());
-
+    // Worker-thread wakeups → the window's queued signals (no GL here; the renderer is
+    // built lazily on the first RenderVideo when Qt's GL context is current).
     player_->SetRenderUpdateCallback(
         [](void* ud)
         {
             static_cast<App*>(ud)->appWindow_->PushRenderUpdate();
         },
-        const_cast<App*>(this)
+        this
     );
     player_->SetWakeupCallback(
         [](void* ud)
         {
             static_cast<App*>(ud)->appWindow_->PushPlayerWakeup();
         },
-        const_cast<App*>(this)
+        this
     );
-}
-
-void App::InitImGui() const
-{
-    appWindow_->ImGuiInit();
 }
 
 // ── Frame rendering ───────────────────────────────────────────────────────────
 
-void App::Render()
+void App::PrepareVideo(const int fbW, const int fbH)
 {
-    // Apply any pending theme changes here — before UIBeginFrame, i.e. outside
-    // any NewFrame()..Render() pair, which both calls require.
-    themeController_.ApplyPending(settings_.Get<ThemeSettings>());
-
-    int w = 0, h = 0;
-    appWindow_->GetSize(w, h);
-
-    // Tell the backend which logical layers changed so the Vulkan compositor can reuse
-    // cached layers and only composite (no-op on OpenGL). The video layer re-renders on a
-    // freshly decoded frame or a significant media/video state change; the UI layer
-    // re-renders on input, while something is animating (redrawPending_ carries the last
-    // frame's RequestRedraw), and whenever the video advances so live overlays
-    // (DebugOverlay stats, position readout, subtitles) track playback instead of freezing.
-    const bool videoDirty = player_->HasNewFrame() || pendingVideoRedraw_;
-    const bool uiDirty = uiEventThisIteration_ || redrawPending_ || videoDirty;
-    pendingVideoRedraw_ = false;
-    appWindow_->SetFrameDirty(videoDirty, uiDirty);
-
-    // Acquire the frame's render target. The backend may decline (e.g. the Vulkan
-    // swapchain is being recreated) — skip rendering and presenting this iteration.
-    if (!appWindow_->BeginFrame())
+    // The first scene-graph frame exposes the native graphics objects. Adopt Qt's
+    // OpenGL context or Vulkan frame resources, then build the matching video renderer.
+    if (!renderInit_)
     {
-        return;
+        auto* backend = static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend());
+        if (!backend)
+        {
+            // A failed backend init must not propagate a null handle into the player's
+            // renderer. Leave renderInit_ false so this retries on the next frame.
+            Log::Warn("App: graphics backend unavailable; deferring render init");
+            return;
+        }
+        backend->OnQtWindowCreated(static_cast<QQuickWindow*>(appWindow_->GetNativeHandle()));
+        player_->InitRender(backend);
+        renderInit_ = true;
     }
 
-    player_->RenderFrame(w, h);
-
-    appWindow_->UIBeginFrame();
-    uiCtx_.UpdateKeys(&keys_);
-    uiCtx_.BeginFrame();
-    for (auto* r : renderables_)
+    if (auto* backend = static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()))
     {
-        r->Render(uiCtx_);
+        backend->PrepareQtFrame(static_cast<QQuickWindow*>(appWindow_->GetNativeHandle()));
     }
-    // Capture whether anything still needs to animate (a plugin RequestRedraw, or ImGui's
-    // own active item / text caret) before ImGui::Render ends the frame; the loop uses it
-    // to decide whether to paint again next iteration or block on events.
-    redrawPending_ = uiCtx_.ConsumeRedrawRequest();
-    appWindow_->UIEndFrame();
+    player_->PrepareRenderFrame(fbW, fbH);
+}
 
-    appWindow_->SwapBuffers();
-    appWindow_->ImGuiRenderPlatformWindows();
+void App::RenderVideo(const int fbW, const int fbH)
+{
+    if (auto* backend = static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()))
+    {
+        backend->PrepareQtFrame(static_cast<QQuickWindow*>(appWindow_->GetNativeHandle()));
+    }
+    player_->DrawPreparedFrame(fbW, fbH);
+}
+
+void App::OnPlayerWakeup()
+{
+    DrainMediaEvents();
+    if (pendingResize_)
+    {
+        pendingResize_ = false;
+        ResizeToVideo();
+    }
 }
 
 // ── Event loop helpers ────────────────────────────────────────────────────────
@@ -364,9 +414,9 @@ void App::DrainMediaEvents()
         // spinner, the pause icon, …). Position updates are excluded so steady playback
         // isn't pinned to the display refresh by a redraw it doesn't need. pendingVideoRedraw_
         // both triggers a render (it is in the gate) and refreshes the cached video layer.
-        const bool positionTick = ev.type == MediaEventType::PropertyChange &&
-                                  (ev.property.prop == PlayerProperty::TimePos ||
-                                   ev.property.prop == PlayerProperty::PercentPos);
+        const bool positionTick =
+            ev.type == MediaEventType::PropertyChange &&
+            (ev.property.prop == PlayerProperty::TimePos || ev.property.prop == PlayerProperty::PercentPos);
         if (!positionTick)
         {
             pendingVideoRedraw_ = true;
@@ -438,64 +488,17 @@ void App::DrainMediaEvents()
 
 void App::Dispatch(const AppEvent& e)
 {
-    appWindow_->ImGuiProcessEvent(e);
-
-    // Any user input or window-repaint event makes the loop paint one frame so it reflects
-    // the input. RenderUpdate and PlayerWakeup are excluded: a new frame already renders via
-    // HasNewFrame(), and media state changes set pendingVideoRedraw_ in DrainMediaEvents().
-    // Continuing animations are driven separately by redrawPending_ (RequestRedraw).
-    //
-    // discreteInput_ is the one-shot subset (key/button/wheel/drop/custom) that must paint
-    // now. MouseMotion and WindowExposed are deliberately *not* discrete: a multi-viewport
-    // panel re-presented every frame keeps posting WindowExposed, and dragging the mouse
-    // floods MouseMotion — left un-throttled either one free-runs the paint rate. They still
-    // request a paint (uiEventThisIteration_) but the loop caps it to kUiRedrawIntervalMs.
-    switch (e.type) // NOLINT(clang-diagnostic-switch-enum)
-    {
-    case AppEventType::KeyDown:
-    case AppEventType::KeyUp:
-    case AppEventType::MouseButtonDown:
-    case AppEventType::MouseWheel:
-    case AppEventType::DropFile:
-    case AppEventType::Custom:
-        discreteInput_ = true;
-        uiEventThisIteration_ = true;
-        break;
-    case AppEventType::WindowExposed:
-    case AppEventType::MouseMotion:
-        uiEventThisIteration_ = true;
-        break;
-    default:
-        break;
-    }
-
+    // Qt owns the loop and schedules repaints (QQuickWindow::update) after input and on
+    // worker wakeups, so Dispatch only routes the event — no paint-gating bookkeeping.
+    // RenderUpdate/PlayerWakeup never arrive here: they are delivered as queued signals
+    // straight to QtAppWindow (update()) and OnPlayerWakeup() respectively.
     switch (e.type) // NOLINT(clang-diagnostic-switch-enum)
     {
     case AppEventType::Quit:
         // Let modules handle their own Quit cleanup (e.g. Playlist::FlushCurrentPos).
         registry_.OnEvent(e);
         registry_.OnShutdown();
-#if FRAMELIFT_MODULE_WIN_SHELL
-        if (winShell_)
-        {
-            winShell_->OnShutdown();
-        }
-#endif
-        running_ = false;
-        return;
-    case AppEventType::WindowExposed:
-        // Keep-alive already refreshed above; the repaint happens via the render gate
-        // (App::Run), compositing from the cached layers.
-        return;
-    case AppEventType::RenderUpdate:
-        // The player wants a repaint: a freshly decoded frame (also seen via
-        // HasNewFrame), or a paused redraw with no new frame (subtitle toggle, seek
-        // preview). Mark the video layer dirty so the gate renders and the compositor
-        // refreshes it even when no new frame is pending.
-        pendingVideoRedraw_ = true;
-        return;
-    case AppEventType::PlayerWakeup:
-        DrainMediaEvents();
+        appWindow_->PushQuitEvent(); // QGuiApplication::quit() on the GUI thread
         return;
     default:
         break;
@@ -518,17 +521,10 @@ void App::Dispatch(const AppEvent& e)
 
     if (e.type == AppEventType::KeyDown || e.type == AppEventType::KeyUp)
     {
-        if (auto* f = focus_.Focused())
+        if (registry_.OnEvent(e))
         {
-            if (auto* handler = static_cast<IEventHandler*>(f->QueryInterface(IEventHandler::InterfaceId)))
-            {
-                if (handler->OnEvent(e))
-                {
-                    return;
-                }
-            }
+            return;
         }
-        // ReSharper disable once CppExpressionWithoutSideEffects
         keys_.Handle(e);
         return;
     }
@@ -536,25 +532,32 @@ void App::Dispatch(const AppEvent& e)
     registry_.OnEvent(e);
 }
 
-void App::DrainEvents(const int timeoutMs)
+#if FRAMELIFT_BUILD_LAUNCH_TESTS
+void App::ScheduleTestExitIfRequested()
 {
-    AppEvent e;
-    (void)appWindow_->WaitNextEvent(e, timeoutMs);
-    do
+    bool ok = false;
+    int delayMs = qEnvironmentVariableIntValue("FRAMELIFT_TEST_EXIT_AFTER_MS", &ok);
+    if (!ok)
     {
-        Dispatch(e);
-    } while (appWindow_->PollNextEvent(e));
-}
-
-void App::RenderFrame()
-{
-    Render();
-    if (pendingResize_)
-    {
-        pendingResize_ = false;
-        ResizeToVideo();
+        return;
     }
+    if (delayMs < 0)
+    {
+        delayMs = 0;
+    }
+
+    Log::Info("test exit requested after {} ms", delayMs);
+    QTimer::singleShot(
+        delayMs,
+        [this]
+        {
+            AppEvent quit{};
+            quit.type = AppEventType::Quit;
+            Dispatch(quit);
+        }
+    );
 }
+#endif
 
 void App::ResizeToVideo() const
 {
@@ -575,8 +578,11 @@ void App::ResizeToVideo() const
             {
                 return;
             }
-            const float ratio = self->settings_.Get<GeneralSettings>().maxDisplayRatio;
-            self->appWindow_->ResizeToVideo(static_cast<int>(size->width), static_cast<int>(size->height), ratio);
+            // Cap the auto-sized window at 80% of the usable screen.
+            constexpr float kMaxDisplayRatio = 0.8f;
+            self->appWindow_->ResizeToVideo(
+                static_cast<int>(size->width), static_cast<int>(size->height), kMaxDisplayRatio
+            );
         },
         new AsyncSelf{this}
     );
@@ -595,83 +601,14 @@ int App::Run()
         moduleCtx_->Publish<OpenFileRequestEvent>({target.c_str(), true});
     }
 
-    // Paint one frame before the loop so the window (created hidden) is shown
-    // already displaying the idle screen instead of a black framebuffer. The
-    // hidden window emits no WindowExposed event, so we cannot rely on the loop
-    // to trigger this first render.
-    RenderFrame();
-    lastPaint_ = std::chrono::steady_clock::now();
-
     FRAMELIFT_PERF_END("app-start");
+#if FRAMELIFT_BUILD_LAUNCH_TESTS
+    ScheduleTestExitIfRequested();
+#endif
 
-    while (running_)
-    {
-        const bool renderable = appWindow_->IsRenderable();
-        // How long to block waiting for the next event:
-        //  - not renderable (minimized/occluded): we don't paint, so just idle on events
-        //    (100 ms) instead of busy-looping;
-        //  - a continuous paint is pending (an animation's redrawPending_, or a throttled
-        //    motion/expose held in continuousPaintPending_): wait only until the next ~60 fps
-        //    tick is due (kUiRedrawIntervalMs since lastPaint_). The timeout alone does NOT
-        //    pace the loop — a multi-viewport panel re-presented each frame keeps posting
-        //    WindowExposed and a moving mouse floods MouseMotion, so WaitNextEvent returns
-        //    early and the real cap is the wall-clock gate below, not this wait;
-        //  - otherwise idle: block on events indefinitely. Every source of visual change
-        //    posts a wake event — a decoded frame (RenderUpdate), input, media state
-        //    (PlayerWakeup), and async results (Playlist dir-watch / file dialog via
-        //    PushCustomEvent) — so App is a pure event dispatcher with no polling. (A source
-        //    that changed pixels without posting a wake event would stall the UI; none does.)
-        int timeoutMs;
-        if (!renderable)
-        {
-            timeoutMs = 100;
-        }
-        else if (redrawPending_ || continuousPaintPending_)
-        {
-            const auto sinceMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::steady_clock::now() - lastPaint_)
-                                     .count();
-            timeoutMs = std::max(0, kUiRedrawIntervalMs - static_cast<int>(sinceMs));
-        }
-        else
-        {
-            timeoutMs = -1;
-        }
-
-        uiEventThisIteration_ = false;
-        discreteInput_ = false;
-        DrainEvents(timeoutMs);
-
-        if (!running_ || !appWindow_->IsRenderable())
-        {
-            continue;
-        }
-
-        // A bare motion/expose wants a paint but is rate-limited; remember it so it still
-        // paints once the interval elapses even if no further event arrives. (Discrete input
-        // sets discreteInput_ below and paints immediately.)
-        if (uiEventThisIteration_)
-        {
-            continuousPaintPending_ = true;
-        }
-
-        // Paint when something visible changed. Immediate sources paint now: a freshly
-        // decoded frame, a player-requested repaint (media/subtitle/seek), a video-driven
-        // resize, or discrete user input. Continuous sources (an in-progress animation, or a
-        // pending motion/expose) are throttled to kUiRedrawIntervalMs against lastPaint_ so a
-        // wake-event flood can't free-run the paint rate — and with it the second-swapchain
-        // platform-window present nested in Render() — past ~60 fps. Otherwise loop back and
-        // block, leaving the GPU idle.
-        const bool immediate =
-            player_->HasNewFrame() || pendingVideoRedraw_ || pendingResize_ || discreteInput_;
-        const auto now = std::chrono::steady_clock::now();
-        const bool intervalElapsed = now - lastPaint_ >= std::chrono::milliseconds(kUiRedrawIntervalMs);
-        if (immediate || ((redrawPending_ || continuousPaintPending_) && intervalElapsed))
-        {
-            RenderFrame();
-            lastPaint_ = std::chrono::steady_clock::now();
-            continuousPaintPending_ = false;
-        }
-    }
-    return 0;
+    // Qt owns the loop now: show the window and run QGuiApplication::exec(). The
+    // demand-driven semantics are preserved by scheduling repaints (QQuickWindow::update)
+    // only on real change — input events, player worker wakeups — so the GPU idles
+    // otherwise. The window paints inside the scene-graph render pass via RenderVideo().
+    return appWindow_->RunEventLoop();
 }

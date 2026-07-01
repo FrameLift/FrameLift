@@ -1,14 +1,14 @@
 # FrameLift Plugin SDK
 
 Build plugins for [FrameLift](https://github.com/framelift/framelift) — a lightweight video player. A
-plugin ships as a **package**: one runtime-loaded DLL that bundles one or more **modules**, with the
-JSON-authored package/module metadata compiled in by CMake.
+plugin ships as one runtime-loaded Qt plugin DLL/SO with one `IModule` entry object and JSON-authored
+plugin metadata compiled in by CMake.
 
-The SDK is **dependency-free**: building a plugin needs only a C++23 compiler and
-CMake. No imgui, spdlog, stb, or JSON libraries are required — the host↔plugin
-boundary is a COM-like binary ABI (pure abstract interfaces, POD-only signatures,
-C entry points), so a plugin built with any compatible Windows compiler
-interoperates with the host regardless of how the host was built.
+The SDK keeps host implementation dependencies out of plugins: building a plugin
+needs a C++23 compiler, CMake, and Qt 6. No third-party library is required — the host↔plugin boundary is a COM-like binary ABI (pure
+abstract interfaces and POD-only signatures, fronted by a Qt plugin factory), so a
+plugin built with any compatible compiler interoperates with the host regardless of
+how the host was built.
 
 ## Layout
 
@@ -19,7 +19,7 @@ framelift-sdk-<ver>/
 │   ├── FrameLiftSdk.cmake       # add_framelift_plugin() + the FrameLiftSdk target
 │   ├── FrameLiftSdkConfig.cmake # find_package(FrameLiftSdk) entry point
 │   └── FrameLiftSdkConfigVersion.cmake
-├── include/framelift/           # public headers (umbrella: core.h, ui.h, services.h, platform.h)
+├── include/framelift/           # public headers (umbrella: core.h, services.h, platform.h)
 ├── src/                    # SDK helper sources, compiled into your plugin
 ├── README.md
 └── LICENSE
@@ -37,23 +37,23 @@ SDK shipped beside it, then you declare your plugin (see [Writing a plugin](#wri
 ```cmake
 add_framelift_plugin(MyPlugin
     PLUGIN_JSON "${CMAKE_CURRENT_SOURCE_DIR}/MyPlugin.Plugin.json"
-    core/MyPlugin.cpp
+    MyPlugin.cpp
     ${FRAMELIFT_SDK_SOURCES})
 ```
 
 ```sh
 cmake -B build
 cmake --build build
-# -> build/packages/<publisher>.<package>.<module>.dll
+# -> build/plugins/example.my_plugin.so   (.dll on Windows)
 ```
 
-Drop the resulting package DLL into the `packages/` directory next to `framelift.exe` and it loads on
-next launch. Modules default to enabled; to stop one loading, set `<module-id>=disabled` in
-`packages.ini` in the FrameLift config directory.
+Drop the resulting plugin DLL/SO into the `plugins/` directory next to `framelift.exe` and it loads on
+next launch. Plugins default to enabled; to stop one loading, set `<plugin-id>=disabled` in
+`plugins.ini` in the FrameLift config directory.
 
 ## Writing a plugin
 
-`core/MyPlugin.h`:
+`MyPlugin.h`:
 
 ```cpp
 #pragma once
@@ -67,11 +67,11 @@ protected:
 };
 
 FRAMELIFT_MODULE_ENTRY(MyPlugin, {
-    .render = false,
+    .qml = false,
 })
 ```
 
-`core/MyPlugin.cpp`:
+`MyPlugin.cpp`:
 
 ```cpp
 #include "MyPlugin.h"
@@ -90,7 +90,7 @@ project(MyPlugin LANGUAGES CXX)
 find_package(FrameLiftSdk REQUIRED PATHS "/path/to/framelift-sdk/cmake" NO_DEFAULT_PATH)
 add_framelift_plugin(MyPlugin
     PLUGIN_JSON "${CMAKE_CURRENT_SOURCE_DIR}/MyPlugin.Plugin.json"
-    core/MyPlugin.cpp
+    MyPlugin.cpp
     ${FRAMELIFT_SDK_SOURCES})
 ```
 
@@ -105,96 +105,70 @@ add_framelift_plugin(MyPlugin
   "description": "Does a thing",
   "version": "1.0.0",
   "abi": 1,
-  "modules": ["core/Core.Module.json"]
-}
-```
-
-`core/Core.Module.json`:
-
-```json
-{
-  "fileVersion": 1,
-  "id": "example.my_plugin.core",
-  "name": "My Plugin Core",
-  "description": "Main runtime module.",
   "enabled": true,
   "provides": { "features": ["example.my_plugin"] },
-  "requires": { "modules": [], "features": [] },
-  "optional": { "modules": [], "features": [] },
+  "requires": { "plugins": [], "features": [] },
+  "optional": { "plugins": [], "features": [] },
   "platforms": []
 }
 ```
-
-### Packages with several modules
-
-One package DLL can carry more than one module — useful for a large plugin whose pieces should be
-toggled independently. List every `.Module.json` in the `.Plugin.json` `modules` array, then register
-each entry type against its module id (the ids must match the JSON):
-
-```cpp
-FRAMELIFT_PACKAGE_BEGIN()
-  FRAMELIFT_MODULE("example.my_plugin.core",  MyPluginCore,  { .renderOrder = 50 })
-  FRAMELIFT_MODULE("example.my_plugin.tools", MyPluginTools, { .render = false })
-FRAMELIFT_PACKAGE_END()
-```
-
-Each module shows up as its own toggle under the package on the Settings → Plugins page, persisted by
-module id in `packages.ini`. Artifact names are lowercase: a multi-module package DLL is named
-`publisher.package` (no module suffix); a single-module one is `publisher.package.module`.
-`FRAMELIFT_MODULE_ENTRY` is the single-module shorthand for the block above.
 
 ### Umbrella headers
 
 | Header | Provides |
 |--------|----------|
 | `<framelift/core.h>`     | module entry macro, module lifecycle, `ModuleBase`, context, ABI, events, hotkeys, `Log` |
-| `<framelift/ui.h>`       | `IRenderable`, `Panel`, `UIContext`, widgets |
-| `<framelift/services.h>` | host + cross-plugin service interfaces (`IHistory`, `ISettingsStore`, `ISettingsRegistry`, `IPackageCatalog`, `IFontCatalog`, `IAppPaths`) |
-| `<framelift/platform.h>` | media playback family (`IMediaPlayback`, `IMediaProperties`, `IVideoOutput`, `IAudioControl`, `ISubtitleControl`), window family (`IAppWindow`, `IGraphicsSurface`, `IEventPump`), `IDirWatcher`, `IFileDialog` |
+| Qt/QML                   | QObject view models and plugin-embedded Qt Quick components |
+| `<framelift/services.h>` | host + cross-plugin service interfaces (`IHistory`, `ISettingsStore`, `ISettingsRegistry`, `IPluginCatalog`, `IAppPaths`) |
+| `<framelift/platform.h>` | media playback family (`IMediaPlayback`, `IMediaProperties`, `IVideoOutput`, `IAudioControl`, `ISubtitleControl`), window/event interfaces (`IAppWindow`, `IEventPump`), `IFileDialog` |
 
 ### Module Entry
 
 `FRAMELIFT_MODULE_ENTRY(Type, { ... })` belongs in the module header after the entry class declaration.
 It takes the module entry type and a small runtime
-`FrameLiftModuleEntryDesc` initializer. Package identity, file format version, package version, ABI,
-modules, features, dependencies, and platforms come from the JSON metadata compiled by CMake:
+`FrameLiftModuleEntryDesc` initializer. Plugin identity, file format version, plugin version, ABI,
+features, dependencies, and platforms come from the JSON metadata compiled by CMake:
 
 ```cpp
-FRAMELIFT_MODULE_ENTRY(MyPanel, {
-    .renderOrder = 50,                    // draw order; lower draws first / further back
+FRAMELIFT_MODULE_ENTRY(MyModule, {
+    .renderOrder = 50,                    // QML layer order; lower draws first / further back
 })
 ```
 
-`render` defaults to `true`, so a rendering module never mentions it — but a type
-that does not implement `IRenderable` fails to compile until it states
-`.render = false` (or derives `IRenderable`). `renderOrder` is ignored when
-rendering is disabled.
+QML is enabled by default, so the entry type must inherit `QObject` and the plugin
+target must pass `QML_ENTRY` to `add_framelift_plugin`. Service-only modules opt out
+with `.qml = false`; in that case `renderOrder` is ignored.
 
-The macro bakes a `framelift_module_info()` export carrying the generated package/module metadata and
-the ABI declared in JSON. The host reads it, rejects incompatible ABI versions, resolves package
-dependencies, and only then creates the module object.
+The macro emits a Qt plugin factory implementing `IPlugin`. The host reads the
+embedded JSON metadata without instantiating the plugin, rejects incompatible ABI
+versions, resolves plugin dependencies, and only then creates the module object and
+their QObject/QML surfaces.
 
-### Declarative settings & keybinds
+### Settings & keybinds
 
-Instead of hand-writing `LoadSettings`/`SaveSettings` and the keybind
-load→register→bind dance, return descriptor tables over your members
-(`<framelift/PluginFields.h>`, included by `<framelift/core.h>`). `ModuleBase`'s default
-hooks consume them — persistence, the Settings → Keybinds page row, and the
-hotkey binding all come from one declaration:
+Settings are explicit per module: override `LoadSettings`/`SaveSettings` and
+surface any Settings UI through a plugin-owned QML page registered with the
+settings page registry. Keybinds still use descriptor tables so the host can load,
+register, and bind them consistently:
 
 ```cpp
-class MyPanel : public ModuleBase
+class MyModule : public QObject, public ModuleBase
 {
 protected:
-    std::vector<framelift::SettingsField> SettingsFields() override
+    void LoadSettings(IModuleSettings& ps) override
     {
-        return {{"maxEntries", &maxEntries_, 200}};
+        maxEntries_ = ps.GetInt("maxEntries", 200);
+    }
+
+    void SaveSettings(IModuleSettings& ps) override
+    {
+        ps.SetInt("maxEntries", maxEntries_);
     }
 
     std::vector<framelift::Keybind> Keybinds() override
     {
-        return {{"Toggle panel", "togglePanel", &toggleKey_, "P",
-                 [this] { Toggle(); }}};
+        return {{"Toggle surface", "toggleSurface", &toggleKey_, "P",
+                 [this] { ToggleSurface(); }}};
     }
 
 private:
@@ -202,10 +176,6 @@ private:
     std::string toggleKey_ = "P";
 };
 ```
-
-Overriding one of the hooks (e.g. `LoadSettings`) replaces the table-driven
-default for that leg only; call the `ModuleBase::` version to keep it and add
-extras.
 
 ### Media events
 
@@ -239,36 +209,30 @@ void HandleMediaEvent(const MediaEvent& e) override
 The host↔plugin boundary is `noexcept` — an exception crossing it would be
 undefined behavior. The SDK scaffolding catches plugin exceptions on the plugin
 side of the boundary (`framelift::Guard` in `<framelift/Guard.h>`): a throw from a
-`ModuleBase` hook (`OnInstall`, `HandleEvent`, `HandleMediaEvent`, …), a
-`SafeRenderable`/`Panel` render, a helper-registered lambda (`framelift::Subscribe`,
-`framelift::Bind`, `framelift::AddItem`, settings pages), or the plugin constructor is
+`ModuleBase` hook (`OnInstall`, `HandleEvent`, `HandleMediaEvent`, ...), a
+helper-registered lambda (`framelift::Subscribe`, `framelift::Bind`, `framelift::AddItem`),
+or the plugin constructor is
 logged via `Log::Error` and swallowed with a safe fallback — the plugin
-misbehaves loudly instead of crashing the host. Only code that implements
-`IModule`/`IRenderable` raw, bypassing the scaffolding, keeps
-terminate-on-throw semantics.
+misbehaves loudly instead of crashing the host. Only code that implements `IModule`
+raw, bypassing the scaffolding, keeps terminate-on-throw semantics.
 
-### Native backend access (escape hatches)
+### Native backend access
 
-The curated interfaces cover the common cases; for anything beyond them the raw
-platform objects are reachable — bring the matching headers/libraries yourself:
-
-- `IAppWindow::GetNativeHandle()` — the raw `SDL_Window*`.
-
-(The graphics API behind the window — OpenGL or Vulkan — is an internal detail and is
-no longer exposed to plugins; the host owns all video/UI rendering.)
+The graphics API behind the window — OpenGL or Vulkan — is an internal detail and is
+not exposed to plugins; the host owns all video/UI rendering.
 
 ## ABI compatibility
 
 The ABI is a single integer, `FRAMELIFT_ABI_VERSION` in `<framelift/ModuleABI.h>` — not a
-`major.minor.patch` tuple. Each plugin package declares its load-time contract with
+`major.minor.patch` tuple. Each plugin declares its load-time contract with
 `"abi": N` in `[Plugin].Plugin.json`; CMake validates that value against the SDK headers and
-embeds it into `framelift_module_info()`. Before touching a vtable the host loads a plugin only
-when `plugin.abiVersion == host.abiVersion` — an exact match, because host and plugins are built
-in lockstep, so a mismatch means a stale binary to rebuild rather than a version to negotiate.
+embeds it into the Qt plugin metadata. Before touching a vtable the host loads a plugin only when
+`plugin.abiVersion == host.abiVersion` — an exact match, because host and plugins are built in
+lockstep, so a mismatch means a stale binary to rebuild rather than a version to negotiate.
 
-Bump the version only on a break to the core handshake: a `framelift_*` export, the
-`FrameLiftPackageInfo`/`FrameLiftModuleInfo` layout, a host-*called* interface (`IModule`,
-`IRenderable`), or the bootstrap surface of `IModuleContext`. New host capabilities are **not**
+Bump the version only on a break to the core handshake: the Qt `IPlugin` factory,
+plugin metadata layout, a host-*called* interface (`IModule`), or the bootstrap
+surface of `IModuleContext`. New host capabilities are **not**
 breaks — they ship as new service interfaces a plugin discovers with `ctx.GetService<T>()`, so
 they never bump the version.
 
