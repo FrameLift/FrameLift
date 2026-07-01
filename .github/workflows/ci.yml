@@ -211,6 +211,7 @@ jobs:
             -DFRAMELIFT_BUILD_LAUNCH_TESTS=ON \
             -DFRAMELIFT_VERSION="$VERSION" \
             -DFRAMELIFT_VERSION_DISPLAY="$VERSION_DISPLAY"
+          cmake --build "$BUILD_DIR" --target all_qmllint
           cmake --build "$BUILD_DIR" --parallel
           test -f "$BUILD_DIR/framelift"
           test -f "$BUILD_DIR/plugins/framelift.playlist.so"
