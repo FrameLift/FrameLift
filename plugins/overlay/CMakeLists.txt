@@ -7,7 +7,12 @@ add_framelift_plugin(Overlay
         ${FRAMELIFT_SDK_SOURCES}
 )
 set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/img/icon.svg" PROPERTIES QT_RESOURCE_ALIAS icon.svg)
+set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/img/icon-play.svg" PROPERTIES QT_RESOURCE_ALIAS icon-play.svg)
+set_source_files_properties("${CMAKE_SOURCE_DIR}/assets/img/icon-pause.svg" PROPERTIES QT_RESOURCE_ALIAS icon-pause.svg)
 qt_add_resources(
         Overlay overlay_assets
         PREFIX "/qt/qml/FrameLift/Plugins/Overlay"
-        FILES "${CMAKE_SOURCE_DIR}/assets/img/icon.svg")
+        FILES
+        "${CMAKE_SOURCE_DIR}/assets/img/icon.svg"
+        "${CMAKE_SOURCE_DIR}/assets/img/icon-play.svg"
+        "${CMAKE_SOURCE_DIR}/assets/img/icon-pause.svg")

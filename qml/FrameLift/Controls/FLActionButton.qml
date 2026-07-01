@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 
 Button {
     id: control
@@ -9,12 +10,20 @@ Button {
 
     property color accentColor: FLTheme.accent
 
-    contentItem: Text {
+    // Tint monochrome SVG icons to match the label colour. IconLabel routes this
+    // through IconImage, so `icon.source` buttons recolour without extra effects.
+    icon.color: FLTheme.text
+    icon.width: 18
+    icon.height: 18
+
+    contentItem: IconLabel {
+        spacing: control.spacing
+        mirrored: control.mirrored
+        display: control.display
+        icon: control.icon
         text: control.text
-        color: FLTheme.text
         font: control.font
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+        color: FLTheme.text
     }
 
     background: Rectangle {

@@ -94,7 +94,7 @@ Item {
                 // the button intercepting Space and double-toggling against the host
                 // play/pause hotkey (net no-op — pausing appears broken).
                 focusPolicy: Qt.NoFocus
-                text: root.vm !== null && root.vm.paused ? "Play" : "Pause"
+                icon.source: root.vm !== null && root.vm.paused ? "icon-play.svg" : "icon-pause.svg"
                 onClicked: root.vm.togglePause()
             }
             Slider {
