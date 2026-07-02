@@ -8,8 +8,10 @@
 #include "FFmpegPacketQueue.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -79,6 +81,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
         videoClock_.Reset();
         subtitleSeekClockOverrideActive_ = false;
         hasPendingSeek_ = false; // discard any seek queued before this load
+        seekKicked_ = false;     // and its kick — must not leak into this file's workers
         hasPendingAudioSwitch_ = false;
         hasPendingSubSwitch_ = false;
     }
@@ -95,13 +98,25 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     EmitFlag(PlayerProperty::Seeking, false);
     UpdateCoreIdle();
 
+    // Sidecar discovery is pure filesystem work, independent of the demuxer —
+    // overlap it with the container open/probe instead of serializing after them.
+    // std::async's future blocks in its destructor, so the scan cannot outlive
+    // PlayFile even on the early error returns below.
+    auto sidecarScan = std::async(
+        std::launch::async,
+        [path, subs = subAutoLoad_, auds = audioFileAutoLoad_]
+        {
+            return ScanSidecarFiles(path, subs, auds);
+        }
+    );
+
     SessionContext ctx;
     if (!OpenSessionInputs(path, ctx))
     {
         return;
     }
     OpenVideoDecoder(ctx);
-    if (!BindSelectedTracks(path, ctx))
+    if (!BindSelectedTracks(path, ctx, sidecarScan))
     {
         return;
     }
@@ -140,7 +155,20 @@ bool FFmpegPlayer::OpenSessionInputs(const std::string& path, SessionContext& ct
     int openRet = 0;
     {
         PerfScope perf("file-open-input");
-        openRet = avformat_open_input(&ctx.fmt, path.c_str(), nullptr, nullptr);
+        // Opt-in fast probe: cap how much data find_stream_info may read/decode
+        // (default is 5 MB / up to 5 s of frames). Well-formed MP4/MKV declare
+        // their streams in headers and don't need deep probing; odd containers
+        // (TS/AVI) may misdetect under the cap, which is why this is off by
+        // default. No fallback reopen — that would double worst-case latency on
+        // exactly the files that need the full probe.
+        AVDictionary* opts = nullptr;
+        if (fastProbe_.load())
+        {
+            av_dict_set(&opts, "probesize", "1048576", 0);
+            av_dict_set(&opts, "analyzeduration", "0", 0);
+        }
+        openRet = avformat_open_input(&ctx.fmt, path.c_str(), nullptr, opts ? &opts : nullptr);
+        av_dict_free(&opts);
     }
     if (openRet < 0)
     {
@@ -210,15 +238,25 @@ void FFmpegPlayer::OpenVideoDecoder(SessionContext& ctx)
     {
         Log::Warn("FFmpegPlayer: video decoder unavailable; audio-only playback");
         avcodec_free_context(&ctx.vDec);
+        // A cached hw device that fails to open a decoder may be stale (driver
+        // reset, GPU gone) — drop it so the next open creates a fresh one.
+        av_buffer_unref(&hwDeviceCache_.device);
+        hwDeviceCache_.type = -1;
     }
 }
 
-bool FFmpegPlayer::BindSelectedTracks(const std::string& path, SessionContext& ctx)
+bool FFmpegPlayer::BindSelectedTracks(const std::string& path, SessionContext& ctx,
+                                      std::future<std::vector<ExternalSource>>& sidecarScan)
 {
-    // Discover sidecar files and build the audio/subtitle track list.
+    // Collect the sidecar scan launched at the top of PlayFile (usually finished
+    // long ago, hidden behind the container open/probe) and build the track list.
     {
         PerfScope perf("track-discovery");
-        ScanExternalSources(path);
+        auto sources = sidecarScan.get();
+        {
+            std::lock_guard lock(tracksMutex_);
+            externalSources_ = std::move(sources);
+        }
         BuildTrackList(ctx.fmt, ctx.defaultAudioIdx);
     }
 
@@ -337,6 +375,13 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx
     {
         FRAMELIFT_PERF_START("seek-apply");
     }
+    {
+        // The kick is consumed here regardless of the seek's outcome: workers are
+        // joined, so no in-flight present remains for it to bail, and a leftover
+        // flag would make the next session's first present bail forever.
+        std::lock_guard lock(mutex_);
+        seekKicked_ = false;
+    }
     if (!std::isnan(seekTo))
     {
         const auto ts = static_cast<int64_t>(seekTo * AV_TIME_BASE);
@@ -435,6 +480,15 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
         extAudioThread_ = std::thread(&FFmpegPlayer::ExternalAudioDemux, this, ctx.aud.fmt, ctx.aud.streamIndex);
     }
 
+    // Post-seek refill: time from worker spawn to the first packet handed to the
+    // presented stream's queue — isolates the demuxer's time-to-first-packet after
+    // a seek (the part of the seek budget the read-ahead cache can't hide).
+    bool timingRefill = seekRefresh_.load();
+    if (timingRefill)
+    {
+        FRAMELIFT_PERF_START("seek-refill");
+    }
+
     SessionEndReason reason = SessionEndReason::Eof;
     for (;;)
     {
@@ -460,19 +514,27 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
             break;
         }
         bool pushed = true;
+        bool presentedStream = false; // the stream whose first frame settles a seek
         if (hasVideo_ && pkt->stream_index == ctx.vIdx)
         {
             pushed = videoQ_->Push(pkt);
+            presentedStream = true;
         }
         else if (ctx.aud.dec && !ctx.aud.external && pkt->stream_index == ctx.aud.streamIndex)
         {
             pushed = audioQ_->Push(pkt);
+            presentedStream = !hasVideo_;
         }
         else if (ctx.subIdx >= 0 && pkt->stream_index == ctx.subIdx)
         {
             pushed = subQ_->Push(pkt);
         }
         av_packet_unref(pkt);
+        if (timingRefill && presentedStream && pushed)
+        {
+            FRAMELIFT_PERF_END("seek-refill");
+            timingRefill = false;
+        }
         if (!pushed)
         {
             // A queue was aborted — a stop or seek is pending; re-resolve which.
@@ -503,6 +565,13 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
         videoQ_->Abort();
         subQ_->Abort();
     }
+    // Time the worker teardown only on the seek path (EOF/stop joins aren't part
+    // of any latency budget) so the span means one thing.
+    const bool timingJoin = reason == SessionEndReason::Seek;
+    if (timingJoin)
+    {
+        FRAMELIFT_PERF_START("seek-join");
+    }
     if (audioThread_.joinable())
     {
         audioThread_.join();
@@ -518,6 +587,10 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
     if (extAudioThread_.joinable())
     {
         extAudioThread_.join();
+    }
+    if (timingJoin)
+    {
+        FRAMELIFT_PERF_END("seek-join");
     }
     return reason;
 }
@@ -616,6 +689,7 @@ void FFmpegPlayer::CloseSession(SessionContext& ctx, AVPacket*& pkt)
     {
         avcodec_free_context(&ctx.sDec);
     }
+    JoinSubtitlePreload(); // must not outlive the session whose track it feeds
     subtitles_->ClearTrack();
     avformat_close_input(&ctx.fmt);
     {
@@ -652,7 +726,7 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         case VideoDecodeMode::D3D11VA:
         case VideoDecodeMode::DXVA2:
         case VideoDecodeMode::VAAPI:
-            return hw.TryEnableBackend(codec, dec, HwBackendFromVideoDecodeMode(mode));
+            return hw.TryEnableBackend(codec, dec, HwBackendFromVideoDecodeMode(mode), &hwDeviceCache_);
         case VideoDecodeMode::CudaZeroCopy:
             return hw.TryEnableCudaZeroCopy(codec, dec, warnUnavailable);
         case VideoDecodeMode::Off:

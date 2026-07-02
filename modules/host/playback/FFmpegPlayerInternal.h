@@ -52,9 +52,12 @@ extern "C"
 //                        paths (Session), DecodeThreadMain catch (core)
 //   "file-load-metadata" START PlayFile (Session)            END same set as above
 //   "seek"               START RequestSeek (Commands)        END workers' first
-//                        present (Workers), DecodeThreadMain catch (core)
-// Self-contained pairs ("seek-apply", "cache-stall", the PerfScope-wrapped
-// open/bind phases) stay within one function and are safe to rename locally.
+//                        present (Workers) — gated on seekRefresh_ so only the
+//                        first post-seek (target) frame ends it, never a stale
+//                        pre-seek frame; DecodeThreadMain catch (core)
+// Self-contained pairs ("seek-apply", "seek-join", "seek-refill", "cache-stall",
+// the PerfScope-wrapped open/bind phases) stay within one function and are safe
+// to rename locally.
 // EmitPlaybackSummary() must remain reachable from every session exit path.
 
 namespace ffplay_detail

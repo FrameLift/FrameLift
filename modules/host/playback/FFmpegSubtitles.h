@@ -2,6 +2,7 @@
 
 #include <framelift/platform/IMediaPlayer.h> // SubtitleStyle
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -62,9 +63,21 @@ public:
     // Returns false if the file could not be opened/decoded.
     bool LoadExternalFile(const char* path);
 
-    // Open the media container separately and pre-load every event from the selected
-    // embedded subtitle stream. This keeps the playback demuxer positioned where it is.
-    bool LoadEmbeddedStream(const char* path, int streamIndex);
+    // Embedded-stream preload, split so the whole-container cue read
+    // (the expensive part — it demuxes every packet of the file) can run off the
+    // open path. BeginDeferredPreload does only the outcome-determining work
+    // synchronously — opens the separate demuxer, validates the stream, opens the
+    // decoder, and replaces the track seeded with the codec header — so the caller
+    // keeps its live-decode fallback on failure. On success the caller must invoke
+    // RunDeferredPreload (on any thread) exactly once to read/decode the cues; the
+    // track is only touched again in one short locked section at the end, and the
+    // feed is skipped if the track was replaced meanwhile (generation check).
+    bool BeginDeferredPreload(const char* path, int streamIndex);
+    void RunDeferredPreload();
+
+    // Make a running RunDeferredPreload return early (its packet loop polls this).
+    // The caller still joins its thread; the partial cues are discarded with it.
+    void AbortPreload();
 
     // Drop all buffered events (used on seek for embedded/live tracks).
     void FlushEvents();
@@ -95,8 +108,24 @@ private:
     // the current track. Used by LoadExternalFile. Caller holds mutex_.
     bool PreloadFromFormatLocked(AVFormatContext* fmt, int streamIndex);
 
+    // Shared setup for the sync/deferred preloads: pick/validate the subtitle
+    // stream, open its decoder, and replace track_ seeded with the decoder's ASS
+    // header (bumps trackGen_). Caller holds mutex_; on success the caller owns
+    // outDec and must free it when done reading.
+    bool SetupPreloadTrackLocked(AVFormatContext* fmt, int streamIndex, AVCodecContext*& outDec, int& outIdx);
+
     // Re-install the current style override on the renderer. Caller holds mutex_.
     void ApplyStyleLocked();
+
+    // Demuxer/decoder handed from BeginDeferredPreload to RunDeferredPreload, which
+    // takes sole ownership (reads them without mutex_) and frees them.
+    struct PendingPreload
+    {
+        AVFormatContext* fmt = nullptr;
+        AVCodecContext* dec = nullptr;
+        int streamIndex = -1;
+        std::uint64_t gen = 0; // trackGen_ at Begin — feed only while still current
+    };
 
     mutable std::mutex mutex_;
     ass_library* lib_ = nullptr;
@@ -105,4 +134,7 @@ private:
 
     SubtitleStyle style_{};         // current user override (overrideEnabled gates it)
     bool forceNextUpdate_ = false;  // make the next RenderOverlay re-rasterize once
+    PendingPreload pending_;        // guarded by mutex_ between Begin and Run
+    std::uint64_t trackGen_ = 0;    // bumped on every track replacement (guarded by mutex_)
+    std::atomic<bool> abortPreload_{false};
 };

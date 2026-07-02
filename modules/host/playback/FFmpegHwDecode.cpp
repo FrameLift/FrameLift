@@ -79,7 +79,8 @@ bool FFmpegHwDecode::TryEnable(const AVCodec* codec, AVCodecContext* dec)
     return false; // no backend available — caller decodes in software
 }
 
-bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend)
+bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend,
+                                      HwDeviceCache* cache)
 {
     if (!codec || !dec)
     {
@@ -113,10 +114,27 @@ bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec,
     }
 
     AVBufferRef* device = nullptr;
-    const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
-    if (err < 0 || !device)
+    if (cache && cache->device && cache->type == static_cast<int>(type))
     {
-        return false; // device unavailable (no driver / no GPU)
+        device = av_buffer_ref(cache->device); // reuse the previous file's device
+        if (!device)
+        {
+            return false;
+        }
+    }
+    else
+    {
+        const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
+        if (err < 0 || !device)
+        {
+            return false; // device unavailable (no driver / no GPU)
+        }
+        if (cache)
+        {
+            av_buffer_unref(&cache->device); // a different backend was cached
+            cache->device = av_buffer_ref(device);
+            cache->type = static_cast<int>(type);
+        }
     }
 
     device_ = device;

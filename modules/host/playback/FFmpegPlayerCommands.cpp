@@ -145,6 +145,7 @@ void FFmpegPlayer::RequestSeek(double target) noexcept
         if (kick)
         {
             seekSettled_ = false; // re-settled by the worker that presents the post-seek frame
+            seekKicked_ = true;   // an in-flight present() may bail its stale frame now
         }
     }
     if (kick)
@@ -231,6 +232,9 @@ void FFmpegPlayer::ApplySettings(const Settings& s)
 {
     SetPlaybackOptions(ToPlaybackOptions(s.Get<PlaybackSettings>()));
     SetVideoDecodeMode(ToVideoDecodeMode(s.Get<PlaybackSettings>()));
+    // Module-internal knob (not part of the SDK PlaybackOptions POD): applies to
+    // the next avformat_open_input.
+    fastProbe_ = s.Get<PlaybackSettings>().fastProbe;
     SetReadAheadCache(ToReadAheadCacheOptions(s.Get<CacheSettings>()));
     SetSubtitleStyle(ToSubtitleStyle(s.Get<SubtitleSettings>()));
     SetAudioPreferences(ToAudioPreferences(s.Get<AudioSettings>()));

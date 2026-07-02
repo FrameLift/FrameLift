@@ -137,6 +137,47 @@ struct VideoWallClockState
     }
 };
 
+// Liveness guard for the frame-pacing wait. A frame may wait on the master clock
+// only while that clock is actually advancing: when audio is starved or the sink
+// stalls (post-seek interleave gap, device trouble), the clock pins and the frame
+// would wait forever — and holding it also parks the demuxer via queue
+// backpressure, which is what turns an audio hiccup into a permanent freeze
+// (video consumption is what un-parks the pipeline, which is what restores
+// audio). After holdLimitSec of waiting with less than 1 ms of clock movement,
+// the frame must present anyway; the clock re-anchors once audio recovers.
+inline bool ShouldBreakFrameHold(double heldSec, double clockAdvanceSec, double holdLimitSec)
+{
+    return heldSec >= holdLimitSec && clockAdvanceSec < 1e-3;
+}
+
+// Exact (hr) seeks decode forward from the landed keyframe and discard every frame
+// before the target — pure overhead. Non-reference frames in that window can be
+// skipped by the decoder entirely (AVDISCARD_NONREF) without affecting the target:
+// reference frames still decode, so the presented frame is bit-exact. The decision
+// is safe purely per-packet: any frame whose pts is inside the skip window would be
+// discarded by the present path regardless, so skipping its decode can never change
+// what is shown — even for late reordered packets after the target has presented.
+enum class SeekDiscardMode : std::uint8_t
+{
+    DecodeAll,  // no live exact-seek target, or the frame is near/after it
+    SkipNonRef, // decoder may skip non-reference frames (discard window)
+};
+
+// pktPtsSec: the packet's pts (fallback dts) in seconds; NaN when unknown — unknown
+// timestamps must decode normally (NaN compares false, yielding DecodeAll).
+// seekSkipPts: the live exact-seek target, or a huge negative sentinel (< -1e17)
+// for keyframe seeks / normal playback. margin keeps frames near the target decoded
+// even when packet timestamps jitter (B-frame reorder): callers pass ~2 frame
+// intervals.
+inline SeekDiscardMode DecideSeekDiscard(double pktPtsSec, double seekSkipPts, double margin)
+{
+    if (seekSkipPts < -1e17)
+    {
+        return SeekDiscardMode::DecodeAll;
+    }
+    return pktPtsSec < seekSkipPts - margin ? SeekDiscardMode::SkipNonRef : SeekDiscardMode::DecodeAll;
+}
+
 // Clamp a requested seek target (seconds) to the playable range. Negative targets
 // (seeking before the start) clamp to 0; targets past the end clamp to duration.
 // A non-positive duration means the length is unknown — only the lower bound applies.

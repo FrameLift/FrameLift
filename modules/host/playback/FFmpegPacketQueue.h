@@ -77,6 +77,7 @@ public:
             return false;
         }
         q_.push(owned);
+        primed_ = true;
         lock.unlock();
         notEmpty_.notify_one();
         if (budget_)
@@ -97,7 +98,10 @@ public:
         // A non-EOF empty queue means the worker must wait for the demuxer to
         // catch up — a read-ahead underrun. Count it as a miss and bracket the
         // wait as a cache stall (drives PausedForCache); otherwise it's a hit.
-        const bool stall = budget_ && q_.empty() && !eof_ && !abort_;
+        // Before the first Push after a Flush (primed_), an empty queue is the
+        // expected pipeline fill after a seek/open — already inside the "seek"/
+        // "file-open" spans — not an underrun, so it is neither a miss nor a stall.
+        const bool stall = budget_ && q_.empty() && !eof_ && !abort_ && primed_;
         if (stall)
         {
             budget_->RecordMiss();
@@ -180,12 +184,19 @@ public:
         }
         eof_ = false;
         abort_ = false;
+        primed_ = false;
     }
 
     [[nodiscard]] bool Aborted() const
     {
         std::lock_guard lock(m_);
         return abort_;
+    }
+
+    [[nodiscard]] bool AtEof() const
+    {
+        std::lock_guard lock(m_);
+        return eof_;
     }
 
 private:
@@ -197,4 +208,5 @@ private:
     ReadAheadCache* budget_ = nullptr; // shared byte budget + metrics; null ⇒ count bound only
     bool eof_ = false;
     bool abort_ = false;
+    bool primed_ = false; // a Push has landed since the last Flush
 };

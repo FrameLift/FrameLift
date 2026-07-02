@@ -25,6 +25,7 @@ struct PlaybackSettings
     bool hrSeek = true;
     bool subAutoLoad = true;
     bool audioFileAutoLoad = true;
+    bool fastProbe = false;
 };
 
 inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
@@ -46,6 +47,9 @@ inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
                       return std::string(VideoDecodeModeName(mode));
                   });
     reg.AddBool("playback.hrSeek", s.hrSeek, "Use precise (high-resolution) seeking.");
+    reg.AddBool("playback.fastProbe", s.fastProbe,
+                "Speed up file opening by limiting stream probing. Clean MP4/MKV files open faster; "
+                "unusual containers (TS/AVI) may misdetect tracks — leave off if tracks go missing.");
     reg.AddBool("playback.subAutoLoad", s.subAutoLoad, "Auto-load subtitle files matching the opened media.");
     reg.AddBool("playback.audioFileAutoLoad", s.audioFileAutoLoad,
                 "Auto-load external audio files matching the opened media.");

@@ -68,7 +68,14 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         if (!hasVideo_)
         {
             FRAMELIFT_PERF_END("file-open");
-            FRAMELIFT_PERF_END("seek");
+            if (seekRefresh_.load())
+            {
+                // Same rule as the video worker's present(): "seek" ends only on the
+                // first post-seek delivery, and audio-only must clear the refresh flag
+                // itself (no video worker exists to do it).
+                FRAMELIFT_PERF_END("seek");
+            }
+            seekRefresh_ = false;
 
             const auto now = std::chrono::steady_clock::now();
             if (now - lastEmit >= std::chrono::milliseconds(250))
@@ -81,6 +88,68 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
                     EmitDouble(PlayerProperty::PercentPos, pos / duration_.load() * 100.0);
                 }
             }
+        }
+
+        // Pace this worker to the device's real-time drain. The PCM ring the
+        // device pulls from is unbounded, so without a brake here the worker
+        // decodes the entire read-ahead into raw PCM at once and then waits on an
+        // empty packet queue — inflating memory (seconds of F32 PCM instead of
+        // compressed packets) and bracketing a phantom "cache-stall" whenever the
+        // demuxer is parked on the video queue's backpressure. Holding the unheard
+        // backlog near 0.5 s keeps audio compressed in the packet queue (where the
+        // read-ahead budget governs it) and makes an empty audio queue mean a real
+        // underrun again. Every control change (pause/seek/load/stop) Wake()s cv_,
+        // so this wait never outlives one.
+        constexpr double kMaxQueuedAudioSec = 0.5;
+        for (;;)
+        {
+            const int bps = audioOut_->BytesPerSec();
+            if (!audioOut_->HasDevice() || bps <= 0 || audioQ_->Aborted() || audioQ_->AtEof())
+            {
+                // No drain to pace against, a seek/stop tore the queue down, or the
+                // session hit EOF — at EOF the worker must drain and exit promptly
+                // (the join in RunDemuxSession is waiting), matching the pre-pacing
+                // behavior: the tail rides the ring while the video worker paces out.
+                break;
+            }
+            const double queuedSec = static_cast<double>(audioOut_->QueuedBytes()) / bps;
+            if (queuedSec <= kMaxQueuedAudioSec)
+            {
+                break;
+            }
+            std::unique_lock lock(mutex_);
+            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || hasPendingSeek_)
+            {
+                break; // let the Pop loop observe the abort/EOF promptly
+            }
+            if (paused_.load())
+            {
+                // The sink is suspended, so the backlog can't drain — park, but with
+                // a timeout: session teardown at EOF signals the queue (SignalEof),
+                // which neither wakes cv_ nor appears in this predicate, so an
+                // indefinite wait here could hang the worker join.
+                cv_.wait_for(
+                    lock, std::chrono::milliseconds(500),
+                    [this]
+                    {
+                        return !paused_.load() || shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ ||
+                               stopRequested_;
+                    }
+                );
+                continue;
+            }
+            const double excess = queuedSec - kMaxQueuedAudioSec;
+            const auto slice = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(std::clamp(excess, 0.01, 0.1))
+            );
+            cv_.wait_for(
+                lock, slice,
+                [this]
+                {
+                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_ ||
+                           paused_.load();
+                }
+            );
         }
     };
 
@@ -174,6 +243,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     SwsContext* sws = nullptr;
     std::vector<uint8_t> rgba(static_cast<size_t>(dstW) * dstH * 4);
     bool sentReconfig = false;
+    bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
 
 #if defined(_WIN32)
     // Raise the scheduler tick to 1 ms for the duration of video playback and own a
@@ -268,7 +338,23 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             }
         }
 
-        for (;;)
+        // Baseline for the clock-stall watchdog below: how long this frame has been
+        // held and how far the master clock moved in that time.
+        const auto holdStart = std::chrono::steady_clock::now();
+        const double masterAtHold = GetMasterClock();
+        bool heldByWatchdog = false;
+
+        // A post-seek refresh frame paints immediately, skipping the pacing loop:
+        // the master clock is not re-established yet (the seek flushed the audio
+        // pipeline; the clock reads ~0 and advances only as freshly fed audio
+        // drains), so pacing this frame against it would gate the seek's visible
+        // feedback on audio flowing again — and holding here parks the demuxer
+        // via queue backpressure, which can deadlock the whole pipeline when the
+        // hold itself is what blocks audio delivery. Audio re-anchors the clock
+        // and the *next* frames pace normally.
+        const bool paceThisFrame = !seekRefresh_.load();
+
+        while (paceThisFrame)
         {
             {
                 std::unique_lock lock(mutex_);
@@ -283,8 +369,12 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                     }
                 );
                 // Honour a pending seek only once this one has painted (seekSettled_),
-                // so the target frame is shown before the loop bails to re-seek.
-                if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
+                // so the target frame is shown before the loop bails to re-seek. A
+                // *kicked* seek (seekKicked_) bails immediately: this frame predates
+                // the request, and pacing it out would stall the seek by up to a
+                // frame interval.
+                if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_) ||
+                    seekKicked_)
                 {
                     return true;
                 }
@@ -305,6 +395,27 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                 {
                     mistimedFrames_.fetch_add(1);
                 }
+                break;
+            }
+
+            // Liveness: never wait indefinitely on a clock that is not advancing
+            // (audio starved or the sink stalled). Holding this frame also parks
+            // the demuxer via queue backpressure — video consumption is what
+            // un-parks the pipeline and restores audio delivery — so present it
+            // and let the clock re-anchor when audio recovers.
+            const double heldSec =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
+            if (!paused_.load() && ShouldBreakFrameHold(heldSec, master - masterAtHold, kFrameHoldLimit))
+            {
+                mistimedFrames_.fetch_add(1);
+                if (!clockStallWarned)
+                {
+                    clockStallWarned = true;
+                    Log::Warn("FFmpegPlayer: master clock stalled (held frame {}s at clock {}); presenting to "
+                              "keep the pipeline alive",
+                              heldSec, master);
+                }
+                heldByWatchdog = true;
                 break;
             }
 
@@ -342,10 +453,16 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
                     }
                 );
             }
-            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
+            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_) ||
+                seekKicked_)
             {
                 return true;
             }
+        }
+
+        if (!heldByWatchdog)
+        {
+            clockStallWarned = false; // a frame paced normally — the stall episode is over
         }
 
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
@@ -386,11 +503,17 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         RequestRender();
 
         // Perf timing: the first presented frame ends whichever op is in flight.
-        // Each END is a no-op until its matching START, so calling both every frame
+        // Each END is a no-op until its matching START, so calling it every frame
         // is safe; a resume-position seek on load never STARTs "seek", so it stays
-        // folded into "file-open".
+        // folded into "file-open". "seek" may only end on a post-seek frame
+        // (seekRefresh_): a stale pre-seek frame this worker was already pacing when
+        // the seek kicked would otherwise consume the timer and the real target
+        // frame would log nothing.
         FRAMELIFT_PERF_END("file-open");
-        FRAMELIFT_PERF_END("seek");
+        if (seekRefresh_.load())
+        {
+            FRAMELIFT_PERF_END("seek");
+        }
 
         seekRefresh_ = false; // the post-seek frame has been shown
         bool reseek = false;
@@ -435,9 +558,23 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         return false;
     };
 
+    // hr-seek framedrop margin: frames within ~2 intervals of the target always
+    // decode fully, so timestamp jitter can't skip a frame the target references.
+    const double discardMargin = frameInterval > 0.0 ? 2.0 * frameInterval : 0.2;
+
     bool interrupted = false;
     while (!interrupted && videoQ_->Pop(pkt))
     {
+        // While decoding toward an exact-seek target, let the decoder skip
+        // non-reference frames that the present path would discard anyway —
+        // references still decode, so the target frame is unaffected. skip_frame
+        // may change between send_packet calls; the decoder is worker-owned.
+        const int64_t rawTs = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+        const double pktSec = rawTs == AV_NOPTS_VALUE ? std::numeric_limits<double>::quiet_NaN()
+                                                      : static_cast<double>(rawTs) * av_q2d(tb);
+        dec->skip_frame = DecideSeekDiscard(pktSec, seekSkipPts_, discardMargin) == SeekDiscardMode::SkipNonRef
+                              ? AVDISCARD_NONREF
+                              : AVDISCARD_DEFAULT;
         if (avcodec_send_packet(dec, pkt) == 0)
         {
             interrupted = drain();
@@ -450,6 +587,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     }
     if (!interrupted && !videoQ_->Aborted())
     {
+        dec->skip_frame = AVDISCARD_DEFAULT; // never drain the tail in skip mode
         avcodec_send_packet(dec, nullptr);
         drain();
     }

@@ -19,11 +19,6 @@ using namespace ffplay_detail;
 
 // ── Track model ─────────────────────────────────────────────────────────────
 
-void FFmpegPlayer::ScanExternalSources(const std::string& mediaPath)
-{
-    externalSources_ = ScanSidecarFiles(mediaPath, subAutoLoad_, audioFileAutoLoad_);
-}
-
 void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStream)
 {
     // The only libav part: snapshot the embedded audio/subtitle streams for the
@@ -186,11 +181,21 @@ bool FFmpegPlayer::OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioB
     return true;
 }
 
+void FFmpegPlayer::JoinSubtitlePreload()
+{
+    if (subtitlePreloadThread_.joinable())
+    {
+        subtitles_->AbortPreload();
+        subtitlePreloadThread_.join();
+    }
+}
+
 void FFmpegPlayer::OpenSubtitleBinding(
     int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx, AVCodecContext*& sDec,
     AVStream*& sStream
 )
 {
+    JoinSubtitlePreload(); // the track is replaced below — no reader may be in flight
     if (sDec)
     {
         avcodec_free_context(&sDec);
@@ -222,8 +227,18 @@ void FFmpegPlayer::OpenSubtitleBinding(
     // Embedded subtitles need the same absolute-event model as sidecars so a seek
     // can render the active cue immediately, even when that cue began before the
     // seek target. Use a separate input so the playback demuxer stays untouched.
-    if (subtitles_->LoadEmbeddedStream(mediaPath.c_str(), e.streamIndex))
+    // The cue read demuxes the whole container, so only the outcome-determining
+    // open runs here; the read continues on its own thread while the first frame
+    // is already on screen (cues appear once loaded, via the RequestRender).
+    if (subtitles_->BeginDeferredPreload(mediaPath.c_str(), e.streamIndex))
     {
+        subtitlePreloadThread_ = std::thread(
+            [this]
+            {
+                subtitles_->RunDeferredPreload();
+                RequestRender();
+            }
+        );
         return;
     }
 

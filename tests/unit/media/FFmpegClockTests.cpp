@@ -9,6 +9,7 @@
 #include <QtTest/QtTest>
 
 #include <chrono>
+#include <limits>
 
 // ── ComputeMasterClock ─────────────────────────────────────────────────────────
 
@@ -185,6 +186,63 @@ private Q_SLOTS:
         QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(1)), 0.0);
         QVERIFY(clk.EstablishOnce(20.0, t0 + std::chrono::seconds(2)));
         QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(3)), 21.0);
+    }
+
+    // ── ShouldBreakFrameHold ───────────────────────────────────────────────────
+
+    void FrameHoldBreaksOnStalledClock()
+    {
+        // Held past the limit with no clock movement: present to keep the
+        // pipeline alive (a parked demuxer can never restore the clock itself).
+        QVERIFY(ShouldBreakFrameHold(/*held*/ 0.6, /*advance*/ 0.0, /*limit*/ 0.5));
+    }
+
+    void FrameHoldKeepsWaitingWhileClockAdvances()
+    {
+        // The clock is moving — the frame will come due; no forced present.
+        QVERIFY(!ShouldBreakFrameHold(/*held*/ 5.0, /*advance*/ 0.2, /*limit*/ 0.5));
+    }
+
+    void FrameHoldKeepsWaitingBeforeLimit()
+    {
+        QVERIFY(!ShouldBreakFrameHold(/*held*/ 0.4, /*advance*/ 0.0, /*limit*/ 0.5));
+    }
+
+    void FrameHoldIgnoresSubMillisecondDrift()
+    {
+        // < 1 ms of movement over the whole hold is a pinned clock, not progress.
+        QVERIFY(ShouldBreakFrameHold(/*held*/ 0.5, /*advance*/ 0.0005, /*limit*/ 0.5));
+    }
+
+    // ── DecideSeekDiscard ──────────────────────────────────────────────────────
+
+    void SeekDiscardSkipsNonRefWellBeforeTarget()
+    {
+        // Target 10.0s, margin 2 frames @ 24fps: packets clearly inside the
+        // discard window may skip non-reference frames.
+        QVERIFY(DecideSeekDiscard(5.0, 10.0, 2.0 / 24.0) == SeekDiscardMode::SkipNonRef);
+    }
+
+    void SeekDiscardDecodesInsideMargin()
+    {
+        // Within the margin of the target every frame decodes fully, so timestamp
+        // jitter can't skip a frame the target needs.
+        QVERIFY(DecideSeekDiscard(9.95, 10.0, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
+        QVERIFY(DecideSeekDiscard(10.0, 10.0, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
+        QVERIFY(DecideSeekDiscard(12.0, 10.0, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
+    }
+
+    void SeekDiscardInactiveForKeyframeSeeks()
+    {
+        // Keyframe seek / normal playback: seekSkipPts holds the -1e18 sentinel.
+        QVERIFY(DecideSeekDiscard(5.0, -1e18, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
+    }
+
+    void SeekDiscardDecodesUnknownTimestamps()
+    {
+        // NaN pts (no pts/dts on the packet) must decode normally.
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        QVERIFY(DecideSeekDiscard(nan, 10.0, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
     }
 };
 

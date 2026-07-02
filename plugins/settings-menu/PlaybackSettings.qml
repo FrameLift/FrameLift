@@ -51,6 +51,14 @@ ScrollView {
                     onToggled: root.vm.setFieldValue("playback.hrSeek", checked)
                 }
             }
+            FLSettingRow {
+                title: "Fast file opening"
+                description: "Speed up file opening by limiting stream probing. Unusual containers (TS/AVI) may misdetect tracks — leave off if tracks go missing."
+                FLSwitch {
+                    checked: (root.rev, root.vm.fieldValue("playback.fastProbe"))
+                    onToggled: root.vm.setFieldValue("playback.fastProbe", checked)
+                }
+            }
         }
 
         FLSettingsGroup {

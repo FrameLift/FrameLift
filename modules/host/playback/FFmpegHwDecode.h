@@ -65,6 +65,19 @@ inline const char* HwBackendName(HwBackend backend)
     return "";
 }
 
+// Cross-file cache for a created AVHWDeviceContext. av_hwdevice_ctx_create costs
+// tens of milliseconds (driver/GPU context init) and the resulting AVBufferRef is
+// refcounted and designed to be shared across sequential decoders, so the player
+// keeps one alive between files instead of recreating it per open. Decode-thread
+// owned; the owner unrefs `device` after the decode thread has joined. `type` is
+// the AVHWDeviceType the device was created for (as int so this header stays
+// libav-free); a backend change just re-creates and replaces the entry.
+struct HwDeviceCache
+{
+    AVBufferRef* device = nullptr;
+    int type = -1;
+};
+
 class FFmpegHwDecode
 {
 public:
@@ -82,8 +95,11 @@ public:
     bool TryEnable(const AVCodec* codec, AVCodecContext* dec);
 
     // Arm `dec` with exactly one hardware backend using the readback path. This is
-    // used by explicit user-selected modes such as "Vulkan" or "CUDA".
-    bool TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend);
+    // used by explicit user-selected modes such as "Vulkan" or "CUDA". When `cache`
+    // is given, a matching cached device is reused instead of created, and a newly
+    // created one is stored back for the next file.
+    bool TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend,
+                          HwDeviceCache* cache = nullptr);
 
     // Zero-copy variant (#18): arm `dec` for AV_HWDEVICE_TYPE_VULKAN, WRAPPING the
     // renderer's already-created device (`vkDevice`, owned by the caller) so decoded

@@ -79,12 +79,14 @@ FFmpegPlayer::~FFmpegPlayer()
     {
         decodeThread_.join();
     }
+    JoinSubtitlePreload(); // CloseSession normally joins it; this covers early exits
 
     // Zero-copy teardown (#18): destroy the renderer first so its image views over the
     // displayed AVVkFrame are gone before we drop the frame refs and the wrapped device.
     // (The graphics backend/device is owned by the window, destroyed after the player.)
     renderer_.reset();
     frameGate_.ReleaseAll();
+    av_buffer_unref(&hwDeviceCache_.device); // after the join: no decoder holds refs anymore
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
     if (vkHwDevice_)
     {

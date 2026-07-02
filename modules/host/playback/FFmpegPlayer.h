@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,9 +32,10 @@ struct AVFrame;
 struct AVBufferRef;
 struct AVPacket;
 
+#include "FFmpegHwDecode.h" // libav-free by design: HwDeviceCache member + method signatures
+
 class FFmpegAudioOutput;
 class FFmpegPacketQueue;
-class FFmpegHwDecode;
 class Settings;
 
 // Concrete external FFmpeg + libass implementation of the media playback interface
@@ -197,9 +199,11 @@ private:
     [[nodiscard]] bool OpenSessionInputs(const std::string& path, SessionContext& ctx);
     // Open the (optional) video decoder, arming hardware decode when configured.
     void OpenVideoDecoder(SessionContext& ctx);
-    // Discover sidecars, build the track list, bind the default audio/subtitle
-    // selections. False ⇒ nothing at all plays (already emitted + cleaned up).
-    [[nodiscard]] bool BindSelectedTracks(const std::string& path, SessionContext& ctx);
+    // Collect the sidecar scan (launched async at the top of PlayFile), build the
+    // track list, bind the default audio/subtitle selections. False ⇒ nothing at
+    // all plays (already emitted + cleaned up).
+    [[nodiscard]] bool BindSelectedTracks(const std::string& path, SessionContext& ctx,
+                                          std::future<std::vector<ExternalSource>>& sidecarScan);
     // Publish duration/title/FileLoaded (ends the "file-load-metadata" span).
     void PublishLoadedMetadata(const std::string& path, SessionContext& ctx);
     // Rebind audio/subtitle to a pending Select* request (workers are joined).
@@ -274,14 +278,14 @@ private:
         double startOffset = 0.0; // subtracted from external-audio pts to match the 0 origin
     };
 
-    // Scan the media directory for fuzzy sidecar subtitle/audio files (gated by the
-    // current PlaybackOptions) and populate externalSources_.
-    void ScanExternalSources(const std::string& mediaPath);
     // (Re)build tracks_ from the main container's streams + externalSources_ and
     // choose the default selected audio/subtitle. Sets selectedAudioId_/selectedSubId_.
     void BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStream);
     // Refresh the `selected` flags in tracks_ to match selectedAudioId_/selectedSubId_.
     void RefreshSelectedFlags();
+    // Abort + join a running deferred subtitle preload (no-op when none). Must run
+    // before anything that replaces or clears the subtitle track.
+    void JoinSubtitlePreload();
     // Tear down `aud` and rebind it to track `id` (embedded or external). Returns true
     // if audio is now available. audioOut_ is reopened for the new stream.
     bool OpenAudioBinding(int64_t id, AVFormatContext* mainFmt, AudioBinding& aud);
@@ -294,7 +298,8 @@ private:
     // Resolve a track id to its entry (copy) under tracksMutex_; returns false if absent.
     bool FindTrack(int64_t id, TrackEntry& out) const;
 
-    static constexpr double kDropThreshold = 0.1; // seconds a frame may lag before being dropped
+    static constexpr double kDropThreshold = 0.1;  // seconds a frame may lag before being dropped
+    static constexpr double kFrameHoldLimit = 0.5; // max seconds a frame may wait on a non-advancing master clock
 
     struct Callback
     {
@@ -323,6 +328,12 @@ private:
     bool vulkanAdapterIsNvidia_ = false;
 #endif
 
+    // Readback-path hardware decode device, kept alive across files so sequential
+    // opens skip av_hwdevice_ctx_create (tens of ms of driver/GPU init). Decode
+    // thread only — touched inside PlayFile/TryEnableHardwareDecode and in the
+    // destructor after decodeThread_.join(), so no lock is needed.
+    HwDeviceCache hwDeviceCache_;
+
     std::thread decodeThread_;
     std::mutex mutex_; // guards the command/event state below + drives cv_
     std::condition_variable cv_;
@@ -345,6 +356,10 @@ private:
     std::thread videoThread_;
     std::thread subtitleThread_;
     std::thread extAudioThread_; // external-audio container demux
+    // Deferred embedded-subtitle cue read (walks the whole container off the open
+    // path). Spawned by OpenSubtitleBinding; joined (with AbortPreload) before any
+    // track replacement and in CloseSession — decode thread only, no lock.
+    std::thread subtitlePreloadThread_;
 
     // libass subtitle pipeline (owns the active ASS track; shared between the
     // subtitle worker and the render thread, internally locked).
@@ -398,12 +413,23 @@ private:
     //    in Seek(): until true, GetMasterClock() reads ~0, so a repeat must accumulate
     //    against seekTarget_ instead of re-targeting from the start. The video frame can
     //    paint before the audio worker re-feeds, so this must NOT key off the video frame.
+    //  • seekKicked_ — a kicked seek (RequestSeek disturbed a *settled* pipeline) has
+    //    not been applied yet. Lets an in-flight present() bail its stale pre-seek frame
+    //    immediately instead of pacing it out (up to a full frame interval of dead time
+    //    before av_seek_frame can run). Distinct from hasPendingSeek_ && seekSettled_: a
+    //    coalesced repeat during an unsettled seek must NOT bail the current target's
+    //    present (held-key stepping). Set only under the RequestSeek kick; cleared with
+    //    workers joined (ApplySeekAndPrepareQueues / PlayFile), so it cannot outlive the
+    //    present it targets. seekKicked_ ⇒ hasPendingSeek_, so the workers' cv_ wait
+    //    predicates already wake on it.
     bool seekSettled_ = true;
     bool seekClockValid_ = true;
+    bool seekKicked_ = false;
     double seekSkipPts_ = -1e18;
     std::atomic<bool> seekRefresh_{false};
-    std::atomic<bool> hrSeek_{true}; // PlaybackOptions.hrSeek (exact vs keyframe)
-    std::atomic<bool> hwdec_{true};  // PlaybackOptions.hwdec (try hardware decode on load)
+    std::atomic<bool> hrSeek_{true};     // PlaybackOptions.hrSeek (exact vs keyframe)
+    std::atomic<bool> hwdec_{true};      // PlaybackOptions.hwdec (try hardware decode on load)
+    std::atomic<bool> fastProbe_{false}; // playback.fastProbe (cap open-time stream probing)
     std::atomic<VideoDecodeMode> videoDecodeMode_{VideoDecodeMode::Auto};
     std::atomic<double> imageDisplayDuration_{0.0}; // <= 0 ⇒ hold a still image indefinitely
     std::string mediaTitle_;                        // metadata title (guarded by mutex_)
