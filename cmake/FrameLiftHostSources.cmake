@@ -116,6 +116,7 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPacketQueue.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayer.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayer.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerCommands.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerInternal.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerProperties.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerRender.cpp"
