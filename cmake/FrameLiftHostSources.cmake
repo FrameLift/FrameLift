@@ -120,6 +120,7 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerInternal.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerProperties.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerRender.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerTracks.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSettingsMapping.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitleBlend.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitles.cpp"
