@@ -78,7 +78,7 @@ void FFmpegPlayer::SetRenderUpdateCallback(void (*cb)(void*), void* ud) noexcept
 
 bool FFmpegPlayer::HasNewFrame() noexcept
 {
-    return newFramePending_.load();
+    return frameGate_.HasNewFrame();
 }
 
 void FFmpegPlayer::RenderFrame(int w, int h) noexcept
@@ -89,72 +89,27 @@ void FFmpegPlayer::RenderFrame(int w, int h) noexcept
 
 void FFmpegPlayer::PrepareRenderFrame(int w, int h) noexcept
 {
-    bool haveNew = false;
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    bool haveNewVk = false;
-#endif
-    int dispW = 0;
-    int dispH = 0;
-    {
-        std::lock_guard fl(frameMutex_);
-        if (pendingValid_)
-        {
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-            if (pendingIsVulkan_)
-            {
-                // Adopt the pending AVVkFrame; release the previously displayed one. The
-                // timeline semaphore (signalled by the renderer's sample submit) keeps
-                // FFmpeg from reusing the image until our GPU read completes, so dropping
-                // our ref here is safe even if a submit is still in flight.
-                if (displayVkFrame_)
-                {
-                    av_frame_free(&displayVkFrame_);
-                }
-                displayVkFrame_ = pendingVkFrame_;
-                pendingVkFrame_ = nullptr;
-                haveNewVk = true;
-            }
-            else
-#endif
-            {
-                std::swap(displayPixels_, pendingPixels_);
-                haveNew = true;
-            }
-            dispW = pendingW_;
-            dispH = pendingH_;
-            pendingValid_ = false;
-        }
-    }
-    newFramePending_ = false;
+    // Adopting a pending AVVkFrame releases the previously displayed one inside
+    // the gate. The timeline semaphore (signalled by the renderer's sample
+    // submit) keeps FFmpeg from reusing the image until our GPU read completes,
+    // so dropping our ref there is safe even if a submit is still in flight.
+    const VideoFrameGate::AcquireResult acq = frameGate_.Acquire();
 
     if (rendererReady_)
     {
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-        if (haveNewVk)
-        {
-            displayIsVulkan_ = true;
-        }
-        else if (haveNew)
-        {
-            displayIsVulkan_ = false;
-            // Switched from the Vulkan path back to RGBA (e.g. a new software-decoded
-            // file): drop the held AVVkFrame so its pool/device can be released.
-            if (displayVkFrame_)
-            {
-                av_frame_free(&displayVkFrame_);
-            }
-        }
+        frameGate_.CommitDisplayChannel(acq);
 
-        if (displayIsVulkan_ && displayVkFrame_)
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        if (frameGate_.DisplayIsOpaque() && frameGate_.DisplayOpaque())
         {
-            renderer_->UploadVulkanFrame(displayVkFrame_, dispW, dispH);
+            renderer_->UploadVulkanFrame(frameGate_.DisplayOpaque(), acq.w, acq.h);
         }
-        else if (haveNew)
+        else if (acq.newPixels)
 #else
-        if (haveNew)
+        if (acq.newPixels)
 #endif
         {
-            renderer_->Upload(displayPixels_.data(), dispW, dispH);
+            renderer_->Upload(frameGate_.DisplayPixels().data(), acq.w, acq.h);
         }
 
         // Render the libass subtitle overlay at the on-screen video size so it stays

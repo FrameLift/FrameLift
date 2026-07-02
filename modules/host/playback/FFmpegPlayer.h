@@ -7,6 +7,7 @@
 #include "PlayerEventSink.h"
 #include "ReadAheadCache.h"
 #include "VideoDecodeMode.h"
+#include "VideoFrameGate.h"
 
 #include <atomic>
 #include <chrono>
@@ -61,12 +62,11 @@ class Settings;
 //                    decode/worker threads — do not move them to another lock.
 //   eventSink_     — MediaEvent queue + wakeup callback + observed-property
 //                    set; internally locked (leaf), safe from any thread.
-//   frameMutex_    — the pending decode→render frame handoff (pendingPixels_,
-//                    pendingW_/H_/pendingValid_, pendingVkFrame_,
-//                    pendingIsVulkan_). displayPixels_, displayVkFrame_,
-//                    displayIsVulkan_, overlayScratch_, overlayActive_,
-//                    preparedOverlayActive_, renderer_ and rendererReady_ are
-//                    render-thread-owned and unguarded.
+//   frameGate_     — the pending decode→render frame handoff; internally
+//                    locked (see VideoFrameGate.h for its own ownership split).
+//                    overlayScratch_, overlayActive_, preparedOverlayActive_,
+//                    renderer_ and rendererReady_ are render-thread-owned and
+//                    unguarded.
 //   tracksMutex_   — tracks_/selectedAudioId_/selectedSubId_/nextTrackId_/
 //                    externalSources_ + the audioPrefs_/subtitleStyle_ behavior
 //                    fields read on the decode thread. Held only briefly; never
@@ -346,25 +346,10 @@ private:
     bool stopRequested_ = false;
     std::string currentPath_;
 
-    // Video frame handoff (decode thread → render thread). Three buffers cycle
-    // through swap under frameMutex_: decode-owned → pending → display-owned.
-    std::mutex frameMutex_;
-    std::vector<uint8_t> pendingPixels_; // newest RGBA frame awaiting display
-    std::vector<uint8_t> displayPixels_; // frame owned by the render thread
-    int pendingW_ = 0;
-    int pendingH_ = 0;
-    bool pendingValid_ = false;
-    std::atomic<bool> newFramePending_{false};
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    // Zero-copy path: instead of the RGBA buffers, the decode thread hands a ref'd
-    // AVFrame (carrying an AVVkFrame) to the render thread. pendingVkFrame_ is guarded by
-    // frameMutex_; displayVkFrame_ is render-thread-owned. pendingIsVulkan_ distinguishes
-    // which pending channel is live (a file is one path or the other for its lifetime).
-    AVFrame* pendingVkFrame_ = nullptr;
-    AVFrame* displayVkFrame_ = nullptr;
-    bool pendingIsVulkan_ = false;
-    bool displayIsVulkan_ = false; // render-thread-owned: last frame handed to the renderer
-#endif
+    // Video frame handoff (decode thread → render thread): latest-wins mailbox,
+    // internally locked. The Vulkan zero-copy path rides the gate's opaque channel
+    // (a ref'd AVFrame released via av_frame_free, injected in the ctor).
+    VideoFrameGate frameGate_;
     bool preparedOverlayActive_ = false;
 
     // Observable / queryable state.

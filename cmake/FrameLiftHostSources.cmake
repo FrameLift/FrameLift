@@ -132,6 +132,7 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/PlayerEventSink.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/SubtitleSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeMode.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoFrameGate.h"
 )
 
 set(_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES

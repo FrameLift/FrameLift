@@ -27,6 +27,15 @@ FFmpegPlayer::FFmpegPlayer()
     // Funnel libav* logging into the host logger. Re-asserted before each open in
     // PlayFile too, since Qt Multimedia clobbers the global callback (see InstallFFmpegLogCallback).
     InstallFFmpegLogCallback();
+    // The gate's opaque channel carries ref'd AVFrames (Vulkan zero-copy); teach it
+    // how to drop one so its header stays libav-free.
+    frameGate_.SetOpaqueRelease(
+        [](void* p)
+        {
+            auto* f = static_cast<AVFrame*>(p);
+            av_frame_free(&f);
+        }
+    );
 #if defined(_WIN32)
     // Auto-reset event the video worker waits on alongside its frame-pacing timer;
     // Wake() signals it so pause/seek/load/shutdown interrupt the wait immediately.
@@ -75,15 +84,8 @@ FFmpegPlayer::~FFmpegPlayer()
     // displayed AVVkFrame are gone before we drop the frame refs and the wrapped device.
     // (The graphics backend/device is owned by the window, destroyed after the player.)
     renderer_.reset();
+    frameGate_.ReleaseAll();
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    if (displayVkFrame_)
-    {
-        av_frame_free(&displayVkFrame_);
-    }
-    if (pendingVkFrame_)
-    {
-        av_frame_free(&pendingVkFrame_);
-    }
     if (vkHwDevice_)
     {
         av_buffer_unref(&vkHwDevice_);

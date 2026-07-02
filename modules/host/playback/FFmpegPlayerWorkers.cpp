@@ -359,16 +359,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             AVFrame* clone = av_frame_alloc();
             if (clone && av_frame_ref(clone, f) == 0)
             {
-                std::lock_guard fl(frameMutex_);
-                if (pendingVkFrame_) // drop a still-unconsumed pending frame
-                {
-                    av_frame_free(&pendingVkFrame_);
-                }
-                pendingVkFrame_ = clone;
-                pendingW_ = dstW;
-                pendingH_ = dstH;
-                pendingValid_ = true;
-                pendingIsVulkan_ = true;
+                frameGate_.PublishOpaque(clone, dstW, dstH);
             }
             else if (clone)
             {
@@ -394,16 +385,8 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             int dstStride[4] = {dstW * 4, 0, 0, 0};
             sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
 
-            std::lock_guard fl(frameMutex_);
-            std::swap(rgba, pendingPixels_);
-            pendingW_ = dstW;
-            pendingH_ = dstH;
-            pendingValid_ = true;
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-            pendingIsVulkan_ = false;
-#endif
+            frameGate_.PublishPixels(rgba, dstW, dstH); // swap: worker reuses the returned buffer
         }
-        newFramePending_ = true;
         RequestRender();
 
         // Perf timing: the first presented frame ends whichever op is in flight.
