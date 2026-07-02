@@ -4,17 +4,16 @@
 
 #include "FFmpegSubtitles.h"
 #include "IVideoRenderer.h"
+#include "PlayerEventSink.h"
 #include "ReadAheadCache.h"
 #include "VideoDecodeMode.h"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -54,12 +53,14 @@ class Settings;
 //                    stopRequested_, currentPath_), the seek request + its
 //                    two-flag gate (hasPendingSeek_/seekTarget_/seekSettled_/
 //                    seekClockValid_ — see the comment at their declaration),
-//                    pending track switches, events_ + wakeupCb_ + renderCb_,
+//                    pending track switches, renderCb_,
 //                    the video wall-clock baseline (videoClock*, pauseWall_),
 //                    subtitleSeekClockOverride*, mediaTitle_, hwDecName_,
 //                    normalizeParams_, volume_/muteEnabled_/subtitlesEnabled_.
 //                    Several of these appear in cv_ wait predicates on the
 //                    decode/worker threads — do not move them to another lock.
+//   eventSink_     — MediaEvent queue + wakeup callback + observed-property
+//                    set; internally locked (leaf), safe from any thread.
 //   frameMutex_    — the pending decode→render frame handoff (pendingPixels_,
 //                    pendingW_/H_/pendingValid_, pendingVkFrame_,
 //                    pendingIsVulkan_). displayPixels_, displayVkFrame_,
@@ -279,7 +280,6 @@ private:
     // Resolve a track id to its entry (copy) under tracksMutex_; returns false if absent.
     bool FindTrack(int64_t id, TrackEntry& out) const;
 
-    static constexpr std::size_t kPropCount = static_cast<std::size_t>(PlayerProperty::Unknown) + 1;
     static constexpr double kDropThreshold = 0.1; // seconds a frame may lag before being dropped
 
     struct Callback
@@ -288,8 +288,10 @@ private:
         void* ud = nullptr;
     };
 
-    Callback wakeupCb_; // invoked when a MediaEvent is queued (host then PollEvent())
-    Callback renderCb_; // invoked when a new video frame is ready (host then RenderFrame())
+    // Event queue + wakeup callback + observed-property set (internally locked;
+    // QueueEvent/PollEvent/Emit*/ObserveProperty delegate to it).
+    PlayerEventSink eventSink_;
+    Callback renderCb_; // invoked when a new video frame is ready (host then RenderFrame()); guarded by mutex_
 
     std::unique_ptr<IVideoRenderer> renderer_;
     bool rendererReady_ = false;
@@ -343,9 +345,6 @@ private:
     // is parked; cleared when the next load is consumed.
     bool stopRequested_ = false;
     std::string currentPath_;
-
-    // Events queued for the main thread to drain via PollEvent(). Guarded by mutex_.
-    std::queue<MediaEvent> events_;
 
     // Video frame handoff (decode thread → render thread). Three buffers cycle
     // through swap under frameMutex_: decode-owned → pending → display-owned.
@@ -410,9 +409,6 @@ private:
     std::atomic<double> imageDisplayDuration_{0.0}; // <= 0 ⇒ hold a still image indefinitely
     std::string mediaTitle_;                        // metadata title (guarded by mutex_)
     std::string hwDecName_ = "no";                  // active hw decoder name / "no" (guarded by mutex_)
-
-    // Which properties the host/plugins have subscribed to (indexed by enum value).
-    std::array<std::atomic<bool>, kPropCount> observed_{};
 
     // Video-only wall clock baseline (guarded by mutex_): maps a pts to a wall time
     // so the fallback clock can be frozen across pause.

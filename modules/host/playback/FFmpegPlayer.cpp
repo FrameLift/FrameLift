@@ -195,18 +195,7 @@ double FFmpegPlayer::VideoWallClock()
 
 void FFmpegPlayer::QueueEvent(const MediaEvent& e)
 {
-    void (*fn)(void*) = nullptr;
-    void* ud = nullptr;
-    {
-        std::lock_guard lock(mutex_);
-        events_.push(e);
-        fn = wakeupCb_.fn;
-        ud = wakeupCb_.ud;
-    }
-    if (fn)
-    {
-        fn(ud);
-    }
+    eventSink_.Queue(e);
 }
 
 void FFmpegPlayer::RequestRender()
@@ -251,30 +240,12 @@ void FFmpegPlayer::EmitPlaybackSummary(const char* reason)
 
 void FFmpegPlayer::EmitFlag(PlayerProperty prop, bool value)
 {
-    if (!observed_[static_cast<std::size_t>(prop)].load())
-    {
-        return;
-    }
-    MediaEvent e;
-    e.type = MediaEventType::PropertyChange;
-    e.property.prop = prop;
-    e.property.type = PropertyType::Flag;
-    e.property.value.flag = value ? 1 : 0;
-    QueueEvent(e);
+    eventSink_.EmitFlag(prop, value);
 }
 
 void FFmpegPlayer::EmitDouble(PlayerProperty prop, double value)
 {
-    if (!observed_[static_cast<std::size_t>(prop)].load())
-    {
-        return;
-    }
-    MediaEvent e;
-    e.type = MediaEventType::PropertyChange;
-    e.property.prop = prop;
-    e.property.type = PropertyType::Double;
-    e.property.value.dbl = value;
-    QueueEvent(e);
+    eventSink_.EmitDouble(prop, value);
 }
 
 void FFmpegPlayer::SetIdle(bool idle)
@@ -317,19 +288,11 @@ double FFmpegPlayer::TakePendingSeek()
 
 MediaEvent FFmpegPlayer::PollEvent() noexcept
 {
-    std::lock_guard lock(mutex_);
-    if (events_.empty())
-    {
-        return MediaEvent{}; // type == MediaEventType::None
-    }
-    const MediaEvent e = events_.front();
-    events_.pop();
-    return e;
+    return eventSink_.Poll(); // type == MediaEventType::None when empty
 }
 
 void FFmpegPlayer::SetWakeupCallback(void (*cb)(void*), void* ud) noexcept
 {
-    std::lock_guard lock(mutex_);
-    wakeupCb_ = {cb, ud};
+    eventSink_.SetWakeupCallback(cb, ud);
 }
 

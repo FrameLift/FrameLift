@@ -129,6 +129,7 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitles.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegTrackLabel.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/PlaybackSettings.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/PlayerEventSink.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/SubtitleSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeMode.h"
 )

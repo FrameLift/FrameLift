@@ -144,12 +144,11 @@ void FFmpegPlayer::GetDisplaySizeAsync(void (*cb)(const DisplaySize*, bool, void
 
 void FFmpegPlayer::ObserveProperty(PlayerProperty prop) noexcept
 {
-    const auto idx = static_cast<std::size_t>(prop);
-    if (idx >= kPropCount)
+    if (static_cast<std::size_t>(prop) >= PlayerEventSink::kPropCount)
     {
         return;
     }
-    observed_[idx] = true;
+    eventSink_.Observe(prop);
 
     // Emit the current value on subscription (so subscribers get an initial snapshot).
     switch (prop)
