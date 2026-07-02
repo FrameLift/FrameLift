@@ -2,19 +2,22 @@
 
 #include <framelift/platform/IMediaPlayer.h>
 
+#include "FFmpegClock.h" // VideoWallClockState
+#include "FFmpegSidecarScan.h"
 #include "FFmpegSubtitles.h"
+#include "FFmpegTrackSelect.h"
 #include "IVideoRenderer.h"
+#include "PlayerEventSink.h"
 #include "ReadAheadCache.h"
 #include "VideoDecodeMode.h"
+#include "VideoFrameGate.h"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +29,7 @@ struct AVStream;
 struct AVFormatContext;
 struct AVFrame;
 struct AVBufferRef;
+struct AVPacket;
 
 class FFmpegAudioOutput;
 class FFmpegPacketQueue;
@@ -38,6 +42,43 @@ class Settings;
 //
 // This and FFmpeg* siblings are the ONLY files that may #include <libav*/...> or
 // <ass/...> headers.
+//
+// ── Threading model ──────────────────────────────────────────────────────────
+// Threads touching this object:
+//   host    — every public interface/concrete method except the render group
+//             below (commands, properties, PollEvent, track Enumerate/Select).
+//   decode  — decodeThread_: DecodeThreadMain → PlayFile; owns the demux session.
+//   workers — audioThread_ / videoThread_ / subtitleThread_ / extAudioThread_,
+//             spawned and joined by PlayFile per demux session.
+//   render  — InitRender/ReleaseRender/HasNewFrame/RenderFrame/
+//             PrepareRenderFrame/DrawPreparedFrame (Qt scene-graph thread).
+//
+// Locks and what they guard:
+//   mutex_ + cv_   — load/stop commands (pendingPath_, hasPendingLoad_,
+//                    stopRequested_, currentPath_), the seek request + its
+//                    two-flag gate (hasPendingSeek_/seekTarget_/seekSettled_/
+//                    seekClockValid_ — see the comment at their declaration),
+//                    pending track switches, renderCb_,
+//                    the video wall-clock baseline (videoClock*, pauseWall_),
+//                    subtitleSeekClockOverride*, mediaTitle_, hwDecName_,
+//                    normalizeParams_, volume_/muteEnabled_/subtitlesEnabled_.
+//                    Several of these appear in cv_ wait predicates on the
+//                    decode/worker threads — do not move them to another lock.
+//   eventSink_     — MediaEvent queue + wakeup callback + observed-property
+//                    set; internally locked (leaf), safe from any thread.
+//   frameGate_     — the pending decode→render frame handoff; internally
+//                    locked (see VideoFrameGate.h for its own ownership split).
+//                    overlayScratch_, overlayActive_, preparedOverlayActive_,
+//                    renderer_ and rendererReady_ are render-thread-owned and
+//                    unguarded.
+//   tracksMutex_   — tracks_/selectedAudioId_/selectedSubId_/nextTrackId_/
+//                    externalSources_ + the audioPrefs_/subtitleStyle_ behavior
+//                    fields read on the decode thread. Held only briefly; never
+//                    across a cv_ wait, and never acquire mutex_ while holding it.
+//
+// Decode-thread-owned, deliberately non-atomic: hasVideo_ and seekSkipPts_ are
+// written only while all workers are joined (between sessions / at the seek
+// boundary) and read lock-free by workers afterwards.
 //
 // Per file, a demux thread fans packets into bounded audio/video queues and
 // spawns an audio worker (resamples to Qt's raw PCM sink — the master clock) and
@@ -140,6 +181,40 @@ private:
     void DecodeThreadMain();
     void PlayFile(const std::string& path, double resumePos);
 
+    // ── Demux-session phases (decode thread; bodies in FFmpegPlayerSession.cpp) ─
+    // The per-file libav state travels in a SessionContext, defined only in the
+    // session TU (it is libav-heavy). PlayFile is the ~40-line skeleton that
+    // sequences these phases.
+    struct SessionContext;
+    enum class SessionEndReason : std::uint8_t
+    {
+        Eof,  // demuxer reached end of file
+        Stop, // shutdown or a new file load
+        Seek, // a seek was requested
+    };
+    // Open the container and read stream info; on failure emits the end event +
+    // summary and returns false (nothing to close).
+    [[nodiscard]] bool OpenSessionInputs(const std::string& path, SessionContext& ctx);
+    // Open the (optional) video decoder, arming hardware decode when configured.
+    void OpenVideoDecoder(SessionContext& ctx);
+    // Discover sidecars, build the track list, bind the default audio/subtitle
+    // selections. False ⇒ nothing at all plays (already emitted + cleaned up).
+    [[nodiscard]] bool BindSelectedTracks(const std::string& path, SessionContext& ctx);
+    // Publish duration/title/FileLoaded (ends the "file-load-metadata" span).
+    void PublishLoadedMetadata(const std::string& path, SessionContext& ctx);
+    // Rebind audio/subtitle to a pending Select* request (workers are joined).
+    void ApplyPendingTrackSwitches(const std::string& path, SessionContext& ctx);
+    // Apply a pending seek (NaN ⇒ none; cleared on return) and flush/reset the
+    // packet queues + read-ahead accounting for the next demux run.
+    void ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx);
+    // Spawn the workers, demux until EOF/stop/seek, stop the queues and join.
+    [[nodiscard]] SessionEndReason RunDemuxSession(SessionContext& ctx, AVPacket* pkt);
+    // EOF: emit EndFile (per still-image hold rules) and park on the last frame.
+    // False ⇒ stopping; true ⇒ a seek arrived and the session resumes.
+    [[nodiscard]] bool HoldAtEndOfFile(const SessionContext& ctx);
+    // Emit the session summary and free every per-file resource.
+    void CloseSession(SessionContext& ctx, AVPacket*& pkt);
+
     // Per-file worker bodies (each on its own thread, spawned by PlayFile).
     void AudioWorker(AVCodecContext* dec, AVStream* stream, double startOffset);
     // hw is non-null when the decoder is armed for hardware decode (downloads frames
@@ -184,32 +259,8 @@ private:
     void EmitPlaybackSummary(const char* reason);
 
     // ── Track model ──────────────────────────────────────────────────────────
-    enum class TrackKind : std::uint8_t
-    {
-        Audio,
-        Subtitle,
-    };
-
-    // One selectable audio/subtitle track, embedded in the main container or living
-    // in an external sidecar file. id is stable for the lifetime of the loaded file.
-    struct TrackEntry
-    {
-        int64_t id = 0;
-        TrackKind kind = TrackKind::Audio;
-        int container = 0;    // 0 = main container; >=1 == externalSources_ index + 1
-        int streamIndex = -1; // stream index within that container (embedded routing)
-        bool external = false;
-        bool selected = false;
-        std::string label;
-        std::string language;
-    };
-
-    // A fuzzy-matched sidecar file discovered next to the media (Phase 5 auto-load).
-    struct ExternalSource
-    {
-        std::string path;
-        bool isAudio = false; // else subtitle
-    };
+    // TrackKind / TrackEntry / ExternalSource and the pure selection logic live
+    // in FFmpegTrackSelect.h / FFmpegSidecarScan.h (libav-free, unit-tested).
 
     // The currently bound audio source. fmt is owned (and closed) only when external;
     // for embedded audio it aliases the main container.
@@ -243,7 +294,6 @@ private:
     // Resolve a track id to its entry (copy) under tracksMutex_; returns false if absent.
     bool FindTrack(int64_t id, TrackEntry& out) const;
 
-    static constexpr std::size_t kPropCount = static_cast<std::size_t>(PlayerProperty::Unknown) + 1;
     static constexpr double kDropThreshold = 0.1; // seconds a frame may lag before being dropped
 
     struct Callback
@@ -252,8 +302,10 @@ private:
         void* ud = nullptr;
     };
 
-    Callback wakeupCb_; // invoked when a MediaEvent is queued (host then PollEvent())
-    Callback renderCb_; // invoked when a new video frame is ready (host then RenderFrame())
+    // Event queue + wakeup callback + observed-property set (internally locked;
+    // QueueEvent/PollEvent/Emit*/ObserveProperty delegate to it).
+    PlayerEventSink eventSink_;
+    Callback renderCb_; // invoked when a new video frame is ready (host then RenderFrame()); guarded by mutex_
 
     std::unique_ptr<IVideoRenderer> renderer_;
     bool rendererReady_ = false;
@@ -308,28 +360,10 @@ private:
     bool stopRequested_ = false;
     std::string currentPath_;
 
-    // Events queued for the main thread to drain via PollEvent(). Guarded by mutex_.
-    std::queue<MediaEvent> events_;
-
-    // Video frame handoff (decode thread → render thread). Three buffers cycle
-    // through swap under frameMutex_: decode-owned → pending → display-owned.
-    std::mutex frameMutex_;
-    std::vector<uint8_t> pendingPixels_; // newest RGBA frame awaiting display
-    std::vector<uint8_t> displayPixels_; // frame owned by the render thread
-    int pendingW_ = 0;
-    int pendingH_ = 0;
-    bool pendingValid_ = false;
-    std::atomic<bool> newFramePending_{false};
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    // Zero-copy path: instead of the RGBA buffers, the decode thread hands a ref'd
-    // AVFrame (carrying an AVVkFrame) to the render thread. pendingVkFrame_ is guarded by
-    // frameMutex_; displayVkFrame_ is render-thread-owned. pendingIsVulkan_ distinguishes
-    // which pending channel is live (a file is one path or the other for its lifetime).
-    AVFrame* pendingVkFrame_ = nullptr;
-    AVFrame* displayVkFrame_ = nullptr;
-    bool pendingIsVulkan_ = false;
-    bool displayIsVulkan_ = false; // render-thread-owned: last frame handed to the renderer
-#endif
+    // Video frame handoff (decode thread → render thread): latest-wins mailbox,
+    // internally locked. The Vulkan zero-copy path rides the gate's opaque channel
+    // (a ref'd AVFrame released via av_frame_free, injected in the ctor).
+    VideoFrameGate frameGate_;
     bool preparedOverlayActive_ = false;
 
     // Observable / queryable state.
@@ -375,15 +409,10 @@ private:
     std::string mediaTitle_;                        // metadata title (guarded by mutex_)
     std::string hwDecName_ = "no";                  // active hw decoder name / "no" (guarded by mutex_)
 
-    // Which properties the host/plugins have subscribed to (indexed by enum value).
-    std::array<std::atomic<bool>, kPropCount> observed_{};
-
-    // Video-only wall clock baseline (guarded by mutex_): maps a pts to a wall time
-    // so the fallback clock can be frozen across pause.
-    double videoClockPts_ = 0.0;
-    bool videoClockSet_ = false;
-    std::chrono::steady_clock::time_point videoClockWall_;
-    std::chrono::steady_clock::time_point pauseWall_;
+    // Video-only wall clock baseline (guarded by mutex_ — see VideoWallClockState's
+    // locking note): maps a pts to a wall time so the fallback clock can be frozen
+    // across pause.
+    VideoWallClockState videoClock_;
 
     // Toggle state mirrors (defaults match the player's initial state).
     bool muteEnabled_ = false;

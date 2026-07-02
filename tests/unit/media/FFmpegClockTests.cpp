@@ -8,6 +8,8 @@
 
 #include <QtTest/QtTest>
 
+#include <chrono>
+
 // ── ComputeMasterClock ─────────────────────────────────────────────────────────
 
 class FFmpegClockTests final : public QObject
@@ -127,6 +129,62 @@ private Q_SLOTS:
         // Duration unknown (<= 0): only the lower bound is enforced.
         QCOMPARE(ClampSeekTarget(500.0, 0.0), 500.0);
         QCOMPARE(ClampSeekTarget(-1.0, 0.0), 0.0);
+    }
+
+    // ── VideoWallClockState ────────────────────────────────────────────────────
+
+    void WallClockReadsZeroUntilEstablished()
+    {
+        VideoWallClockState clk;
+        const auto now = std::chrono::steady_clock::now();
+        QCOMPARE(clk.Read(false, now), 0.0);
+        QCOMPARE(clk.Read(true, now), 0.0);
+    }
+
+    void WallClockAdvancesFromEstablishedPts()
+    {
+        VideoWallClockState clk;
+        const auto t0 = std::chrono::steady_clock::now();
+        QVERIFY(clk.EstablishOnce(10.0, t0));
+        QCOMPARE(clk.Read(false, t0), 10.0);
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(2)), 12.0);
+        // A later frame must not re-anchor the baseline.
+        QVERIFY(!clk.EstablishOnce(99.0, t0 + std::chrono::seconds(3)));
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(4)), 14.0);
+    }
+
+    void WallClockFreezesAcrossPause()
+    {
+        VideoWallClockState clk;
+        const auto t0 = std::chrono::steady_clock::now();
+        clk.EstablishOnce(10.0, t0);
+        // Pause 1s in: reads as of the pause instant no matter how much later.
+        clk.OnPauseEdge(true, t0 + std::chrono::seconds(1));
+        QCOMPARE(clk.Read(true, t0 + std::chrono::seconds(5)), 11.0);
+        // Resume 4s later: the baseline shifts past the gap, clock continues at 11.
+        clk.OnPauseEdge(false, t0 + std::chrono::seconds(5));
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(5)), 11.0);
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(7)), 13.0);
+    }
+
+    void WallClockResumeEdgeBeforeEstablishIsIgnored()
+    {
+        VideoWallClockState clk;
+        const auto t0 = std::chrono::steady_clock::now();
+        clk.OnPauseEdge(false, t0); // resume with no baseline: no-op, must not crash
+        QVERIFY(clk.EstablishOnce(0.0, t0));
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(1)), 1.0);
+    }
+
+    void WallClockResetRequiresReestablish()
+    {
+        VideoWallClockState clk;
+        const auto t0 = std::chrono::steady_clock::now();
+        clk.EstablishOnce(10.0, t0);
+        clk.Reset();
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(1)), 0.0);
+        QVERIFY(clk.EstablishOnce(20.0, t0 + std::chrono::seconds(2)));
+        QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(3)), 21.0);
     }
 };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 
 // Pure A/V-sync math for the FFmpeg backend (issue #8, Phase 3).
@@ -75,6 +76,66 @@ inline bool IsMistimedFrame(double framePts, double masterClock, double toleranc
 {
     return (masterClock - framePts) > tolerance;
 }
+
+// Video-only wall-clock fallback: when a file has no audio device, the master
+// clock is derived from the first presented frame's pts and the wall clock, and
+// must freeze across pause. Deliberately NOT internally locked — every member
+// function must be called under FFmpegPlayer::mutex_, because establishment and
+// pause edges share compound critical sections with the seek gates there.
+struct VideoWallClockState
+{
+    double pts = 0.0;
+    bool set = false;
+    std::chrono::steady_clock::time_point wall;      // wall time `pts` maps to
+    std::chrono::steady_clock::time_point pauseWall; // wall time playback paused at
+
+    // Anchor the baseline on the first presented frame; later frames are no-ops.
+    // Returns true when this call established it (the caller re-arms seek gates).
+    bool EstablishOnce(double framePts, std::chrono::steady_clock::time_point now)
+    {
+        if (set)
+        {
+            return false;
+        }
+        set = true;
+        pts = framePts;
+        wall = now;
+        pauseWall = now;
+        return true;
+    }
+
+    // Pause edge: remember when playback froze; on resume, shift the baseline
+    // past the pause gap so the clock continues from where it stopped.
+    void OnPauseEdge(bool paused, std::chrono::steady_clock::time_point now)
+    {
+        if (paused)
+        {
+            pauseWall = now;
+        }
+        else if (set)
+        {
+            wall += now - pauseWall;
+        }
+    }
+
+    // Current clock reading (seconds); 0 until established. While paused, reads
+    // as of the pause instant so the clock is frozen.
+    [[nodiscard]] double Read(bool paused, std::chrono::steady_clock::time_point now) const
+    {
+        if (!set)
+        {
+            return 0.0;
+        }
+        const auto ref = paused ? pauseWall : now;
+        return pts + std::chrono::duration<double>(ref - wall).count();
+    }
+
+    // Invalidate (new file / applied seek); the next presented frame re-anchors.
+    void Reset()
+    {
+        set = false;
+    }
+};
 
 // Clamp a requested seek target (seconds) to the playable range. Negative targets
 // (seeking before the start) clamp to 0; targets past the end clamp to duration.

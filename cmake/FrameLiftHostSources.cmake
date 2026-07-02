@@ -116,14 +116,25 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPacketQueue.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayer.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayer.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerCommands.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerInternal.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerProperties.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerRender.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerSession.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerTracks.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegPlayerWorkers.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSettingsMapping.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSidecarScan.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitleBlend.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitles.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegSubtitles.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegTrackLabel.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegTrackSelect.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/PlaybackSettings.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/PlayerEventSink.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/SubtitleSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeMode.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoFrameGate.h"
 )
 
 set(_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES
@@ -220,7 +231,7 @@ endif ()
 framelift_add_host_module(framelift_mod_playback ${_framelift_playback_sources})
 if (WIN32)
     # winmm: timeBeginPeriod/timeEndPeriod used by the video frame-pacing timer in
-    # FFmpegPlayer.cpp (this module is where those calls actually live).
+    # FFmpegPlayerWorkers.cpp (this module is where those calls actually live).
     target_link_libraries(framelift_mod_playback PRIVATE winmm)
 endif ()
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
