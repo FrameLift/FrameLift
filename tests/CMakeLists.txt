@@ -88,6 +88,8 @@ add_executable(framelift_tests
         unit/media/FFmpegTrackLabelTests.cpp
         unit/media/PlayerEventSinkTests.cpp
         unit/media/VideoFrameGateTests.cpp
+        unit/media/FFmpegSidecarScanTests.cpp
+        unit/media/FFmpegTrackSelectTests.cpp
         unit/gfx/VulkanQueueLockTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"

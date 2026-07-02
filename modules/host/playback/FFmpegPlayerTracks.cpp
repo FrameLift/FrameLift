@@ -21,117 +21,17 @@ using namespace ffplay_detail;
 
 void FFmpegPlayer::ScanExternalSources(const std::string& mediaPath)
 {
-    externalSources_.clear();
-    if (!subAutoLoad_ && !audioFileAutoLoad_)
-    {
-        return;
-    }
-
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path media(mediaPath);
-    const fs::path dir = media.parent_path();
-    const std::string stem = media.stem().string();
-    if (dir.empty() || stem.empty())
-    {
-        return;
-    }
-
-    const auto lower = [](std::string s)
-    {
-        for (char& c : s)
-        {
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        }
-        return s;
-    };
-    const std::string stemL = lower(stem);
-    const std::string mediaName = media.filename().string();
-
-    static constexpr std::array<const char*, 4> kSubExt = {".srt", ".ass", ".ssa", ".sub"};
-    static constexpr std::array<const char*, 6> kAudExt = {".mka", ".m4a", ".aac", ".ac3", ".dts", ".flac"};
-
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
-    {
-        if (!it->is_regular_file(ec))
-        {
-            continue;
-        }
-        const fs::path p = it->path();
-        if (p.filename().string() == mediaName)
-        {
-            continue; // skip the media file itself
-        }
-        const std::string nameL = lower(p.filename().string());
-        if (nameL.find(stemL) == std::string::npos)
-        {
-            continue; // fuzzy match: sidecar name must contain the media stem
-        }
-        const std::string ext = lower(p.extension().string());
-        const auto matches = [&ext](const auto& list)
-        {
-            return std::find_if(
-                       list.begin(), list.end(),
-                       [&](const char* e)
-                       {
-                           return ext == e;
-                       }
-                   ) != list.end();
-        };
-        if (subAutoLoad_ && matches(kSubExt))
-        {
-            externalSources_.push_back({p.string(), false});
-        }
-        else if (audioFileAutoLoad_ && matches(kAudExt))
-        {
-            externalSources_.push_back({p.string(), true});
-        }
-    }
+    externalSources_ = ScanSidecarFiles(mediaPath, subAutoLoad_, audioFileAutoLoad_);
 }
 
 void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStream)
 {
-    std::lock_guard lock(tracksMutex_);
-    tracks_.clear();
-    nextTrackId_ = 1;
-
-    int64_t defaultAudio = -1;
-    int64_t defaultSub = -1;         // an embedded sub flagged DEFAULT
-    int64_t defaultSubFallback = -1; // first subtitle track of any kind
-    int audioOrd = 0;
-    int subOrd = 0;
-
-    // User track-selection preferences (guarded by tracksMutex_, held here).
-    const std::string prefLang = subtitleStyle_.preferredLang;
-    const std::string audioPrefLang = audioPrefs_.preferredLang;
-    const bool preferForced = subtitleStyle_.preferForced;
-    int64_t langAudio = -1;     // first audio stream matching the preferred language
-    int64_t langSub = -1;       // first sub matching the preferred language
-    int64_t forcedSub = -1;     // first forced sub
-    int64_t forcedLangSub = -1; // first forced sub matching the preferred language
-
-    // Case-insensitive language match tolerant of 2- vs 3-letter codes ("en"~"eng").
-    const auto langMatches = [](const std::string& wanted, const char* tag) -> bool
-    {
-        if (wanted.empty() || !tag)
-        {
-            return false;
-        }
-        const size_t n = std::min(wanted.size(), std::strlen(tag));
-        for (size_t i = 0; i < n; ++i)
-        {
-            if (std::tolower(static_cast<unsigned char>(tag[i])) != std::tolower(static_cast<unsigned char>(wanted[i])))
-            {
-                return false;
-            }
-        }
-        return n > 0;
-    };
-
-    // Embedded audio + subtitle streams, in container order.
+    // The only libav part: snapshot the embedded audio/subtitle streams for the
+    // pure selection logic in FFmpegTrackSelect.h.
+    std::vector<EmbeddedStreamInfo> streams;
     for (unsigned i = 0; i < mainFmt->nb_streams; ++i)
     {
-        AVStream* st = mainFmt->streams[i];
+        const AVStream* st = mainFmt->streams[i];
         const AVMediaType type = st->codecpar->codec_type;
         if (type != AVMEDIA_TYPE_AUDIO && type != AVMEDIA_TYPE_SUBTITLE)
         {
@@ -139,112 +39,26 @@ void FFmpegPlayer::BuildTrackList(AVFormatContext* mainFmt, int defaultAudioStre
         }
         const AVDictionaryEntry* titleTag = av_dict_get(st->metadata, "title", nullptr, 0);
         const AVDictionaryEntry* langTag = av_dict_get(st->metadata, "language", nullptr, 0);
-
-        TrackEntry e;
-        e.id = nextTrackId_++;
-        e.kind = type == AVMEDIA_TYPE_AUDIO ? TrackKind::Audio : TrackKind::Subtitle;
-        e.container = 0;
-        e.streamIndex = static_cast<int>(i);
-        e.external = false;
-        const int ord = type == AVMEDIA_TYPE_AUDIO ? ++audioOrd : ++subOrd;
-        char label[256];
-        MakeTrackLabel(label, titleTag ? titleTag->value : nullptr, langTag ? langTag->value : nullptr, ord, nullptr);
-        e.label = label;
-        e.language = langTag ? langTag->value : "";
-
-        if (type == AVMEDIA_TYPE_AUDIO && static_cast<int>(i) == defaultAudioStream)
-        {
-            defaultAudio = e.id;
-        }
-        if (type == AVMEDIA_TYPE_AUDIO && langAudio < 0 &&
-            langMatches(audioPrefLang, langTag ? langTag->value : nullptr))
-        {
-            langAudio = e.id;
-        }
-        if (type == AVMEDIA_TYPE_SUBTITLE)
-        {
-            if (defaultSubFallback < 0)
-            {
-                defaultSubFallback = e.id;
-            }
-            if ((st->disposition & AV_DISPOSITION_DEFAULT) != 0 && defaultSub < 0)
-            {
-                defaultSub = e.id;
-            }
-            const bool forced = (st->disposition & AV_DISPOSITION_FORCED) != 0;
-            const bool langOk = langMatches(prefLang, langTag ? langTag->value : nullptr);
-            if (langOk && langSub < 0)
-            {
-                langSub = e.id;
-            }
-            if (forced && forcedSub < 0)
-            {
-                forcedSub = e.id;
-            }
-            if (forced && langOk && forcedLangSub < 0)
-            {
-                forcedLangSub = e.id;
-            }
-        }
-        tracks_.push_back(std::move(e));
+        EmbeddedStreamInfo info;
+        info.index = static_cast<int>(i);
+        info.isAudio = type == AVMEDIA_TYPE_AUDIO;
+        info.title = titleTag && titleTag->value ? titleTag->value : "";
+        info.language = langTag && langTag->value ? langTag->value : "";
+        info.isDefault = (st->disposition & AV_DISPOSITION_DEFAULT) != 0;
+        info.isForced = (st->disposition & AV_DISPOSITION_FORCED) != 0;
+        streams.push_back(std::move(info));
     }
 
-    if (defaultAudio < 0)
-    {
-        for (const TrackEntry& t : tracks_)
-        {
-            if (t.kind == TrackKind::Audio)
-            {
-                defaultAudio = t.id;
-                break;
-            }
-        }
-    }
-
-    // External sidecar files (their container index is externalSources_ index + 1).
-    for (std::size_t k = 0; k < externalSources_.size(); ++k)
-    {
-        const ExternalSource& src = externalSources_[k];
-        const std::string base = std::filesystem::path(src.path).filename().string();
-        TrackEntry e;
-        e.id = nextTrackId_++;
-        e.kind = src.isAudio ? TrackKind::Audio : TrackKind::Subtitle;
-        e.container = static_cast<int>(k) + 1;
-        e.streamIndex = -1;
-        e.external = true;
-        char label[256];
-        MakeTrackLabel(label, nullptr, nullptr, 0, base.c_str());
-        e.label = label;
-        if (!src.isAudio && defaultSubFallback < 0)
-        {
-            defaultSubFallback = e.id;
-        }
-        tracks_.push_back(std::move(e));
-    }
-
-    selectedAudioId_ = langAudio >= 0 ? langAudio : defaultAudio;
-
-    // Selection precedence: forced (matching language first) when preferForced, then a
-    // preferred-language match, then the file's DEFAULT-flagged sub, then any sub.
-    int64_t chosenSub = -1;
-    if (preferForced)
-    {
-        chosenSub = forcedLangSub >= 0 ? forcedLangSub : forcedSub;
-    }
-    if (chosenSub < 0)
-    {
-        chosenSub = langSub;
-    }
-    if (chosenSub < 0)
-    {
-        chosenSub = defaultSub >= 0 ? defaultSub : defaultSubFallback;
-    }
-    selectedSubId_ = chosenSub;
-    for (TrackEntry& t : tracks_)
-    {
-        t.selected = (t.kind == TrackKind::Audio && t.id == selectedAudioId_) ||
-                     (t.kind == TrackKind::Subtitle && t.id == selectedSubId_);
-    }
+    std::lock_guard lock(tracksMutex_);
+    // User track-selection preferences (guarded by tracksMutex_, held here).
+    TrackSelection sel = BuildTracks(
+        streams, externalSources_, defaultAudioStream, audioPrefs_.preferredLang, subtitleStyle_.preferredLang,
+        subtitleStyle_.preferForced
+    );
+    tracks_ = std::move(sel.tracks);
+    selectedAudioId_ = sel.selectedAudioId;
+    selectedSubId_ = sel.selectedSubId;
+    nextTrackId_ = sel.nextTrackId;
 }
 
 void FFmpegPlayer::RefreshSelectedFlags()

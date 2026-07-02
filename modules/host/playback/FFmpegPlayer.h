@@ -2,7 +2,9 @@
 
 #include <framelift/platform/IMediaPlayer.h>
 
+#include "FFmpegSidecarScan.h"
 #include "FFmpegSubtitles.h"
+#include "FFmpegTrackSelect.h"
 #include "IVideoRenderer.h"
 #include "PlayerEventSink.h"
 #include "ReadAheadCache.h"
@@ -221,32 +223,8 @@ private:
     void EmitPlaybackSummary(const char* reason);
 
     // ── Track model ──────────────────────────────────────────────────────────
-    enum class TrackKind : std::uint8_t
-    {
-        Audio,
-        Subtitle,
-    };
-
-    // One selectable audio/subtitle track, embedded in the main container or living
-    // in an external sidecar file. id is stable for the lifetime of the loaded file.
-    struct TrackEntry
-    {
-        int64_t id = 0;
-        TrackKind kind = TrackKind::Audio;
-        int container = 0;    // 0 = main container; >=1 == externalSources_ index + 1
-        int streamIndex = -1; // stream index within that container (embedded routing)
-        bool external = false;
-        bool selected = false;
-        std::string label;
-        std::string language;
-    };
-
-    // A fuzzy-matched sidecar file discovered next to the media (Phase 5 auto-load).
-    struct ExternalSource
-    {
-        std::string path;
-        bool isAudio = false; // else subtitle
-    };
+    // TrackKind / TrackEntry / ExternalSource and the pure selection logic live
+    // in FFmpegTrackSelect.h / FFmpegSidecarScan.h (libav-free, unit-tested).
 
     // The currently bound audio source. fmt is owned (and closed) only when external;
     // for embedded audio it aliases the main container.
