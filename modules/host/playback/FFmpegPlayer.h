@@ -39,6 +39,42 @@ class Settings;
 // This and FFmpeg* siblings are the ONLY files that may #include <libav*/...> or
 // <ass/...> headers.
 //
+// ── Threading model ──────────────────────────────────────────────────────────
+// Threads touching this object:
+//   host    — every public interface/concrete method except the render group
+//             below (commands, properties, PollEvent, track Enumerate/Select).
+//   decode  — decodeThread_: DecodeThreadMain → PlayFile; owns the demux session.
+//   workers — audioThread_ / videoThread_ / subtitleThread_ / extAudioThread_,
+//             spawned and joined by PlayFile per demux session.
+//   render  — InitRender/ReleaseRender/HasNewFrame/RenderFrame/
+//             PrepareRenderFrame/DrawPreparedFrame (Qt scene-graph thread).
+//
+// Locks and what they guard:
+//   mutex_ + cv_   — load/stop commands (pendingPath_, hasPendingLoad_,
+//                    stopRequested_, currentPath_), the seek request + its
+//                    two-flag gate (hasPendingSeek_/seekTarget_/seekSettled_/
+//                    seekClockValid_ — see the comment at their declaration),
+//                    pending track switches, events_ + wakeupCb_ + renderCb_,
+//                    the video wall-clock baseline (videoClock*, pauseWall_),
+//                    subtitleSeekClockOverride*, mediaTitle_, hwDecName_,
+//                    normalizeParams_, volume_/muteEnabled_/subtitlesEnabled_.
+//                    Several of these appear in cv_ wait predicates on the
+//                    decode/worker threads — do not move them to another lock.
+//   frameMutex_    — the pending decode→render frame handoff (pendingPixels_,
+//                    pendingW_/H_/pendingValid_, pendingVkFrame_,
+//                    pendingIsVulkan_). displayPixels_, displayVkFrame_,
+//                    displayIsVulkan_, overlayScratch_, overlayActive_,
+//                    preparedOverlayActive_, renderer_ and rendererReady_ are
+//                    render-thread-owned and unguarded.
+//   tracksMutex_   — tracks_/selectedAudioId_/selectedSubId_/nextTrackId_/
+//                    externalSources_ + the audioPrefs_/subtitleStyle_ behavior
+//                    fields read on the decode thread. Held only briefly; never
+//                    across a cv_ wait, and never acquire mutex_ while holding it.
+//
+// Decode-thread-owned, deliberately non-atomic: hasVideo_ and seekSkipPts_ are
+// written only while all workers are joined (between sessions / at the seek
+// boundary) and read lock-free by workers afterwards.
+//
 // Per file, a demux thread fans packets into bounded audio/video queues and
 // spawns an audio worker (resamples to Qt's raw PCM sink — the master clock) and
 // a video worker (swscale → present,
