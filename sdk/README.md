@@ -243,4 +243,4 @@ across the DLL boundary.
 
 ## License
 
-[zlib](LICENSE)
+[Apache-2.0](LICENSE)
