@@ -59,6 +59,11 @@ runs:
       run: python3 -m pip install --break-system-packages --upgrade --force-reinstall --no-cache-dir git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
     - name: Install prebuilt Qt
       uses: jurplel/install-qt-action@v4
+      # install-qt-action reinstalls aqt from aqtsource with its own pip call;
+      # on the PEP 668 externally-managed container that fails unless pip is told
+      # to proceed. The env var applies to every pip invocation (no-op on Windows).
+      env:
+        PIP_BREAK_SYSTEM_PACKAGES: "1"
       with:
         setup-python: false
         aqtsource: git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
