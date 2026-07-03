@@ -1,5 +1,7 @@
 #include "VulkanGraphicsBackend.h"
 
+#include "VulkanCapabilityPlan.h"
+#include "VulkanDeviceSelect.h"
 #include "VulkanUtil.h"
 #include "VulkanVideoRenderer.h"
 
@@ -290,39 +292,50 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
 void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
 {
     uint32_t physicalCount = 0;
-    vkEnumeratePhysicalDevices(instance_, &physicalCount, nullptr);
+    VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &physicalCount, nullptr), "Vulkan device enumeration failed");
     if (physicalCount == 0)
     {
         throw std::runtime_error("No Vulkan physical devices were found");
     }
     std::vector<VkPhysicalDevice> devices(physicalCount);
-    vkEnumeratePhysicalDevices(instance_, &physicalCount, devices.data());
+    VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &physicalCount, devices.data()), "Vulkan device enumeration failed");
 
-    VkPhysicalDevice chosen = VK_NULL_HANDLE;
-    uint32_t chosenGraphics = 0;
-    bool chosenDiscrete = false;
-    bool chosenVideoCapable = false;
-    std::vector<VkQueueFamilyProperties> chosenQueues;
-    std::vector<VkExtensionProperties> chosenExtensions;
-
-    for (VkPhysicalDevice candidate : devices)
+    // Gather the Vulkan-side facts per device, then let the pure selection policy
+    // (VulkanDeviceSelect, unit-tested) pick the winner.
+    static_assert(VulkanDeviceSelect::kMinApiVersion == VK_API_VERSION_1_3);
+    struct CandidateData
     {
+        uint32_t graphicsFamily = 0;
+        std::vector<VkQueueFamilyProperties> queues;
+        std::vector<VkExtensionProperties> extensions;
+    };
+    std::vector<VulkanDeviceSelect::Candidate> candidates(devices.size());
+    std::vector<CandidateData> candidateData(devices.size());
+
+    for (std::size_t d = 0; d < devices.size(); ++d)
+    {
+        VkPhysicalDevice candidate = devices[d];
+        VulkanDeviceSelect::Candidate& facts = candidates[d];
+        CandidateData& data = candidateData[d];
+
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(candidate, &properties);
+        facts.apiVersion = properties.apiVersion;
+        facts.discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
         if (properties.apiVersion < VK_API_VERSION_1_3)
         {
-            continue;
+            continue; // remaining queries can't make it eligible
         }
 
         uint32_t queueCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, nullptr);
-        std::vector<VkQueueFamilyProperties> queues(queueCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, queues.data());
+        data.queues.resize(queueCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, data.queues.data());
 
         int graphicsFamily = -1;
         for (uint32_t i = 0; i < queueCount; ++i)
         {
-            if ((queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+            if ((data.queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
                 qtInstance_->supportsPresent(candidate, i, presentProbe))
             {
                 graphicsFamily = static_cast<int>(i);
@@ -333,12 +346,15 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         {
             continue;
         }
+        facts.hasGraphicsPresentQueue = true;
+        data.graphicsFamily = static_cast<uint32_t>(graphicsFamily);
 
         uint32_t extensionCount = 0;
         vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, nullptr);
-        std::vector<VkExtensionProperties> extensions(extensionCount);
-        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, extensions.data());
-        if (!HasExtension(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        data.extensions.resize(extensionCount);
+        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, data.extensions.data());
+        facts.hasSwapchainExtension = HasExtension(data.extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        if (!facts.hasSwapchainExtension)
         {
             continue;
         }
@@ -353,38 +369,31 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         vkGetPhysicalDeviceFeatures2(candidate, &candidateF2);
 
         const bool hasDecodeQueue = std::ranges::any_of(
-            queues,
+            data.queues,
             [](const VkQueueFamilyProperties& queue)
             {
                 return (queue.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
             }
         );
-        const bool candidateVideoCapable = HasExtension(extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
-                                           HasExtension(extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
-                                           hasDecodeQueue && candidateF11.samplerYcbcrConversion &&
-                                           candidateF12.timelineSemaphore && candidateF13.synchronization2 &&
-                                           queues[static_cast<uint32_t>(graphicsFamily)].queueCount >= 2;
-        const bool discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-        if (!chosen || (candidateVideoCapable && !chosenVideoCapable) ||
-            (candidateVideoCapable == chosenVideoCapable && discrete && !chosenDiscrete))
-        {
-            chosen = candidate;
-            chosenGraphics = static_cast<uint32_t>(graphicsFamily);
-            chosenDiscrete = discrete;
-            chosenVideoCapable = candidateVideoCapable;
-            chosenQueues = std::move(queues);
-            chosenExtensions = std::move(extensions);
-        }
+        facts.videoCapable = HasExtension(data.extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
+                             HasExtension(data.extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
+                             hasDecodeQueue && candidateF11.samplerYcbcrConversion && candidateF12.timelineSemaphore &&
+                             candidateF13.synchronization2 && data.queues[data.graphicsFamily].queueCount >= 2;
     }
 
-    if (!chosen)
+    const int chosenIdx = VulkanDeviceSelect::SelectDevice(candidates);
+    if (chosenIdx < 0)
     {
         throw std::runtime_error("No Vulkan 1.3 device with a graphics/present queue is available");
     }
+    const bool chosenDiscrete = candidates[static_cast<std::size_t>(chosenIdx)].discrete;
+    std::vector<VkQueueFamilyProperties> chosenQueues = std::move(candidateData[static_cast<std::size_t>(chosenIdx)].queues);
+    std::vector<VkExtensionProperties> chosenExtensions =
+        std::move(candidateData[static_cast<std::size_t>(chosenIdx)].extensions);
 
-    physicalDevice_ = chosen;
-    graphicsQueueFamily_ = chosenGraphics;
-    graphicsQueueFlags_ = chosenQueues[chosenGraphics].queueFlags;
+    physicalDevice_ = devices[static_cast<std::size_t>(chosenIdx)];
+    graphicsQueueFamily_ = candidateData[static_cast<std::size_t>(chosenIdx)].graphicsFamily;
+    graphicsQueueFlags_ = chosenQueues[graphicsQueueFamily_].queueFlags;
 
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
@@ -439,42 +448,48 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
 #endif
 
-    // Push descriptors: core feature bit on 1.4, plain extension (no feature struct)
-    // on a 1.3 device.
-    const bool hasPushDescExt = HasExtension(chosenExtensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-    bool pushDescSupported = false;
+    // Negotiate the optional 1.4-preferred capabilities (host image copy, push
+    // descriptors) with the pure, unit-tested decision table in VulkanCapabilityPlan.
+    VulkanCapabilityPlan::Inputs capIn;
+    capIn.deviceIs14 = deviceApiVersion_ >= VK_API_VERSION_1_4;
 #ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
-    if (deviceApiVersion_ >= VK_API_VERSION_1_4 && supportedF14.pushDescriptor)
+    capIn.coreHostImageCopy = supportedF14.hostImageCopy == VK_TRUE;
+    capIn.corePushDescriptor = supportedF14.pushDescriptor == VK_TRUE;
+#endif
+    capIn.extHostImageCopy = hasHostCopyExt && supportedHostCopy.hostImageCopy == VK_TRUE;
+    capIn.extPushDescriptor = HasExtension(chosenExtensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    capIn.hostTransferFormatOk = HostTransferFormatSupported();
+    capIn.discreteAdapter = chosenDiscrete;
+    if (const char* env = std::getenv("FRAMELIFT_VK_HOST_COPY"); env && *env != '\0')
+    {
+        capIn.hostCopyEnv = *env == '1' ? 1 : 0;
+    }
+    if (const char* env = std::getenv("FRAMELIFT_VK_NO_PUSH_DESC"); env && *env == '1')
+    {
+        capIn.noPushDescEnv = true;
+    }
+    const VulkanCapabilityPlan::Plan capPlan = VulkanCapabilityPlan::Negotiate(capIn);
+
+    if (capPlan.enableHostCopyFeature)
+    {
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+        if (capIn.deviceIs14)
+        {
+            enabledF14_.hostImageCopy = VK_TRUE;
+        }
+        else
+#endif
+        {
+            enabledHostCopy_.hostImageCopy = VK_TRUE;
+            enabledF13_.pNext = &enabledHostCopy_;
+        }
+    }
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+    if (capPlan.enablePushDescFeature)
     {
         enabledF14_.pushDescriptor = VK_TRUE;
-        pushDescSupported = true;
     }
-    else if (deviceApiVersion_ < VK_API_VERSION_1_4 && hasPushDescExt)
-#else
-    if (hasPushDescExt)
 #endif
-    {
-        pushDescSupported = true;
-    }
-
-    // Host image copy: core feature bit on 1.4, EXT feature struct (+ extension,
-    // enabled below with the other optionals) on a 1.3 device.
-    bool hostCopySupported = false;
-#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
-    if (deviceApiVersion_ >= VK_API_VERSION_1_4 && supportedF14.hostImageCopy)
-    {
-        enabledF14_.hostImageCopy = VK_TRUE;
-        hostCopySupported = true;
-    }
-    else if (deviceApiVersion_ < VK_API_VERSION_1_4 && hasHostCopyExt && supportedHostCopy.hostImageCopy)
-#else
-    if (hasHostCopyExt && supportedHostCopy.hostImageCopy)
-#endif
-    {
-        enabledHostCopy_.hostImageCopy = VK_TRUE;
-        enabledF13_.pNext = &enabledHostCopy_;
-        hostCopySupported = true;
-    }
 
     enabledDeviceExtNames_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     auto enableOptional = [&](const char* name)
@@ -509,11 +524,11 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     {
         enableOptional(optional);
     }
-    if (hostCopySupported && deviceApiVersion_ < VK_API_VERSION_1_4)
+    if (capPlan.enableHostCopyExt)
     {
         enableOptional(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
     }
-    if (pushDescSupported && deviceApiVersion_ < VK_API_VERSION_1_4)
+    if (capPlan.enablePushDescExt)
     {
         enableOptional(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     }
@@ -555,22 +570,19 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     vkGetDeviceQueue(device_, graphicsQueueFamily_, qtGraphicsQueueIndex_, &graphicsQueue_);
     VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, graphicsQueue_, "FrameLift graphics queue (Qt)");
 
-    SetupHostImageCopy(hostCopySupported, chosenDiscrete);
+    SetupHostImageCopy(capPlan.useHostCopy);
 
     pushDescriptors_ = false;
-    if (pushDescSupported)
+    if (capPlan.usePushDesc)
     {
-        if (const char* env = std::getenv("FRAMELIFT_VK_NO_PUSH_DESC"); env && *env == '1')
-        {
-            Log::Debug("Vulkan: push descriptors disabled by FRAMELIFT_VK_NO_PUSH_DESC");
-        }
-        else
-        {
-            pushDescriptorSetFn_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(
-                device_, deviceApiVersion_ >= VK_API_VERSION_1_4 ? "vkCmdPushDescriptorSet" : "vkCmdPushDescriptorSetKHR"
-            ));
-            pushDescriptors_ = pushDescriptorSetFn_ != nullptr;
-        }
+        pushDescriptorSetFn_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(
+            device_, deviceApiVersion_ >= VK_API_VERSION_1_4 ? "vkCmdPushDescriptorSet" : "vkCmdPushDescriptorSetKHR"
+        ));
+        pushDescriptors_ = pushDescriptorSetFn_ != nullptr;
+    }
+    else if (capIn.noPushDescEnv)
+    {
+        Log::Debug("Vulkan: push descriptors disabled by FRAMELIFT_VK_NO_PUSH_DESC");
     }
 
     DetectVideoDecodeQueue(chosenQueues);
@@ -626,37 +638,25 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     );
 }
 
-void VulkanGraphicsBackend::SetupHostImageCopy(bool featureEnabled, bool discreteAdapter)
+// The upload format must support host transfer with optimal tiling; folded into the
+// capability plan's inputs.
+bool VulkanGraphicsBackend::HostTransferFormatSupported() const
 {
-    hostImageCopy_ = false;
-    if (!featureEnabled)
-    {
-        return;
-    }
-    // Default: integrated/UMA only. vkCopyMemoryToImage into an optimal-tiled image
-    // makes the driver detile on the CPU — measured ~28 ms/frame of extra render-thread
-    // CPU for 4K on a discrete NVIDIA GPU, far worse than the staging path's memcpy +
-    // GPU blit. On UMA it skips the PCIe staging hop and the copy stays cheap.
-    // FRAMELIFT_VK_HOST_COPY=1/0 forces it either way for measurement.
-    bool wanted = !discreteAdapter;
-    if (const char* env = std::getenv("FRAMELIFT_VK_HOST_COPY"); env && *env != '\0')
-    {
-        wanted = *env == '1';
-    }
-    if (!wanted)
-    {
-        Log::Debug("Vulkan: host image copy available but not selected (discrete adapter; staging path is faster)");
-        return;
-    }
-
-    // The upload format must support host transfer with optimal tiling.
     VkFormatProperties3 fp3{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
     VkFormatProperties2 fp2{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
     fp2.pNext = &fp3;
     vkGetPhysicalDeviceFormatProperties2(physicalDevice_, VK_FORMAT_R8G8B8A8_UNORM, &fp2);
-    if (!(fp3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT))
+    return (fp3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT) != 0;
+}
+
+// `selected` comes from VulkanCapabilityPlan: support, adapter-type default (see the
+// measured discrete-GPU detiling cost documented there) and env override already folded.
+void VulkanGraphicsBackend::SetupHostImageCopy(bool selected)
+{
+    hostImageCopy_ = false;
+    if (!selected)
     {
-        Log::Debug("Vulkan: host image copy unavailable for R8G8B8A8 (format lacks host transfer)");
+        Log::Debug("Vulkan: host image copy not selected (unsupported, discrete-adapter default, or env override)");
         return;
     }
 
@@ -856,7 +856,7 @@ VkCommandBuffer VulkanGraphicsBackend::FrameOpsCmd()
         }
         // Safe to reset: Qt waited this slot's fence before beginning the frame, which
         // covers our earlier same-queue submit that used this buffer.
-        vkResetCommandBuffer(cmd, 0);
+        VK_CHECK_LOG(vkResetCommandBuffer(cmd, 0), "Vulkan: frame-ops reset failed");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK_LOG_RETURN(vkBeginCommandBuffer(cmd, &begin), "Vulkan: frame-ops begin failed", VK_NULL_HANDLE);

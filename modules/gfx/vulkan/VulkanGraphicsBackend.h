@@ -36,6 +36,10 @@ class QWindow;
 // are suitable for FFmpeg zero-copy. Qt Quick adopts those objects and remains the
 // sole owner of the surface, swapchain, render targets, frame synchronization, and
 // presentation.
+//
+// Error policy (macros in VulkanUtil.h): construction/device setup throws — which
+// IsSupported() converts into a clean "unsupported" probe result; renderer init paths
+// return false and log; per-frame hot paths log once per call site and carry on.
 class VulkanGraphicsBackend final : public IGraphicsBackend
 {
 public:
@@ -214,7 +218,8 @@ private:
     void CreateInstance();
     void SetupDebugUtils();
     void CreateDevice(QWindow* presentProbe);
-    void SetupHostImageCopy(bool featureEnabled, bool discreteAdapter);
+    [[nodiscard]] bool HostTransferFormatSupported() const;
+    void SetupHostImageCopy(bool selected);
     void DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties);
     void RefreshQtResources(QQuickWindow* window);
     void FlushFrameSignals();
