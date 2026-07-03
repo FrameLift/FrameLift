@@ -399,6 +399,7 @@ bool QtAppWindow::eventFilter(QObject* watched, QEvent* event)
 
     AppEvent out{};
     bool deliver = true;
+    bool swallow = false;
 
     switch (event->type())
     {
@@ -408,6 +409,15 @@ bool QtAppWindow::eventFilter(QObject* watched, QEvent* event)
     case QEvent::KeyPress:
     case QEvent::KeyRelease: {
         const auto* ke = static_cast<QKeyEvent*>(event);
+        // Tab / Shift+Tab (Backtab) drive Qt Quick's focus navigation, which cycles focus
+        // into hidden overlays. Consume them so Qt never moves focus — this is the single
+        // app-wide off switch for Tab focus traversal. The event is still routed to the
+        // host sink below (Tab is a bindable hotkey via Keys::Tab); we only stop Qt Quick
+        // from acting on it.
+        if (ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab)
+        {
+            swallow = true;
+        }
         // While a text-input item (search field, etc.) holds focus, keystrokes belong to
         // it — don't route them to global hotkeys. Qt still delivers the event to the
         // focus item normally (we return false below); only the host sink is skipped.
@@ -451,6 +461,10 @@ bool QtAppWindow::eventFilter(QObject* watched, QEvent* event)
         {
             window_->update();
         }
+    }
+    if (swallow)
+    {
+        return true; // block Qt Quick focus navigation
     }
     return QObject::eventFilter(watched, event);
 }
