@@ -21,13 +21,13 @@ inline AudioNormalizeParams ToAudioNormalizeParams(const AudioSettings& s)
 
 inline PlaybackOptions ToPlaybackOptions(const PlaybackSettings& s)
 {
-    return {s.hwdec && IsVideoDecodeModeEnabled(VideoDecodeModeFromString(s.hwdecMode)), s.hrSeek, s.subAutoLoad,
+    return {IsVideoDecodeModeEnabled(VideoDecodeModeFromString(s.hwdecMode)), s.hrSeek, s.subAutoLoad,
             s.audioFileAutoLoad};
 }
 
 inline VideoDecodeMode ToVideoDecodeMode(const PlaybackSettings& s)
 {
-    return s.hwdec ? VideoDecodeModeFromString(s.hwdecMode) : VideoDecodeMode::Off;
+    return VideoDecodeModeFromString(s.hwdecMode);
 }
 
 inline AudioPreferences ToAudioPreferences(const AudioSettings& s)

@@ -105,7 +105,7 @@ public:
     }
 
     // Registered by modules whose fields need cross-field reconciliation after a
-    // load (e.g. playback hwdec/hwdecMode, graphics backend). `seen` is the set of
+    // load (e.g. playback hwdecMode, graphics backend). `seen` is the set of
     // keys that were actually present in the file.
     void AddPostLoad(std::function<void(const std::set<std::string>&)> fn)
     {

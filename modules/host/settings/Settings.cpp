@@ -159,6 +159,5 @@ void Settings::ApplyLaunchEnvironmentOverrides()
         PlaybackSettings& playback = Get<PlaybackSettings>();
         const VideoDecodeMode mode = VideoDecodeModeFromString(modeEnv);
         playback.hwdecMode = VideoDecodeModeName(mode);
-        playback.hwdec = IsVideoDecodeModeEnabled(mode);
     }
 }

@@ -76,7 +76,6 @@ private Q_SLOTS:
     void DefaultsAreSane()
     {
         const Settings s;
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);
         QVERIFY((s.Get<AudioSettings>().dynaudnormFrameLen) == (100));
@@ -115,7 +114,7 @@ accentColor=#AABBCC
     void LoadOverridesFields()
     {
         const char* content = R"([playback]
-hwdec=0
+hwdecMode=off
 [ui]
 panelWidth=500
 [files]
@@ -128,7 +127,6 @@ dynaudnormFrameLen=250
         Settings s;
         s.Load(f.str());
 
-        QVERIFY(!(s.Get<PlaybackSettings>().hwdec));
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
         QCOMPARE(s.Get<UISettings>().panelWidth, 500.f);
         QVERIFY((s.Get<FilesSettings>().videoExtensions) == ("avi;mov"));
@@ -145,13 +143,12 @@ dynaudnormFrameLen=250
     void LaunchAccelModeOverridesSettings()
     {
         const EnvGuard env("FL_ACCEL_MODE", "cuda");
-        const TempFile f("[playback]\nhwdec=0\nhwdecMode=off\n");
+        const TempFile f("[playback]\nhwdecMode=off\n");
 
         Settings s;
         s.Load(f.str());
         s.ApplyLaunchEnvironmentOverrides();
 
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
     }
 
@@ -162,7 +159,6 @@ dynaudnormFrameLen=250
         Settings s;
         s.ApplyLaunchEnvironmentOverrides();
 
-        QVERIFY(!(s.Get<PlaybackSettings>().hwdec));
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
     }
 
@@ -171,18 +167,16 @@ dynaudnormFrameLen=250
         const EnvGuard env("FL_ACCEL_MODE", "definitely-not-a-mode");
 
         Settings s;
-        s.Get<PlaybackSettings>().hwdec = false;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.ApplyLaunchEnvironmentOverrides();
 
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
     }
 
     void LaunchAccelModeIsNotSavedByStartupPersistence()
     {
         const EnvGuard env("FL_ACCEL_MODE", "cuda");
-        const TempFile f("[playback]\nhwdec=0\nhwdecMode=off\n");
+        const TempFile f("[playback]\nhwdecMode=off\n");
 
         Settings s;
         s.Load(f.str());
@@ -191,9 +185,7 @@ dynaudnormFrameLen=250
 
         Settings loaded;
         loaded.Load(f.str());
-        QVERIFY(!(loaded.Get<PlaybackSettings>().hwdec));
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
     }
 
@@ -254,7 +246,7 @@ dynaudnormFrameLen=250
         s.Load(f.str());
 
         QCOMPARE(s.Get<UISettings>().panelWidth, 400.f);                           // overridden
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);                                  // untouched default
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));                // untouched default
         QVERIFY((s.Get<FilesSettings>().videoExtensions.rfind("mp4", 0)) == (0u)); // untouched default
     }
 
@@ -267,7 +259,7 @@ dynaudnormFrameLen=250
 
         QCOMPARE(s.Get<UISettings>().panelWidth, 350.f);
         // No crash, other fields unaffected.
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
     }
 
     void MalformedNumericValueIsIgnored()
@@ -324,31 +316,20 @@ dynaudnormFrameLen=250
     {
         // Bool fields parse via (v == "1"); every other token is false, none throw.
         const Settings def;
-        QVERIFY(def.Get<PlaybackSettings>().hwdec); // default is true, so "not 1" must flip it to false
+        QVERIFY(def.Get<PlaybackSettings>().hrSeek); // default is true, so "not 1" must flip it to false
 
         for (const char* token : {"true", "2", "yes"})
         {
-            const TempFile f(std::string("[playback]\nhwdec=") + token + "\n");
+            const TempFile f(std::string("[playback]\nhrSeek=") + token + "\n");
             Settings s;
             s.Load(f.str());
-            QVERIFY2(!(s.Get<PlaybackSettings>().hwdec), (std::string("token=") + token).c_str());
+            QVERIFY2(!(s.Get<PlaybackSettings>().hrSeek), (std::string("token=") + token).c_str());
         }
 
-        const TempFile one("[playback]\nhwdec=1\n");
+        const TempFile one("[playback]\nhrSeek=1\n");
         Settings s;
         s.Load(one.str());
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
-    }
-
-    void HwdecModeOverridesLegacyBool()
-    {
-        const TempFile f("[playback]\nhwdec=0\nhwdecMode=cuda\n");
-
-        Settings s;
-        s.Load(f.str());
-
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
-        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
+        QVERIFY(s.Get<PlaybackSettings>().hrSeek);
     }
 
     void InvalidHwdecModeNormalizesToAuto()
@@ -358,22 +339,19 @@ dynaudnormFrameLen=250
         Settings s;
         s.Load(f.str());
 
-        QVERIFY(s.Get<PlaybackSettings>().hwdec);
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
     }
 
-    void SaveSynchronizesLegacyHwdecFromMode()
+    void SaveNormalizesHwdecMode()
     {
         const TempFile f;
         Settings s;
-        s.Get<PlaybackSettings>().hwdec = true;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.Save(f.str());
 
         Settings loaded;
         loaded.Load(f.str());
 
-        QVERIFY(!(loaded.Get<PlaybackSettings>().hwdec));
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
     }
 
@@ -426,7 +404,6 @@ dynaudnormFrameLen=250
         const TempFile f;
 
         Settings s;
-        s.Get<PlaybackSettings>().hwdec = false;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.Get<UISettings>().panelWidth = 444.f;
         s.Get<FilesSettings>().videoExtensions = "mkv;webm";
@@ -437,7 +414,6 @@ dynaudnormFrameLen=250
         Settings loaded;
         loaded.Load(f.str());
 
-        QVERIFY(!(loaded.Get<PlaybackSettings>().hwdec));
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
         QCOMPARE(loaded.Get<UISettings>().panelWidth, 444.f);
         QVERIFY((loaded.Get<FilesSettings>().videoExtensions) == ("mkv;webm"));
@@ -474,7 +450,8 @@ dynaudnormFrameLen=250
         const std::string text = ReadAll(f.str());
 
         QVERIFY((text.find("[playback]")) != (std::string::npos));
-        QVERIFY((text.find("hwdec=")) != (std::string::npos));
+        QVERIFY((text.find("hwdecMode=")) != (std::string::npos));
+        QVERIFY((text.find("hwdec=")) == (std::string::npos));
     }
 
     void CommentsAreIdempotent()
@@ -489,7 +466,8 @@ dynaudnormFrameLen=250
 
         // Re-saving must not duplicate comments and must be byte-identical.
         QVERIFY((first) == (second));
-        QVERIFY((Count(second, "hwdec=")) == (1u));
+        QVERIFY((Count(second, "hwdecMode=")) == (1u));
+        QVERIFY((Count(second, "hwdec=")) == (0u));
     }
 
     void UnknownKeysGetNoComments()

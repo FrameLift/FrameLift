@@ -77,11 +77,6 @@ void SettingsService::CommitSettingBool(const char* key, bool value) noexcept
     {
         f->setBool(value);
     }
-    if (std::strcmp(key, "playback.hwdec") == 0)
-    {
-        settings_->Get<PlaybackSettings>().hwdecMode =
-            VideoDecodeModeName(value ? VideoDecodeMode::Auto : VideoDecodeMode::Off);
-    }
 }
 
 void SettingsService::CommitSettingInt(const char* key, int value) noexcept
@@ -108,7 +103,6 @@ void SettingsService::CommitSettingString(const char* key, const char* value) no
     {
         PlaybackSettings& pb = settings_->Get<PlaybackSettings>();
         pb.hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(pb.hwdecMode));
-        pb.hwdec = IsVideoDecodeModeEnabled(VideoDecodeModeFromString(pb.hwdecMode));
     }
 }
 

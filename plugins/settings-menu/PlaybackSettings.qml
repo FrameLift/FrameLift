@@ -26,17 +26,8 @@ ScrollView {
             title: "Decoding"
 
             FLSettingRow {
-                title: "Hardware decoding"
-                description: "Enable hardware video decoding."
-                keyName: "playback.hwdec"
-                FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("playback.hwdec"))
-                    onToggled: root.vm.setFieldValue("playback.hwdec", checked)
-                }
-            }
-            FLSettingRow {
                 title: "Acceleration mode"
-                description: "Video acceleration backend used when hardware decoding is on."
+                description: "Video acceleration backend. Use off to disable hardware decoding."
                 keyName: "playback.hwdecMode"
                 FLComboBox {
                     implicitWidth: 180
