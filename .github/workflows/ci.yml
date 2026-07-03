@@ -38,8 +38,15 @@ jobs:
             cmake \
             ninja-build \
             git \
-            ca-certificates \
-            qt6-base-dev
+            ca-certificates
+      # Qt Core/Gui/Test come from the pinned prebuilt Qt (base desktop package),
+      # not the distro qt6-base-dev, to match the version dev/release build with.
+      - name: Install prebuilt Qt
+        uses: ./.github/actions/install-qt
+        with:
+          host: linux
+          arch: linux_gcc_64
+          version: ${{ env.QT_VERSION }}
       - name: Build & run tests
         run: |
           cmake -S tests -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -79,56 +86,19 @@ jobs:
       VCPKG_TRIPLET: x64-windows-release
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install patched aqtinstall
-        run: python -m pip install --upgrade --force-reinstall --no-cache-dir git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
       - name: Install prebuilt Qt
-        uses: jurplel/install-qt-action@v4
+        uses: ./.github/actions/install-qt
         with:
-          setup-python: false
-          aqtsource: git+https://github.com/miurahr/aqtinstall.git@refs/pull/1000/head
-          version: ${{ env.QT_VERSION }}
           host: windows
-          target: desktop
           arch: win64_msvc2022_64
-          dir: ${{ runner.temp }}/qt
-          # Qt Declarative/QML/Quick is part of the base desktop package; only
-          # install add-on modules here.
+          version: ${{ env.QT_VERSION }}
           modules: qtmultimedia
-      - name: Set up MSVC environment
-        # Locate the preinstalled VS toolset with vswhere and export its vcvars64
-        # environment so the Ninja single-config build picks up cl.exe — matching
-        # the CMake presets used elsewhere, with no third-party setup action.
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsPath = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          cmd /c "`"$vsPath\VC\Auxiliary\Build\vcvars64.bat`" && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$') {
-              "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            }
-          }
-      - name: Pin vcpkg baseline
-        # The runner ships a prebuilt vcpkg; fetch the manifest's pinned baseline
-        # commit so builtin-baseline resolves to reproducible library versions.
-        run: git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin "$VCPKG_BASELINE"
-      - name: Configure vcpkg binary cache
-        env:
-          VCPKG_NUGET_TOKEN: ${{ secrets.VCPKG_PAT_TOKEN }}
-        run: |
-          # nuget.exe runs natively on Windows — no Mono shim needed.
-          nuget="$("$VCPKG_INSTALLATION_ROOT/vcpkg.exe" fetch nuget | tail -n 1)"
-          "$nuget" sources add \
-            -Source "$FEED_URL" \
-            -StorePasswordInClearText \
-            -Name "$USERNAME" \
-            -UserName "$USERNAME" \
-            -Password "$VCPKG_NUGET_TOKEN"
-          "$nuget" setapikey "$VCPKG_NUGET_TOKEN" \
-            -Source "$FEED_URL"
+      - uses: ./.github/actions/native-windows-setup
+        with:
+          vcpkg-baseline: ${{ env.VCPKG_BASELINE }}
+          feed-url: ${{ env.FEED_URL }}
+          username: ${{ env.USERNAME }}
+          nuget-token: ${{ secrets.VCPKG_PAT_TOKEN }}
       - name: Configure
         run: |
           echo "vcpkg binary sources: $VCPKG_BINARY_SOURCES"
@@ -196,6 +166,13 @@ jobs:
       - uses: ./.github/actions/native-linux-setup
         with:
           cmake-version: ${{ env.CMAKE_VERSION }}
+      - name: Install prebuilt Qt
+        uses: ./.github/actions/install-qt
+        with:
+          host: linux
+          arch: linux_gcc_64
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
       # Vulkan runtime smoke dependencies: lavapipe (software Vulkan ICD), the Khronos
       # validation layer, Xvfb for a headless X display, and ffmpeg to synthesize the
       # software-decoded smoke clip.
@@ -251,6 +228,13 @@ jobs:
       - uses: ./.github/actions/native-linux-setup
         with:
           cmake-version: ${{ env.CMAKE_VERSION }}
+      - name: Install prebuilt Qt
+        uses: ./.github/actions/install-qt
+        with:
+          host: linux
+          arch: linux_gcc_64
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
       - name: Package & validate SDK
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then

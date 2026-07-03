@@ -1,0 +1,56 @@
+name: Native Windows setup
+description: >-
+  Prepare the windows-latest runner's native MSVC + vcpkg toolchain: export the
+  preinstalled VS toolset's vcvars64 environment, pin the vcpkg manifest baseline,
+  and wire up the vcpkg NuGet binary cache. Qt is installed separately by the
+  install-qt action; FFmpeg/libass come from the vcpkg manifest at configure time.
+
+inputs:
+  vcpkg-baseline:
+    description: vcpkg builtin-baseline commit to fetch (reproducible library versions).
+    required: true
+  feed-url:
+    description: NuGet feed URL backing the vcpkg binary cache.
+    required: true
+  username:
+    description: NuGet feed username (the repository owner).
+    required: true
+  nuget-token:
+    description: NuGet feed token/password (the VCPKG_PAT_TOKEN secret).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up MSVC environment
+      # Locate the preinstalled VS toolset with vswhere and export its vcvars64
+      # environment so the Ninja single-config build picks up cl.exe — matching
+      # the CMake presets used elsewhere, with no third-party setup action.
+      shell: pwsh
+      run: |
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vsPath = & $vswhere -latest -products * `
+          -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        cmd /c "`"$vsPath\VC\Auxiliary\Build\vcvars64.bat`" && set" | ForEach-Object {
+          if ($_ -match '^([^=]+)=(.*)$') {
+            "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+        }
+    - name: Pin vcpkg baseline
+      # The runner ships a prebuilt vcpkg; fetch the manifest's pinned baseline
+      # commit so builtin-baseline resolves to reproducible library versions.
+      shell: bash
+      run: git -C "$VCPKG_INSTALLATION_ROOT" fetch --depth 1 origin "${{ inputs.vcpkg-baseline }}"
+    - name: Configure vcpkg binary cache
+      shell: bash
+      run: |
+        # nuget.exe runs natively on Windows — no Mono shim needed.
+        nuget="$("$VCPKG_INSTALLATION_ROOT/vcpkg.exe" fetch nuget | tail -n 1)"
+        "$nuget" sources add \
+          -Source "${{ inputs.feed-url }}" \
+          -StorePasswordInClearText \
+          -Name "${{ inputs.username }}" \
+          -UserName "${{ inputs.username }}" \
+          -Password "${{ inputs.nuget-token }}"
+        "$nuget" setapikey "${{ inputs.nuget-token }}" \
+          -Source "${{ inputs.feed-url }}"
