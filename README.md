@@ -199,4 +199,4 @@ CMake via `FetchContent`.
 
 ## License
 
-[zlib](LICENSE)
+[Apache-2.0](LICENSE)
