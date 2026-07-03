@@ -15,6 +15,11 @@ option(FRAMELIFT_BUILD_PLUGINS "Build the runtime plugin DLLs/SOs (plugins/)" ON
 # test-only environment controls do not exist in the shipped executable.
 option(FRAMELIFT_BUILD_LAUNCH_TESTS "Build CTest launch smoke hooks for the app" OFF)
 
+# Extra launch smoke on a real Vulkan device with validation layers forced on. Needs an
+# X display (CI: Xvfb), a Vulkan ICD (CI: lavapipe from mesa-vulkan-drivers) and the
+# Khronos validation layer installed — hence opt-in on top of the launch smokes.
+option(FRAMELIFT_LAUNCH_VULKAN_SMOKE "Add the Vulkan+validation launch smoke test" OFF)
+
 # Display string shown in the UI; defaults to the numeric version for local/release builds.
 if (NOT DEFINED FRAMELIFT_VERSION_DISPLAY OR FRAMELIFT_VERSION_DISPLAY STREQUAL "")
     set(FRAMELIFT_VERSION_DISPLAY "${FRAMELIFT_VERSION}")
@@ -287,6 +292,31 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             TIMEOUT 20
             ENVIRONMENT "${_framelift_launch_env}"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
+    # Same launch on a real Vulkan device with the Khronos validation layer forced on,
+    # playing a short software-decoded clip when ${CMAKE_BINARY_DIR}/test-media/smoke.mp4
+    # exists (CI generates it; without it the smoke still covers init/teardown). Any
+    # message from the validation messenger fails the test, and the PASS regex proves a
+    # Vulkan device was actually created (no silent fall-back to OpenGL). Zero-copy
+    # decode is not covered: lavapipe has no video-decode queues.
+    if (FRAMELIFT_LAUNCH_VULKAN_SMOKE)
+        set(_framelift_vulkan_launch_env
+                "QT_QPA_PLATFORM=xcb"
+                "FL_BACKEND=vulkan"
+                "FL_LOG_LEVEL=debug"
+                "FRAMELIFT_VULKAN_VALIDATION=1"
+                "FRAMELIFT_TEST_EXIT_AFTER_MS=6000"
+                "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_vulkan")
+        add_test(NAME framelift_launch_vulkan_validation
+                COMMAND $<TARGET_FILE:FrameLift> "${CMAKE_BINARY_DIR}/test-media/smoke.mp4")
+        set_tests_properties(framelift_launch_vulkan_validation PROPERTIES
+                WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+                LABELS launch
+                TIMEOUT 60
+                ENVIRONMENT "${_framelift_vulkan_launch_env}"
+                PASS_REGULAR_EXPRESSION "device API"
+                FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex};Vulkan validation")
+    endif ()
 endif ()
 
 # ── Plugin SDK packaging ──────────────────────────────────────────────────────
