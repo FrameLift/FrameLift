@@ -268,9 +268,10 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
     set(_framelift_launch_env
             "QT_QPA_PLATFORM=offscreen"
             "QT_QUICK_BACKEND=software"
-            "FL_BACKEND=opengl"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
             "FL_LOG_LEVEL=debug"
-            "FRAMELIFT_TEST_EXIT_AFTER_MS=1500"
+            "FL_TEST_EXIT_AFTER_MS=1500"
             "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl_offscreen")
     set(_framelift_launch_fail_regex
             "TypeError"
@@ -303,9 +304,10 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
         set(_framelift_vulkan_launch_env
                 "QT_QPA_PLATFORM=xcb"
                 "FL_BACKEND=vulkan"
+                "FL_ACCEL_MODE=off"
                 "FL_LOG_LEVEL=debug"
-                "FRAMELIFT_VULKAN_VALIDATION=1"
-                "FRAMELIFT_TEST_EXIT_AFTER_MS=6000"
+                "FL_VULKAN_VALIDATION=1"
+                "FL_TEST_EXIT_AFTER_MS=6000"
                 "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_vulkan")
         add_test(NAME framelift_launch_vulkan_validation
                 COMMAND $<TARGET_FILE:FrameLift> "${CMAKE_BINARY_DIR}/test-media/smoke.mp4")

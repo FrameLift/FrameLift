@@ -48,6 +48,9 @@ public:
     // Write all settings to path via QSettings (IniFormat). QSettings merges around
     // sections and keys owned by plugins so their data is preserved.
     void Save(const std::string& path);
+    // Apply process-local launch overrides from FL_* environment flags. Call this
+    // after startup persistence so smoke-test overrides do not edit settings.ini.
+    void ApplyLaunchEnvironmentOverrides();
 
 private:
     // Create + store a default-constructed section instance.

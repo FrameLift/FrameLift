@@ -11,6 +11,8 @@
 
 #include "QtTestRunner.h"
 
+#include <QtCore/QByteArray>
+#include <QtCore/qtenvironmentvariables.h>
 #include <QtTest/QtTest>
 #include <cstddef>
 #include <iterator>
@@ -36,6 +38,39 @@ std::size_t Count(const std::string& haystack, const std::string& needle)
     }
     return n;
 }
+
+class EnvGuard
+{
+public:
+    EnvGuard(const char* name, const char* value) : name_(name), hadValue_(qEnvironmentVariableIsSet(name))
+    {
+        if (hadValue_)
+        {
+            oldValue_ = qgetenv(name);
+        }
+        qputenv(name, QByteArray(value));
+    }
+
+    ~EnvGuard()
+    {
+        if (hadValue_)
+        {
+            qputenv(name_, oldValue_);
+        }
+        else
+        {
+            qunsetenv(name_);
+        }
+    }
+
+    EnvGuard(const EnvGuard&) = delete;
+    EnvGuard& operator=(const EnvGuard&) = delete;
+
+private:
+    const char* name_;
+    bool hadValue_ = false;
+    QByteArray oldValue_;
+};
 } // namespace
 
 class SettingsTest final : public QObject
@@ -111,6 +146,61 @@ dynaudnormFrameLen=250
         const Settings s;
         QVERIFY(s.Get<CacheSettings>().readAheadEnabled);
         QVERIFY((s.Get<CacheSettings>().readAheadSizeMB) == (64));
+    }
+
+    void LaunchAccelModeOverridesSettings()
+    {
+        const EnvGuard env("FL_ACCEL_MODE", "cuda");
+        const TempFile f("[playback]\nhwdec=0\nhwdecMode=off\n");
+
+        Settings s;
+        s.Load(f.str());
+        s.ApplyLaunchEnvironmentOverrides();
+
+        QVERIFY(s.Get<PlaybackSettings>().hwdec);
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
+    }
+
+    void LaunchAccelModeCanDisableHwdec()
+    {
+        const EnvGuard env("FL_ACCEL_MODE", "off");
+
+        Settings s;
+        s.ApplyLaunchEnvironmentOverrides();
+
+        QVERIFY(!(s.Get<PlaybackSettings>().hwdec));
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
+    }
+
+    void LaunchAccelModeInvalidFallsBackToAuto()
+    {
+        const EnvGuard env("FL_ACCEL_MODE", "definitely-not-a-mode");
+
+        Settings s;
+        s.Get<PlaybackSettings>().hwdec = false;
+        s.Get<PlaybackSettings>().hwdecMode = "off";
+        s.ApplyLaunchEnvironmentOverrides();
+
+        QVERIFY(s.Get<PlaybackSettings>().hwdec);
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
+    }
+
+    void LaunchAccelModeIsNotSavedByStartupPersistence()
+    {
+        const EnvGuard env("FL_ACCEL_MODE", "cuda");
+        const TempFile f("[playback]\nhwdec=0\nhwdecMode=off\n");
+
+        Settings s;
+        s.Load(f.str());
+        s.Save(f.str());
+        s.ApplyLaunchEnvironmentOverrides();
+
+        Settings loaded;
+        loaded.Load(f.str());
+        QVERIFY(!(loaded.Get<PlaybackSettings>().hwdec));
+        QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
+        QVERIFY(s.Get<PlaybackSettings>().hwdec);
+        QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
     }
 
     void ReadAheadCacheLoadAndRoundTrip()

@@ -61,6 +61,8 @@ Settings live in `settings.ini` in the platform config directory and are edited 
 Each plugin persists its own settings in its own INI section. See the Settings menu for the complete,
 current list of options.
 
+Runtime launch and smoke-test overrides are documented in [docs/env-flags.md](docs/env-flags.md).
+
 ## Extending FrameLift (Plugin SDK)
 
 Each FrameLift plugin ships as exactly one runtime-loaded Qt plugin DLL/SO under the `plugins/` folder

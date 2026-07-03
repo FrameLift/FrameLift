@@ -15,6 +15,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstdlib>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -149,4 +150,15 @@ void Settings::Save(const std::string& path)
         qs.setValue(ToQtKey(field.key), QString::fromStdString(field.save()));
     }
     qs.sync();
+}
+
+void Settings::ApplyLaunchEnvironmentOverrides()
+{
+    if (const char* modeEnv = std::getenv("FL_ACCEL_MODE"); modeEnv && modeEnv[0])
+    {
+        PlaybackSettings& playback = Get<PlaybackSettings>();
+        const VideoDecodeMode mode = VideoDecodeModeFromString(modeEnv);
+        playback.hwdecMode = VideoDecodeModeName(mode);
+        playback.hwdec = IsVideoDecodeModeEnabled(mode);
+    }
 }

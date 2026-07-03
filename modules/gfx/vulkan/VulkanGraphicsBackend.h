@@ -177,7 +177,7 @@ public:
     // device support and R8G8B8A8 host-transfer format support; selected by default
     // only on integrated/UMA adapters — on discrete GPUs the driver's CPU-side
     // detiling makes it measurably slower than the staging path (see
-    // SetupHostImageCopy). FRAMELIFT_VK_HOST_COPY=1/0 forces it on/off.
+    // SetupHostImageCopy). FL_VK_HOST_COPY=1/0 forces it on/off.
     [[nodiscard]] bool SupportsHostImageCopy() const
     {
         return hostImageCopy_;
@@ -196,7 +196,7 @@ public:
     // ── Push descriptors (Vulkan 1.4 core / VK_KHR_push_descriptor on 1.3) ─────────
     // Per-frame YCbCr image bindings push straight into the command buffer instead of
     // allocating descriptor sets from a pool (whose exhaustion/invalidation dance they
-    // otherwise need). FRAMELIFT_VK_NO_PUSH_DESC=1 forces the pool path for testing.
+    // otherwise need). FL_VK_NO_PUSH_DESC=1 forces the pool path for testing.
     [[nodiscard]] bool SupportsPushDescriptors() const
     {
         return pushDescriptors_;
