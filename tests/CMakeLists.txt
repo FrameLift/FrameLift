@@ -91,6 +91,7 @@ add_executable(framelift_tests
         unit/media/FFmpegSidecarScanTests.cpp
         unit/media/FFmpegTrackSelectTests.cpp
         unit/gfx/VulkanQueueLockTests.cpp
+        unit/gfx/VulkanRetireQueueTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"

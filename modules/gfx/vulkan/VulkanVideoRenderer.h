@@ -63,7 +63,13 @@ private:
     // (Re)build the YCbCr conversion + immutable sampler + set layout + pipeline for a
     // decoded VkFormat / colorspace / range; cheap no-op when unchanged.
     bool EnsureYcbcr(int vkFormat, int colorSpace, int colorRange);
+    // Immediate teardown (dtor only — requires an idle device).
     void DestroyYcbcr();
+    // Deferred teardown for a live rebuild: hands every current YCbCr object (conversion,
+    // sampler, layouts, pipeline, descriptor pool, cached views) to the retire queue and
+    // nulls the members so EnsureYcbcr can build fresh ones without a device stall.
+    void RetireYcbcr();
+    bool CreateYcbcrDescPool();
 
     // Get (or create + cache, keyed by VkImage handle) the view + descriptor set for one
     // pooled decode image. Views/sets live until the format changes or shutdown.

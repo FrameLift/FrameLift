@@ -604,7 +604,14 @@ void VulkanGraphicsBackend::RefreshQtResources(QQuickWindow* window)
         static_cast<uint32_t>(std::max(0, pixelSize.width())),
         static_cast<uint32_t>(std::max(0, pixelSize.height())),
     };
-    currentFrameSlot_ = static_cast<uint32_t>(std::max(0, window->graphicsStateInfo().currentFrameSlot));
+    const QQuickWindow::GraphicsStateInfo& state = window->graphicsStateInfo();
+    currentFrameSlot_ = static_cast<uint32_t>(std::max(0, state.currentFrameSlot));
+    // Tick deferred destruction once per prepared frame. Clamp a missing/absurd
+    // framesInFlight to the conservative maximum: over-waiting is always safe.
+    const uint32_t framesInFlight = state.framesInFlight >= 1 && state.framesInFlight <= static_cast<int>(kMaxFramesInFlight)
+                                        ? static_cast<uint32_t>(state.framesInFlight)
+                                        : kMaxFramesInFlight;
+    retireQueue_.BeginFrame(framesInFlight);
 }
 
 std::unique_ptr<IVideoRenderer> VulkanGraphicsBackend::CreateVideoRenderer()
@@ -761,6 +768,7 @@ void VulkanGraphicsBackend::DestroyDevice()
     {
         vkDeviceWaitIdle(device_);
     }
+    retireQueue_.Drain(); // device idle; free retired objects before their pools/allocator go
     if (immediateFence_ != VK_NULL_HANDLE)
     {
         vkDestroyFence(device_, immediateFence_, nullptr);

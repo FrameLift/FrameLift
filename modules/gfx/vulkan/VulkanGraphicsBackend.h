@@ -23,6 +23,7 @@
 #include "IGraphicsBackend.h"
 #include "VulkanDeviceInfo.h"
 #include "VulkanQueueLock.h"
+#include "VulkanRetireQueue.h"
 
 typedef struct VmaAllocator_T* VmaAllocator;
 
@@ -144,6 +145,20 @@ public:
 
     bool ImmediateSubmit(void (*record)(VkCommandBuffer cmd, void* ud), void* ud);
 
+    // Deferred destruction for objects frames in flight may still reference; collected
+    // once per prepared frame (PrepareQtFrame), drained on idle teardown paths. Replaces
+    // mid-frame vkDeviceWaitIdle stalls on resize / format change / pool swap.
+    void Retire(std::function<void()> destroy)
+    {
+        retireQueue_.Retire(std::move(destroy));
+    }
+
+    // Run all retired destructors now. Caller must guarantee the device is idle.
+    void DrainRetired()
+    {
+        retireQueue_.Drain();
+    }
+
 private:
     void CreateInstance();
     void SetupDebugUtils();
@@ -179,6 +194,7 @@ private:
     std::unique_ptr<QVulkanInstance> qtInstance_;
     VmaAllocator allocator_ = nullptr;
     VulkanQueueLock queueLock_;
+    VulkanRetireQueue retireQueue_;
 
     VkCommandPool immediatePool_ = VK_NULL_HANDLE;
     VkCommandBuffer immediateCmd_ = VK_NULL_HANDLE;

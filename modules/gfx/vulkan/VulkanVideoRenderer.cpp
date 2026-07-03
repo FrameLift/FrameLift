@@ -33,6 +33,10 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     // FFmpeg would otherwise wait forever on the advertised timeline values.
     backend_->HostSignalPendingFrameSignals();
 
+    // Retired closures free sets from this renderer's pools; run them (device is idle)
+    // before those pools are destroyed below.
+    backend_->DrainRetired();
+
     DestroyYcbcr();
     if (transitionPool_ != VK_NULL_HANDLE)
     {
@@ -120,10 +124,14 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
         return false;
     }
 
-    // One descriptor set each for the video and overlay textures.
-    constexpr uint32_t kSets = 2;
+    // One live descriptor set each for the video and overlay textures, plus headroom
+    // for retired predecessors: a resize allocates a fresh set (the old one may be
+    // bound in a frame still in flight, so it can be neither updated in place nor
+    // freed until the retire queue proves it idle — hence FREE_DESCRIPTOR_SET_BIT).
+    constexpr uint32_t kSets = 16;
     VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets = kSets;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &ps;
@@ -278,16 +286,22 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
         return true;
     }
 
-    // Reallocate at the new size; the descriptor set is re-pointed at the new view.
-    // If the old image was ever used, an in-flight frame may still sample it — resolution
-    // changes are rare, so a device-wait is the simplest safe guard against use-after-free.
+    // Reallocate at the new size. An in-flight frame may still sample the old image
+    // through the old (bound) descriptor set, so image, view and set are retired as a
+    // unit and a fresh set is written for the new view — no device stall.
     if (t.valid)
     {
-        vkDeviceWaitIdle(device_);
+        backend_->Retire(
+            [device = device_, allocator = allocator_, pool = descPool_, view = t.view, image = t.image,
+             alloc = t.alloc, set = t.set]
+            {
+                vkDestroyImageView(device, view, nullptr);
+                vmaDestroyImage(allocator, image, alloc);
+                vkFreeDescriptorSets(device, pool, 1, &set);
+            }
+        );
+        t = {};
     }
-    const VkDescriptorSet keepSet = t.set; // sets are pool-allocated once (see below)
-    DestroyTexture(t);
-    t.set = keepSet;
 
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType = VK_IMAGE_TYPE_2D;
@@ -319,18 +333,14 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
         return false;
     }
 
-    // Allocate the descriptor set once (first use), then just re-point it.
-    if (t.set == VK_NULL_HANDLE)
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool = descPool_;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &setLayout_;
+    if (vkAllocateDescriptorSets(device_, &dai, &t.set) != VK_SUCCESS)
     {
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = descPool_;
-        dai.descriptorSetCount = 1;
-        dai.pSetLayouts = &setLayout_;
-        if (vkAllocateDescriptorSets(device_, &dai, &t.set) != VK_SUCCESS)
-        {
-            Log::Error("VulkanVideoRenderer: descriptor set allocation failed");
-            return false;
-        }
+        Log::Error("VulkanVideoRenderer: descriptor set allocation failed");
+        return false;
     }
 
     VkDescriptorImageInfo dii{sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -360,8 +370,15 @@ bool VulkanVideoRenderer::EnsureStaging(VkDeviceSize bytes)
     }
     if (staging_ != VK_NULL_HANDLE)
     {
-        vmaDestroyBuffer(allocator_, staging_, stagingAlloc_);
+        // A copy from the old buffer may still be in flight; grow by retiring it.
+        backend_->Retire(
+            [allocator = allocator_, buffer = staging_, alloc = stagingAlloc_]
+            {
+                vmaDestroyBuffer(allocator, buffer, alloc);
+            }
+        );
         staging_ = VK_NULL_HANDLE;
+        stagingAlloc_ = nullptr;
         stagingMapped_ = nullptr;
     }
 
@@ -563,6 +580,81 @@ void VulkanVideoRenderer::DestroyYcbcr()
     ycbcrColorRange_ = -1;
 }
 
+void VulkanVideoRenderer::RetireYcbcr()
+{
+    if (ycbcrConversion_ == VK_NULL_HANDLE && ycbcrPipeline_ == VK_NULL_HANDLE && frameTextures_.empty())
+    {
+        return; // nothing built yet (first EnsureYcbcr)
+    }
+    std::vector<VkImageView> views;
+    views.reserve(frameTextures_.size());
+    for (auto& kv : frameTextures_)
+    {
+        views.push_back(kv.second.view);
+    }
+    frameTextures_.clear();
+
+    backend_->Retire(
+        [device = device_, views = std::move(views), pipeline = ycbcrPipeline_, layout = ycbcrPipelineLayout_,
+         pool = ycbcrDescPool_, setLayout = ycbcrSetLayout_, sampler = ycbcrSampler_, conversion = ycbcrConversion_]
+        {
+            for (VkImageView view : views)
+            {
+                vkDestroyImageView(device, view, nullptr);
+            }
+            if (pipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(device, pipeline, nullptr);
+            }
+            if (layout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(device, layout, nullptr);
+            }
+            if (pool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(device, pool, nullptr); // frees the cached sets with it
+            }
+            if (setLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+            }
+            if (sampler != VK_NULL_HANDLE)
+            {
+                vkDestroySampler(device, sampler, nullptr);
+            }
+            if (conversion != VK_NULL_HANDLE)
+            {
+                vkDestroySamplerYcbcrConversion(device, conversion, nullptr);
+            }
+        }
+    );
+    ycbcrPipeline_ = VK_NULL_HANDLE;
+    ycbcrPipelineLayout_ = VK_NULL_HANDLE;
+    ycbcrDescPool_ = VK_NULL_HANDLE;
+    ycbcrSetLayout_ = VK_NULL_HANDLE;
+    ycbcrSampler_ = VK_NULL_HANDLE;
+    ycbcrConversion_ = VK_NULL_HANDLE;
+    ycbcrFormat_ = 0;
+    ycbcrColorSpace_ = -1;
+    ycbcrColorRange_ = -1;
+}
+
+bool VulkanVideoRenderer::CreateYcbcrDescPool()
+{
+    // One descriptor set per pooled decode image (decoder reuses a small bounded set).
+    constexpr uint32_t kMaxFrameSets = 16;
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrameSets};
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.maxSets = kMaxFrameSets;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    VK_CHECK_LOG_RETURN(
+        vkCreateDescriptorPool(device_, &pi, nullptr, &ycbcrDescPool_),
+        "VulkanVideoRenderer: YCbCr descriptor pool creation failed", false
+    );
+    return true;
+}
+
 bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRange)
 {
     if (ycbcrConversion_ != VK_NULL_HANDLE && ycbcrFormat_ == vkFormat && ycbcrColorSpace_ == colorSpace &&
@@ -571,9 +663,9 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
         return true; // already built for this format/colourimetry
     }
 
-    // Rebuild from scratch; views/sets baked against the old conversion must go too.
-    vkDeviceWaitIdle(device_);
-    DestroyYcbcr();
+    // Rebuild; views/sets baked against the old conversion must go too. In-flight frames
+    // may still use the old objects, so they are retired rather than destroyed in place.
+    RetireYcbcr();
 
     const auto fmt = static_cast<VkFormat>(vkFormat);
 
@@ -639,16 +731,8 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
         return false;
     }
 
-    // One descriptor set per pooled decode image (decoder reuses a small bounded set).
-    constexpr uint32_t kMaxFrameSets = 16;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxFrameSets};
-    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.maxSets = kMaxFrameSets;
-    pi.poolSizeCount = 1;
-    pi.pPoolSizes = &ps;
-    if (vkCreateDescriptorPool(device_, &pi, nullptr, &ycbcrDescPool_) != VK_SUCCESS)
+    if (!CreateYcbcrDescPool())
     {
-        Log::Error("VulkanVideoRenderer: YCbCr descriptor pool creation failed");
         return false;
     }
 
@@ -671,16 +755,30 @@ void VulkanVideoRenderer::InvalidateFrameTextures()
     {
         return;
     }
-    vkDeviceWaitIdle(device_);
+    // In-flight frames may still reference the views/sets, so the whole pool is retired
+    // (sets die with it) and replaced by a fresh one — no reset-in-place, no stall.
+    std::vector<VkImageView> views;
+    views.reserve(frameTextures_.size());
     for (auto& kv : frameTextures_)
     {
-        vkDestroyImageView(device_, kv.second.view, nullptr);
+        views.push_back(kv.second.view);
     }
     frameTextures_.clear();
-    if (ycbcrDescPool_ != VK_NULL_HANDLE)
-    {
-        vkResetDescriptorPool(device_, ycbcrDescPool_, 0);
-    }
+    backend_->Retire(
+        [device = device_, views = std::move(views), pool = ycbcrDescPool_]
+        {
+            for (VkImageView view : views)
+            {
+                vkDestroyImageView(device, view, nullptr);
+            }
+            if (pool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(device, pool, nullptr);
+            }
+        }
+    );
+    ycbcrDescPool_ = VK_NULL_HANDLE;
+    CreateYcbcrDescPool();
 }
 
 const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uint64_t image)
