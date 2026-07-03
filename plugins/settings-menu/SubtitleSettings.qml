@@ -22,6 +22,7 @@ ScrollView {
     component ColorRow: FLSettingRow {
         id: colorRow
         property string settingKey: ""
+        keyName: colorRow.settingKey
         RowLayout {
             spacing: 8
             Rectangle {
@@ -50,6 +51,7 @@ ScrollView {
             FLSettingRow {
                 title: "Preferred language"
                 description: "Subtitle language to auto-select (ISO 639 code, e.g. eng)."
+                keyName: "subtitles.defaultLanguage"
                 FLTextField {
                     implicitWidth: 120
                     text: (root.rev, root.vm.fieldValue("subtitles.defaultLanguage"))
@@ -59,6 +61,7 @@ ScrollView {
             FLSettingRow {
                 title: "Prefer forced tracks"
                 description: "Auto-select forced subtitle tracks when present."
+                keyName: "subtitles.preferForced"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("subtitles.preferForced"))
                     onToggled: root.vm.setFieldValue("subtitles.preferForced", checked)
@@ -67,6 +70,7 @@ ScrollView {
             FLSettingRow {
                 title: "Override file style"
                 description: "Apply the style settings below instead of the file's own styling."
+                keyName: "subtitles.overrideStyle"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("subtitles.overrideStyle"))
                     onToggled: root.vm.setFieldValue("subtitles.overrideStyle", checked)
@@ -80,6 +84,7 @@ ScrollView {
             FLSettingRow {
                 title: "Font family"
                 description: "Subtitle font family; empty keeps the file's font."
+                keyName: "subtitles.fontFamily"
                 FLTextField {
                     implicitWidth: 200
                     text: (root.rev, root.vm.fieldValue("subtitles.fontFamily"))
@@ -90,6 +95,7 @@ ScrollView {
             FLSettingRow {
                 title: "Font scale"
                 description: "Font-size multiplier (1.0 = the file's default size)."
+                keyName: "subtitles.fontScale"
                 RowLayout {
                     spacing: 10
                     FLSlider {
@@ -109,6 +115,7 @@ ScrollView {
             FLSettingRow {
                 title: "Line spacing"
                 description: "Extra space between subtitle lines, pixels."
+                keyName: "subtitles.lineSpacing"
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator {}
@@ -119,6 +126,7 @@ ScrollView {
             FLSettingRow {
                 title: "Letter spacing"
                 description: "Extra space between glyphs, pixels."
+                keyName: "subtitles.letterSpacing"
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator {}
@@ -136,6 +144,7 @@ ScrollView {
             FLSettingRow {
                 title: "Outline width"
                 description: "Outline thickness in pixels."
+                keyName: "subtitles.outlineWidth"
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator { bottom: 0.0 }
@@ -147,6 +156,7 @@ ScrollView {
             FLSettingRow {
                 title: "Background opacity"
                 description: "Opacity of the shadow / box background (0.0-1.0)."
+                keyName: "subtitles.backOpacity"
                 RowLayout {
                     spacing: 10
                     FLSlider {
@@ -166,6 +176,7 @@ ScrollView {
             FLSettingRow {
                 title: "Shadow depth"
                 description: "Drop-shadow offset in pixels."
+                keyName: "subtitles.shadowDepth"
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator { bottom: 0.0 }
@@ -176,6 +187,7 @@ ScrollView {
             FLSettingRow {
                 title: "Edge style"
                 description: "How subtitle text edges are rendered."
+                keyName: "subtitles.edgeStyle"
                 FLComboBox {
                     model: ["None", "Outline", "Drop shadow", "Opaque box"]
                     currentIndex: (root.rev, root.vm.fieldValue("subtitles.edgeStyle"))
@@ -185,6 +197,7 @@ ScrollView {
             FLSettingRow {
                 title: "Alignment"
                 description: "On-screen position (numpad layout); Keep uses the file's alignment."
+                keyName: "subtitles.alignment"
                 FLComboBox {
                     implicitWidth: 150
                     model: ["Keep", "Bottom left", "Bottom centre", "Bottom right",

@@ -28,6 +28,7 @@ ScrollView {
             FLSettingRow {
                 title: "Hardware decoding"
                 description: "Enable hardware video decoding."
+                keyName: "playback.hwdec"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("playback.hwdec"))
                     onToggled: root.vm.setFieldValue("playback.hwdec", checked)
@@ -36,6 +37,7 @@ ScrollView {
             FLSettingRow {
                 title: "Acceleration mode"
                 description: "Video acceleration backend used when hardware decoding is on."
+                keyName: "playback.hwdecMode"
                 FLComboBox {
                     implicitWidth: 180
                     model: ["off", "auto", "cuda-zero-copy", "cuda", "d3d11va", "dxva2", "vaapi"]
@@ -46,6 +48,7 @@ ScrollView {
             FLSettingRow {
                 title: "Precise seeking"
                 description: "Use precise (high-resolution) seeking."
+                keyName: "playback.hrSeek"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("playback.hrSeek"))
                     onToggled: root.vm.setFieldValue("playback.hrSeek", checked)
@@ -54,6 +57,7 @@ ScrollView {
             FLSettingRow {
                 title: "Fast file opening"
                 description: "Speed up file opening by limiting stream probing. Unusual containers (TS/AVI) may misdetect tracks — leave off if tracks go missing."
+                keyName: "playback.fastProbe"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("playback.fastProbe"))
                     onToggled: root.vm.setFieldValue("playback.fastProbe", checked)
@@ -67,6 +71,7 @@ ScrollView {
             FLSettingRow {
                 title: "Subtitles"
                 description: "Auto-load subtitle files matching the opened media."
+                keyName: "playback.subAutoLoad"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("playback.subAutoLoad"))
                     onToggled: root.vm.setFieldValue("playback.subAutoLoad", checked)
@@ -75,6 +80,7 @@ ScrollView {
             FLSettingRow {
                 title: "External audio"
                 description: "Auto-load external audio tracks matching the opened media."
+                keyName: "playback.audioFileAutoLoad"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("playback.audioFileAutoLoad"))
                     onToggled: root.vm.setFieldValue("playback.audioFileAutoLoad", checked)

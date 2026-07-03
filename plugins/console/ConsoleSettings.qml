@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import FrameLift.Controls
 import FrameLift.Plugins.SettingsMenu
@@ -28,7 +27,8 @@ Item {
                 description: modelData.prop === "perfOnly"
                              ? "Show only performance log entries in the console."
                              : "Include this log level in the console output."
-                Switch {
+                keyName: "console." + modelData.prop
+                FLSwitch {
                     checked: root.viewModel[modelData.prop]
                     onToggled: root.viewModel[modelData.prop] = checked
                 }

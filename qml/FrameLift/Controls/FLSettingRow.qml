@@ -13,6 +13,10 @@ RowLayout {
 
     required property string title
     property string description: ""
+    // Internal INI identifier for this setting, dotted "section.name" (e.g.
+    // "audio.channelMode"). Shown as "[section]/name" when FLSettingsUiState.showKeys
+    // is on, so users can locate the value in the raw settings.ini / Advanced page.
+    property string keyName: ""
     default property alias content: controlSlot.data
 
     Layout.fillWidth: true
@@ -22,6 +26,22 @@ RowLayout {
         Layout.fillWidth: true
         Layout.alignment: Qt.AlignVCenter
         spacing: 2
+
+        Text {
+            visible: FLSettingsUiState.showKeys && root.keyName.length > 0
+            // "audio.channelMode" → "[audio]/channelMode" (split on the first dot).
+            text: {
+                const dot = root.keyName.indexOf(".")
+                return dot < 0
+                    ? root.keyName
+                    : "[" + root.keyName.substring(0, dot) + "]/" + root.keyName.substring(dot + 1)
+            }
+            color: FLTheme.textMuted
+            font.pixelSize: 11
+            font.family: "monospace"
+            Layout.fillWidth: true
+            elide: Text.ElideRight
+        }
 
         Text {
             text: root.title

@@ -3,6 +3,7 @@
 #include "KeybindList.h"
 #include <framelift/Hotkeys.h>
 
+#include <QtCore/QFile>
 #include <QtCore/QMetaObject>
 #include <QtCore/QSet>
 #include <QtCore/QVariantList>
@@ -40,6 +41,22 @@ constexpr CoreBindEntry kCoreKeybinds[] = {
 };
 
 constexpr const char* kPluginsPageQml = "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/SettingsPluginsPage.qml";
+constexpr const char* kAdvancedPageQml = "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/AdvancedSettings.qml";
+
+// Sort weight for the three nav groups so they render contiguously: core config
+// first, plugin-contributed pages next, the settings-menu's own management pages last.
+int GroupRank(const QString& group)
+{
+    if (group == QStringLiteral("core"))
+    {
+        return 0;
+    }
+    if (group == QStringLiteral("system"))
+    {
+        return 2;
+    }
+    return 1; // "plugin"
+}
 
 const char* SettingsPageQmlForSection(const std::string& id)
 {
@@ -200,6 +217,83 @@ void SettingsPluginsPageModel::save()
 
 void SettingsPluginsPageModel::reset()
 {
+}
+
+SettingsAdvancedPageModel::SettingsAdvancedPageModel(SettingsMenu& owner) : owner_(owner)
+{
+}
+
+QString SettingsAdvancedPageModel::Title() const
+{
+    return QStringLiteral("Advanced");
+}
+
+QString SettingsAdvancedPageModel::FilePath() const
+{
+    return QString::fromStdString(owner_.SettingsFilePath());
+}
+
+QString SettingsAdvancedPageModel::Text() const
+{
+    return text_;
+}
+
+bool SettingsAdvancedPageModel::Dirty() const
+{
+    return dirty_;
+}
+
+void SettingsAdvancedPageModel::load()
+{
+    text_.clear();
+    const QString path = QString::fromStdString(owner_.SettingsFilePath());
+    if (!path.isEmpty())
+    {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            text_ = QString::fromUtf8(file.readAll());
+        }
+    }
+    dirty_ = false;
+    Q_EMIT changed();
+}
+
+void SettingsAdvancedPageModel::setText(const QString& text)
+{
+    if (text == text_)
+    {
+        return;
+    }
+    text_ = text;
+    dirty_ = true;
+    Q_EMIT changed();
+}
+
+void SettingsAdvancedPageModel::save()
+{
+    const QString path = QString::fromStdString(owner_.SettingsFilePath());
+    if (path.isEmpty())
+    {
+        return;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+    {
+        return;
+    }
+    file.write(text_.toUtf8());
+    file.close();
+    // Mandatory: without a reload the in-memory settings stay stale and the next Save
+    // from any other page would overwrite these hand edits.
+    owner_.ReloadSettingsFromDisk();
+    dirty_ = false;
+    Q_EMIT changed();
+}
+
+void SettingsAdvancedPageModel::reset()
+{
+    load();
 }
 
 KeybindsPageModel::KeybindsPageModel(SettingsMenu& owner) : owner_(owner)
@@ -505,6 +599,19 @@ bool SettingsMenu::Dirty() const noexcept
     return dirty_;
 }
 
+const char* SettingsMenu::PageGroup(const std::string& id) const
+{
+    if (id == "plugins" || id == "advanced")
+    {
+        return "system";
+    }
+    if (corePageIds_.contains(id))
+    {
+        return "core";
+    }
+    return "plugin";
+}
+
 QVariantList SettingsMenu::QmlPages()
 {
     if (!pagesCacheDirty_)
@@ -532,11 +639,31 @@ QVariantList SettingsMenu::QmlPages()
         },
         &result
     );
+    // Tag each page with its nav group and sort groups contiguously (core → plugin →
+    // system), keeping registration order within a group. This makes the grouping
+    // independent of the order values plugins happen to pick.
+    for (QVariant& entry : result)
+    {
+        QVariantMap row = entry.toMap();
+        row.insert(
+            QStringLiteral("group"),
+            QString::fromUtf8(PageGroup(row.value(QStringLiteral("id")).toString().toStdString()))
+        );
+        entry = row;
+    }
     std::stable_sort(
         result.begin(), result.end(),
         [](const QVariant& a, const QVariant& b)
         {
-            return a.toMap().value(QStringLiteral("order")).toInt() < b.toMap().value(QStringLiteral("order")).toInt();
+            const QVariantMap ma = a.toMap();
+            const QVariantMap mb = b.toMap();
+            const int ra = GroupRank(ma.value(QStringLiteral("group")).toString());
+            const int rb = GroupRank(mb.value(QStringLiteral("group")).toString());
+            if (ra != rb)
+            {
+                return ra < rb;
+            }
+            return ma.value(QStringLiteral("order")).toInt() < mb.value(QStringLiteral("order")).toInt();
         }
     );
     if (qmlActivePage_.empty() && !result.empty())
@@ -715,6 +842,7 @@ void SettingsMenu::RegisterBuiltInPages()
     }
 
     pageModels_.clear();
+    corePageIds_.clear();
     QSet<QString> seen;
     int order = 10;
     for (const FieldMeta& field : fields_)
@@ -754,6 +882,7 @@ void SettingsMenu::RegisterBuiltInPages()
         registry->RegisterSettingsPage(
             section.c_str(), PageTitleFromId(section).toUtf8().constData(), qmlUrl, modelPtr, order
         );
+        corePageIds_.insert(section);
         order += 10;
     }
 
@@ -763,6 +892,14 @@ void SettingsMenu::RegisterBuiltInPages()
         QObject* modelPtr = model.get();
         pageModels_.push_back(std::move(model));
         registry->RegisterSettingsPage("plugins", "Plugins", kPluginsPageQml, modelPtr, 900);
+    }
+
+    // Advanced raw settings.ini editor — pinned to the bottom "System" group.
+    {
+        auto model = std::make_unique<SettingsAdvancedPageModel>(*this);
+        QObject* modelPtr = model.get();
+        pageModels_.push_back(std::move(model));
+        registry->RegisterSettingsPage("advanced", "Advanced", kAdvancedPageQml, modelPtr, 910);
     }
 }
 
@@ -820,6 +957,46 @@ void SettingsMenu::saveActivePage()
 void SettingsMenu::resetActivePage()
 {
     Reset();
+}
+
+void SettingsMenu::resetActivePageOnly()
+{
+    const std::string page = qmlActivePage_;
+    const std::string prefix = page + ".";
+    const bool hasFields = std::ranges::any_of(
+        fields_,
+        [&](const FieldMeta& f)
+        {
+            return f.key.starts_with(prefix);
+        }
+    );
+    if (!hasFields)
+    {
+        // Non field-backed page: defer to its own reset (Advanced reloads from disk,
+        // Plugins is a no-op).
+        if (QObject* vm = ActivePageViewModel())
+        {
+            QMetaObject::invokeMethod(vm, "reset");
+        }
+        return;
+    }
+    for (const auto& f : fields_)
+    {
+        if (f.key.starts_with(prefix))
+        {
+            ResetValue(f);
+        }
+    }
+    // The Keybinds page's plugin entries live outside fields_; reset their drafts too.
+    if (page == "keybinds")
+    {
+        for (auto& d : pluginKeybinds_)
+        {
+            d.draft = d.defaultBind;
+        }
+    }
+    dirty_ = true;
+    Q_EMIT qmlChanged();
 }
 
 void SettingsMenu::Save()
@@ -972,6 +1149,35 @@ float SettingsMenu::SettingFloat(const std::string& key)
 std::string SettingsMenu::SettingString(const std::string& key)
 {
     return model_.Str(key);
+}
+
+std::string SettingsMenu::SettingsFilePath() const
+{
+    auto* store = SettingsStore();
+    if (!store)
+    {
+        return {};
+    }
+    const int n = store->GetSettingsFilePath(nullptr, 0);
+    if (n <= 0)
+    {
+        return {};
+    }
+    std::string path(static_cast<std::size_t>(n), '\0');
+    store->GetSettingsFilePath(path.data(), n + 1);
+    return path;
+}
+
+void SettingsMenu::ReloadSettingsFromDisk()
+{
+    if (auto* store = SettingsStore())
+    {
+        store->ReloadSettings();
+    }
+    // Re-seed drafts from the freshly reloaded live settings so no other page keeps a
+    // stale value that a subsequent Save would write back over the hand edits.
+    SeedFromContext();
+    Q_EMIT qmlChanged();
 }
 
 QVariant SettingsMenu::FieldValue(const QString& key)

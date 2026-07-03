@@ -98,6 +98,7 @@ add_executable(FrameLift ${FRAMELIFT_SOURCES} ${FRAMELIFT_SDK_SOURCES})
 set_target_properties(FrameLift PROPERTIES AUTOMOC ON)
 set(_framelift_control_qml
         qml/FrameLift/Controls/FLTheme.qml
+        qml/FrameLift/Controls/FLSettingsUiState.qml
         qml/FrameLift/Controls/FLGlassPanel.qml
         qml/FrameLift/Controls/FLActionButton.qml
         qml/FrameLift/Controls/FLDrawer.qml
@@ -117,8 +118,9 @@ foreach (_qml IN LISTS _framelift_control_qml)
     get_filename_component(_qml_alias "${_qml}" NAME)
     set_source_files_properties("${_qml}" PROPERTIES QT_RESOURCE_ALIAS "${_qml_alias}")
 endforeach ()
-# FLTheme is a QML singleton (pragma Singleton) — flag it for the type registrar.
+# FLTheme and FLSettingsUiState are QML singletons (pragma Singleton) — flag them for the registrar.
 set_source_files_properties(qml/FrameLift/Controls/FLTheme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/FrameLift/Controls/FLSettingsUiState.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(
         FrameLift
         URI FrameLift.Controls

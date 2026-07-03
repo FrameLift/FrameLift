@@ -29,6 +29,7 @@ ScrollView {
                     required property var modelData
                     title: fieldDelegate.modelData.label
                     description: fieldDelegate.modelData.description
+                    keyName: fieldDelegate.modelData.key
 
                     Loader {
                         sourceComponent: fieldDelegate.modelData.type === 0 ? boolEditor

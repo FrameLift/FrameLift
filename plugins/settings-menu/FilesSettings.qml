@@ -28,6 +28,7 @@ ScrollView {
             FLSettingRow {
                 title: "Video files"
                 description: "Semicolon-separated list of video file extensions."
+                keyName: "files.videoExtensions"
                 FLTextField {
                     implicitWidth: 280
                     text: (root.rev, root.vm.fieldValue("files.videoExtensions"))
@@ -37,6 +38,7 @@ ScrollView {
             FLSettingRow {
                 title: "Image files"
                 description: "Semicolon-separated list of image file extensions."
+                keyName: "files.imageExtensions"
                 FLTextField {
                     implicitWidth: 280
                     text: (root.rev, root.vm.fieldValue("files.imageExtensions"))

@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import FrameLift.Controls
 import FrameLift.Plugins.SettingsMenu
@@ -15,7 +14,8 @@ Item {
         anchors.right: parent.right
         title: "Maximum entries"
         description: "Number of recently played files to retain in history."
-        SpinBox {
+        keyName: "history.maxEntries"
+        FLSpinBox {
             from: 1
             to: 10000
             value: root.viewModel.maxEntries

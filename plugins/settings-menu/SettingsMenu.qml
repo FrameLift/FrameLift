@@ -36,11 +36,12 @@ Item {
             Rectangle {
                 Layout.preferredWidth: 220
                 Layout.fillHeight: true
-                color: "#0D0D14"
+                color: FLTheme.canvas
 
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 14
+                    spacing: 10
 
                     Text {
                         text: "Settings"
@@ -50,26 +51,62 @@ Item {
                     }
 
                     ListView {
+                        id: navList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         model: root.vm !== null ? root.vm.pages : []
-                        spacing: 4
+                        spacing: 2
+                        clip: true
+
+                        // Group name shown as a header: "core" → "Core", etc.
+                        function groupLabel(g) {
+                            return g === "core" ? "Core"
+                                 : g === "plugin" ? "Plugins"
+                                 : g === "system" ? "System" : g
+                        }
+
+                        section.property: "group"
+                        section.criteria: ViewSection.FullString
+                        section.delegate: ColumnLayout {
+                            required property string section
+                            width: ListView.view.width
+                            spacing: 6
+
+                            // Separator above every group except the first.
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 8
+                                implicitHeight: 1
+                                color: FLTheme.border
+                                visible: root.vm !== null && root.vm.pages.length > 0
+                                         && root.vm.pages[0].group !== parent.section
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 4
+                                text: navList.groupLabel(parent.section).toUpperCase()
+                                color: FLTheme.textMuted
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+                        }
 
                         delegate: Rectangle {
                             id: pageDelegate
                             required property var modelData
                             width: ListView.view.width
-                            height: 38
-                            radius: 8
+                            height: 30
+                            radius: 6
                             color: root.vm !== null && root.vm.activePage === pageDelegate.modelData.id
-                                   ? "#408B5CF6"
-                                   : pageMouse.containsMouse ? "#18FFFFFF" : "transparent"
+                                   ? FLTheme.accentSoft
+                                   : pageMouse.containsMouse ? FLTheme.hover : "transparent"
 
                             Text {
                                 anchors.fill: parent
                                 anchors.leftMargin: 12
                                 text: pageDelegate.modelData.title
                                 color: FLTheme.text
+                                font.pixelSize: 13
                                 verticalAlignment: Text.AlignVCenter
                                 elide: Text.ElideRight
                             }
@@ -134,12 +171,24 @@ Item {
 
                 RowLayout {
                     property var pageVm: root.vm !== null ? root.vm.activePageViewModel : null
+                    spacing: 12
+
+                    FLSwitch {
+                        checked: FLSettingsUiState.showKeys
+                        onToggled: FLSettingsUiState.showKeys = checked
+                    }
+                    Text {
+                        text: "Show keys"
+                        color: FLTheme.textMuted
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                    }
 
                     Item { Layout.fillWidth: true }
                     FLActionButton {
                         text: "Reset"
-                        enabled: parent.pageVm !== null && typeof parent.pageVm.reset === "function"
-                        onClicked: parent.pageVm.reset()
+                        enabled: root.vm !== null
+                        onClicked: resetDialog.open = true
                     }
                     FLActionButton {
                         text: parent.pageVm !== null && parent.pageVm.dirty ? "Save *" : "Save"
@@ -149,6 +198,83 @@ Item {
                     FLActionButton {
                         text: "Close"
                         onClicked: if (root.vm !== null) root.vm.closeQml()
+                    }
+                }
+            }
+        }
+
+        // Reset confirmation: choose between resetting only the current page or all
+        // settings. Overlays the whole window; click-outside cancels.
+        Item {
+            id: resetDialog
+            anchors.fill: parent
+            visible: resetDialog.open
+            z: 1000
+            property bool open: false
+
+            Rectangle {
+                anchors.fill: parent
+                color: "#99000000"
+                MouseArea { anchors.fill: parent; onClicked: resetDialog.open = false }
+            }
+
+            FLGlassPanel {
+                anchors.centerIn: parent
+                width: Math.min(380, parent.width - 48)
+                height: resetLayout.implicitHeight + 32
+
+                // Swallow clicks so they don't fall through to the backdrop.
+                MouseArea { anchors.fill: parent }
+
+                ColumnLayout {
+                    id: resetLayout
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 12
+
+                    Text {
+                        text: "Reset settings"
+                        color: FLTheme.text
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: "Reset only the current page, or all settings to their defaults?"
+                        color: FLTheme.textMuted
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        FLActionButton {
+                            text: "Cancel"
+                            implicitHeight: 30; padding: 12; font.pixelSize: 12
+                            onClicked: resetDialog.open = false
+                        }
+                        Item { Layout.fillWidth: true }
+                        FLActionButton {
+                            text: "This page"
+                            implicitHeight: 30; padding: 12; font.pixelSize: 12
+                            onClicked: {
+                                if (root.vm !== null)
+                                    root.vm.resetActivePageOnly()
+                                resetDialog.open = false
+                            }
+                        }
+                        FLActionButton {
+                            text: "All settings"
+                            implicitHeight: 30; padding: 12; font.pixelSize: 12
+                            accentColor: FLTheme.danger
+                            onClicked: {
+                                if (root.vm !== null)
+                                    root.vm.resetAllQml()
+                                resetDialog.open = false
+                            }
+                        }
                     }
                 }
             }
