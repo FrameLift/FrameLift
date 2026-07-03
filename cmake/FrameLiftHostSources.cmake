@@ -162,6 +162,7 @@ set(_FRAMELIFT_HOST_GRAPHICS_VULKAN_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanGraphicsBackend.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanQueueLock.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanRetireQueue.h"
+        "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanTextureRing.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanUtil.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanVideoRenderer.cpp"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanVideoRenderer.h"

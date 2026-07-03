@@ -391,10 +391,15 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     deviceApiVersion_ = std::min(instanceApiVersion_, properties.apiVersion);
     nvidiaAdapter_ = properties.vendorID == 0x10DE;
 
+    const bool hasHostCopyExt = HasExtension(chosenExtensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+
     VkPhysicalDeviceVulkan13Features supportedF13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan12Features supportedF12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceVulkan11Features supportedF11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     VkPhysicalDeviceFeatures2 supportedF2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceHostImageCopyFeaturesEXT supportedHostCopy{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT
+    };
     supportedF2.pNext = &supportedF11;
     supportedF11.pNext = &supportedF12;
     supportedF12.pNext = &supportedF13;
@@ -403,6 +408,16 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     if (deviceApiVersion_ >= VK_API_VERSION_1_4)
     {
         supportedF13.pNext = &supportedF14;
+        supportedF14.pNext = hasHostCopyExt ? &supportedHostCopy : nullptr;
+    }
+    else if (hasHostCopyExt)
+    {
+        supportedF13.pNext = &supportedHostCopy;
+    }
+#else
+    if (hasHostCopyExt)
+    {
+        supportedF13.pNext = &supportedHostCopy;
     }
 #endif
     vkGetPhysicalDeviceFeatures2(physicalDevice_, &supportedF2);
@@ -423,6 +438,25 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         enabledF13_.pNext = &enabledF14_;
     }
 #endif
+
+    // Host image copy: core feature bit on 1.4, EXT feature struct (+ extension,
+    // enabled below with the other optionals) on a 1.3 device.
+    bool hostCopySupported = false;
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+    if (deviceApiVersion_ >= VK_API_VERSION_1_4 && supportedF14.hostImageCopy)
+    {
+        enabledF14_.hostImageCopy = VK_TRUE;
+        hostCopySupported = true;
+    }
+    else if (deviceApiVersion_ < VK_API_VERSION_1_4 && hasHostCopyExt && supportedHostCopy.hostImageCopy)
+#else
+    if (hasHostCopyExt && supportedHostCopy.hostImageCopy)
+#endif
+    {
+        enabledHostCopy_.hostImageCopy = VK_TRUE;
+        enabledF13_.pNext = &enabledHostCopy_;
+        hostCopySupported = true;
+    }
 
     enabledDeviceExtNames_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     auto enableOptional = [&](const char* name)
@@ -456,6 +490,10 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
          })
     {
         enableOptional(optional);
+    }
+    if (hostCopySupported && deviceApiVersion_ < VK_API_VERSION_1_4)
+    {
+        enableOptional(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
     }
 
     static constexpr float priorities[] = {1.0f, 1.0f};
@@ -494,6 +532,8 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     qtGraphicsQueueIndex_ = chosenQueues[graphicsQueueFamily_].queueCount >= 2 ? 1u : 0u;
     vkGetDeviceQueue(device_, graphicsQueueFamily_, qtGraphicsQueueIndex_, &graphicsQueue_);
     VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, graphicsQueue_, "FrameLift graphics queue (Qt)");
+
+    SetupHostImageCopy(hostCopySupported, chosenDiscrete);
 
     DetectVideoDecodeQueue(chosenQueues);
     if (qtGraphicsQueueIndex_ == 0)
@@ -546,6 +586,108 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         "Vulkan: Qt graphics queue family {}, index {}; FFmpeg graphics queue index 0", graphicsQueueFamily_,
         qtGraphicsQueueIndex_
     );
+}
+
+void VulkanGraphicsBackend::SetupHostImageCopy(bool featureEnabled, bool discreteAdapter)
+{
+    hostImageCopy_ = false;
+    if (!featureEnabled)
+    {
+        return;
+    }
+    // Default: integrated/UMA only. vkCopyMemoryToImage into an optimal-tiled image
+    // makes the driver detile on the CPU — measured ~28 ms/frame of extra render-thread
+    // CPU for 4K on a discrete NVIDIA GPU, far worse than the staging path's memcpy +
+    // GPU blit. On UMA it skips the PCIe staging hop and the copy stays cheap.
+    // FRAMELIFT_VK_HOST_COPY=1/0 forces it either way for measurement.
+    bool wanted = !discreteAdapter;
+    if (const char* env = std::getenv("FRAMELIFT_VK_HOST_COPY"); env && *env != '\0')
+    {
+        wanted = *env == '1';
+    }
+    if (!wanted)
+    {
+        Log::Debug("Vulkan: host image copy available but not selected (discrete adapter; staging path is faster)");
+        return;
+    }
+
+    // The upload format must support host transfer with optimal tiling.
+    VkFormatProperties3 fp3{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+    VkFormatProperties2 fp2{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+    fp2.pNext = &fp3;
+    vkGetPhysicalDeviceFormatProperties2(physicalDevice_, VK_FORMAT_R8G8B8A8_UNORM, &fp2);
+    if (!(fp3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT))
+    {
+        Log::Debug("Vulkan: host image copy unavailable for R8G8B8A8 (format lacks host transfer)");
+        return;
+    }
+
+    const bool coreNames = deviceApiVersion_ >= VK_API_VERSION_1_4;
+    transitionImageLayoutFn_ = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
+        vkGetDeviceProcAddr(device_, coreNames ? "vkTransitionImageLayout" : "vkTransitionImageLayoutEXT")
+    );
+    copyMemoryToImageFn_ = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
+        vkGetDeviceProcAddr(device_, coreNames ? "vkCopyMemoryToImage" : "vkCopyMemoryToImageEXT")
+    );
+    if (!transitionImageLayoutFn_ || !copyMemoryToImageFn_)
+    {
+        Log::Warn("Vulkan: host image copy entry points missing; falling back to staging uploads");
+        transitionImageLayoutFn_ = nullptr;
+        copyMemoryToImageFn_ = nullptr;
+        return;
+    }
+
+    // Sample host-copied images in SHADER_READ_ONLY_OPTIMAL when the implementation
+    // accepts it as a copy-dst layout; GENERAL is the spec-guaranteed fallback.
+    VkPhysicalDeviceHostImageCopyPropertiesEXT hicProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props2.pNext = &hicProps;
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+    std::vector<VkImageLayout> dstLayouts(hicProps.copyDstLayoutCount);
+    hicProps.pCopyDstLayouts = dstLayouts.data();
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+    hostCopyDstLayout_ = std::ranges::find(dstLayouts, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) != dstLayouts.end()
+                             ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_GENERAL;
+    hostImageCopy_ = true;
+    Log::Debug(
+        "Vulkan: host image copy active ({}; dst layout {})", deviceApiVersion_ >= VK_API_VERSION_1_4 ? "1.4 core" : "EXT",
+        hostCopyDstLayout_ == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ? "shader-read-only" : "general"
+    );
+}
+
+bool VulkanGraphicsBackend::HostTransitionImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout)
+{
+    if (!transitionImageLayoutFn_ || image == VK_NULL_HANDLE)
+    {
+        return false;
+    }
+    VkHostImageLayoutTransitionInfoEXT info{VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT};
+    info.image = image;
+    info.oldLayout = oldLayout;
+    info.newLayout = newLayout;
+    info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK_LOG_RETURN(transitionImageLayoutFn_(device_, 1, &info), "Vulkan: host image layout transition failed", false);
+    return true;
+}
+
+bool VulkanGraphicsBackend::HostCopyToImage(VkImage image, VkImageLayout layout, const void* pixels, uint32_t w, uint32_t h)
+{
+    if (!copyMemoryToImageFn_ || image == VK_NULL_HANDLE || !pixels)
+    {
+        return false;
+    }
+    VkMemoryToImageCopyEXT region{VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT};
+    region.pHostPointer = pixels;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    VkCopyMemoryToImageInfoEXT info{VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT};
+    info.dstImage = image;
+    info.dstImageLayout = layout;
+    info.regionCount = 1;
+    info.pRegions = &region;
+    VK_CHECK_LOG_RETURN(copyMemoryToImageFn_(device_, &info), "Vulkan: host memory-to-image copy failed", false);
+    return true;
 }
 
 void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties)
@@ -806,6 +948,9 @@ void VulkanGraphicsBackend::DestroyDevice()
         vkDestroyDevice(device_, nullptr);
         device_ = VK_NULL_HANDLE;
     }
+    hostImageCopy_ = false;
+    transitionImageLayoutFn_ = nullptr;
+    copyMemoryToImageFn_ = nullptr;
 }
 
 void VulkanGraphicsBackend::Shutdown()

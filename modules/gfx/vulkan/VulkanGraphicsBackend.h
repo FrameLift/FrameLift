@@ -163,6 +163,28 @@ public:
         return retireQueue_.CurrentFrame();
     }
 
+    // ── Host image copy (Vulkan 1.4 core / VK_EXT_host_image_copy on 1.3) ──────────
+    // CPU-decoded frames copy straight from decoder memory into the sampled image with
+    // no staging buffer, no barriers and no queue submit on the render thread. Gated on
+    // device support and R8G8B8A8 host-transfer format support; selected by default
+    // only on integrated/UMA adapters — on discrete GPUs the driver's CPU-side
+    // detiling makes it measurably slower than the staging path (see
+    // SetupHostImageCopy). FRAMELIFT_VK_HOST_COPY=1/0 forces it on/off.
+    [[nodiscard]] bool SupportsHostImageCopy() const
+    {
+        return hostImageCopy_;
+    }
+
+    // Layout host-copied sampled images live in (SHADER_READ_ONLY_OPTIMAL when the
+    // implementation lists it as a copy-dst layout, else GENERAL).
+    [[nodiscard]] VkImageLayout HostCopyDstLayout() const
+    {
+        return hostCopyDstLayout_;
+    }
+
+    bool HostTransitionImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
+    bool HostCopyToImage(VkImage image, VkImageLayout layout, const void* pixels, uint32_t w, uint32_t h);
+
     // Deferred destruction for objects frames in flight may still reference; collected
     // once per prepared frame (PrepareQtFrame), drained on idle teardown paths. Replaces
     // mid-frame vkDeviceWaitIdle stalls on resize / format change / pool swap.
@@ -181,6 +203,7 @@ private:
     void CreateInstance();
     void SetupDebugUtils();
     void CreateDevice(QWindow* presentProbe);
+    void SetupHostImageCopy(bool featureEnabled, bool discreteAdapter);
     void DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties);
     void RefreshQtResources(QQuickWindow* window);
     void FlushFrameSignals();
@@ -205,6 +228,10 @@ private:
     bool configured_ = false;
     bool shutdown_ = false;
     bool validationActive_ = false;
+    bool hostImageCopy_ = false;
+    VkImageLayout hostCopyDstLayout_ = VK_IMAGE_LAYOUT_GENERAL;
+    PFN_vkTransitionImageLayoutEXT transitionImageLayoutFn_ = nullptr;
+    PFN_vkCopyMemoryToImageEXT copyMemoryToImageFn_ = nullptr;
 
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessengerFn_ = nullptr;
@@ -244,4 +271,10 @@ private:
 #ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
     VkPhysicalDeviceVulkan14Features enabledF14_{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES};
 #endif
+    // Chained into the device create only on a 1.3 device using VK_EXT_host_image_copy
+    // (on 1.4 the core feature bit in enabledF14_ is used instead). Must outlive the
+    // device: the features chain is also handed to FFmpeg via GetVulkanDeviceInfo.
+    VkPhysicalDeviceHostImageCopyFeaturesEXT enabledHostCopy_{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT
+    };
 };

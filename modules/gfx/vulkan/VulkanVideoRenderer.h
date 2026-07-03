@@ -6,6 +6,7 @@
 
 #include "IVideoRenderer.h"
 #include "VulkanGraphicsBackend.h"
+#include "VulkanTextureRing.h"
 
 // VMA handle, forward-declared (impl lives in VulkanGraphicsBackend.cpp).
 typedef struct VmaAllocation_T* VmaAllocation;
@@ -37,7 +38,7 @@ public:
     void Draw(int fbW, int fbH, bool drawOverlay = false) override;
 
 private:
-    // One sampled RGBA image (+ its view and descriptor set) per frame-in-flight slot.
+    // One sampled RGBA image with its view and descriptor set.
     struct Texture
     {
         VkImage image = VK_NULL_HANDLE;
@@ -48,6 +49,16 @@ private:
         int w = 0;
         int h = 0;
         bool valid = false;
+    };
+
+    // Host-image-copy upload target: a ring of sampled images the CPU writes directly
+    // (no staging, no barriers, no submit). Ring size covers the worst-case frames in
+    // flight plus the steady-state slack the policy needs (see VulkanTextureRing.h).
+    struct HostRing
+    {
+        static constexpr uint32_t kSlots = VulkanGraphicsBackend::kMaxFramesInFlight + 2;
+        std::array<Texture, kSlots> tex{};
+        VulkanTextureRing policy;
     };
 
     // Per-frame-slot staging arena: each Qt frame slot owns a growable, persistently
@@ -69,8 +80,14 @@ private:
     // given descriptor-set layout; used for both the RGBA and YCbCr paths.
     bool CreateBlitPipeline(VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline);
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) const;
-    bool EnsureTexture(Texture& t, int w, int h);
+    // hostCopy selects HOST_TRANSFER usage + host-copy sampling layout instead of the
+    // staging path's TRANSFER_DST + SHADER_READ_ONLY.
+    bool EnsureTexture(Texture& t, int w, int h, bool hostCopy);
     void UploadTo(Texture& t, const uint8_t* rgba, int w, int h);
+    void UploadHostCopy(HostRing& ring, const uint8_t* rgba, int w, int h);
+    // Currently displayable texture for a stream: the ring's displayed slot on the
+    // host-copy path, the single texture otherwise; null when nothing was uploaded yet.
+    const Texture* CurrentTexture(HostRing& ring, const Texture& single) const;
     // Make room for `bytes` more in the slot's arena, growing (old buffer retired — a
     // recorded copy may still reference it) when needed; growth resets `used` because
     // fresh space starts at offset 0 of the new buffer.
@@ -123,8 +140,13 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 
+    // Staging-path textures (one per stream)…
     Texture video_{};
     Texture overlay_{};
+    // …or host-copy rings when the backend supports host image copy (decided in Init).
+    bool useHostCopy_ = false;
+    HostRing videoRing_{};
+    HostRing overlayRing_{};
 
     std::array<StagingSlot, VulkanGraphicsBackend::kMaxFramesInFlight> staging_{};
 

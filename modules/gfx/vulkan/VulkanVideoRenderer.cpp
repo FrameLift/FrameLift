@@ -41,6 +41,14 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     DestroyYcbcr();
     DestroyTexture(video_);
     DestroyTexture(overlay_);
+    for (Texture& t : videoRing_.tex)
+    {
+        DestroyTexture(t);
+    }
+    for (Texture& t : overlayRing_.tex)
+    {
+        DestroyTexture(t);
+    }
     for (StagingSlot& slot : staging_)
     {
         if (slot.buffer != VK_NULL_HANDLE)
@@ -79,6 +87,9 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
     device_ = backend_->Device();
     physicalDevice_ = backend_->PhysicalDevice();
     allocator_ = backend_->Allocator();
+    useHostCopy_ = backend_->SupportsHostImageCopy();
+    videoRing_.policy.Reset(HostRing::kSlots);
+    overlayRing_.policy.Reset(HostRing::kSlots);
 
     // Sampler: linear, clamp-to-edge (matches GlVideoRenderer).
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -265,7 +276,7 @@ void VulkanVideoRenderer::DestroyTexture(Texture& t)
     t = {};
 }
 
-bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
+bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h, bool hostCopy)
 {
     if (t.valid && t.w == w && t.h == h)
     {
@@ -297,7 +308,8 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                (hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT : VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo aci{};
@@ -329,7 +341,9 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
         return false;
     }
 
-    VkDescriptorImageInfo dii{sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo dii{
+        sampler_, t.view, hostCopy ? backend_->HostCopyDstLayout() : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
     VkWriteDescriptorSet w0{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w0.dstSet = t.set;
     w0.dstBinding = 0;
@@ -343,8 +357,19 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
     t.layout = VK_IMAGE_LAYOUT_UNDEFINED;
     t.valid = true;
     VulkanUtil::SetObjectName(
-        device_, VK_OBJECT_TYPE_IMAGE, t.image, &t == &video_ ? "FrameLift video image" : "FrameLift overlay image"
+        device_, VK_OBJECT_TYPE_IMAGE, t.image, hostCopy ? "FrameLift host-copy image" : "FrameLift staging-path image"
     );
+
+    if (hostCopy)
+    {
+        // One-time host-side transition into the layout the image lives in from now on;
+        // every later upload copies into it in place.
+        if (!backend_->HostTransitionImage(t.image, VK_IMAGE_LAYOUT_UNDEFINED, backend_->HostCopyDstLayout()))
+        {
+            return false;
+        }
+        t.layout = backend_->HostCopyDstLayout();
+    }
     return true;
 }
 
@@ -451,13 +476,63 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
 }
 } // namespace
 
+void VulkanVideoRenderer::UploadHostCopy(HostRing& ring, const uint8_t* rgba, int w, int h)
+{
+    if (!rgba || w <= 0 || h <= 0)
+    {
+        return;
+    }
+    if (ring.policy.Count() == 0)
+    {
+        ring.policy.Reset(HostRing::kSlots);
+    }
+    const int slot =
+        ring.policy.AcquireWritable(backend_->FrameCounter(), VulkanGraphicsBackend::kMaxFramesInFlight);
+    if (slot < 0)
+    {
+        // Ring sized for the worst case, so this indicates a policy bug; keep showing
+        // the previous frame rather than racing the GPU.
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            Log::Error("VulkanVideoRenderer: host-copy ring starved; dropping upload");
+        }
+        return;
+    }
+    Texture& t = ring.tex[slot];
+    if (!EnsureTexture(t, w, h, true))
+    {
+        return;
+    }
+    if (!backend_->HostCopyToImage(t.image, t.layout, rgba, static_cast<uint32_t>(w), static_cast<uint32_t>(h)))
+    {
+        return;
+    }
+    ring.policy.MarkWritten(slot);
+}
+
+const VulkanVideoRenderer::Texture* VulkanVideoRenderer::CurrentTexture(HostRing& ring, const Texture& single) const
+{
+    if (useHostCopy_)
+    {
+        const int displayed = ring.policy.Displayed();
+        if (displayed >= 0 && ring.tex[static_cast<size_t>(displayed)].valid)
+        {
+            return &ring.tex[static_cast<size_t>(displayed)];
+        }
+        return nullptr;
+    }
+    return single.valid ? &single : nullptr;
+}
+
 void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h)
 {
     if (!rgba || w <= 0 || h <= 0)
     {
         return;
     }
-    if (!EnsureTexture(t, w, h))
+    if (!EnsureTexture(t, w, h, false))
     {
         return;
     }
@@ -496,7 +571,14 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h
 void VulkanVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
 {
     vkFrame_ = nullptr; // switched (back) to the CPU-RGBA8 path
-    UploadTo(video_, rgba, w, h);
+    if (useHostCopy_)
+    {
+        UploadHostCopy(videoRing_, rgba, w, h);
+    }
+    else
+    {
+        UploadTo(video_, rgba, w, h);
+    }
 }
 
 void VulkanVideoRenderer::UploadVulkanFrame(void* avFrame, int displayW, int displayH)
@@ -511,7 +593,14 @@ void VulkanVideoRenderer::UploadVulkanFrame(void* avFrame, int displayW, int dis
 
 void VulkanVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
 {
-    UploadTo(overlay_, rgba, w, h);
+    if (useHostCopy_)
+    {
+        UploadHostCopy(overlayRing_, rgba, w, h);
+    }
+    else
+    {
+        UploadTo(overlay_, rgba, w, h);
+    }
 }
 
 namespace
@@ -982,19 +1071,20 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
 
     VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
     bool viewportSet = false;
+    const Texture* videoTex = CurrentTexture(videoRing_, video_);
+    const Texture* overlayTex = CurrentTexture(overlayRing_, overlay_);
 
     if (vkFrame_)
     {
         viewportSet = DrawVulkanFrame(); // zero-copy YCbCr video
     }
-    else if (video_.valid)
+    else if (videoTex)
     {
-        const Texture& vid = video_;
         const VkExtent2D extent = backend_->SwapchainExtent();
         // Aspect-preserving fit, centered. The overlay is uploaded at this same on-screen
         // size, so it maps 1:1 over the video within the same letterbox rectangle.
         const LetterboxRect lb =
-            ComputeLetterbox(static_cast<int>(extent.width), static_cast<int>(extent.height), vid.w, vid.h);
+            ComputeLetterbox(static_cast<int>(extent.width), static_cast<int>(extent.height), videoTex->w, videoTex->h);
 
         VkViewport vp{};
         vp.x = static_cast<float>(lb.x);
@@ -1008,8 +1098,9 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &vid.set, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &videoTex->set, 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
+        videoRing_.policy.MarkDisplayedSampled(backend_->FrameCounter());
         viewportSet = true;
     }
     // No video drawn (no frame yet, or the zero-copy path bailed): the render-pass clear
@@ -1017,7 +1108,7 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
 
     // Subtitle overlay (always RGBA via the standard pipeline), composited over the video
     // within the same letterbox viewport/scissor.
-    if (drawOverlay && overlay_.valid)
+    if (drawOverlay && overlayTex)
     {
         if (!viewportSet)
         {
@@ -1026,7 +1117,7 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
             // dynamic state (a bailed video draw leaves it stale or unset).
             const VkExtent2D extent = backend_->SwapchainExtent();
             const LetterboxRect lb = ComputeLetterbox(
-                static_cast<int>(extent.width), static_cast<int>(extent.height), overlay_.w, overlay_.h
+                static_cast<int>(extent.width), static_cast<int>(extent.height), overlayTex->w, overlayTex->h
             );
             VkViewport vp{};
             vp.x = static_cast<float>(lb.x);
@@ -1040,7 +1131,8 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
             vkCmdSetScissor(cmd, 0, 1, &scissor);
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &overlay_.set, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &overlayTex->set, 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
+        overlayRing_.policy.MarkDisplayedSampled(backend_->FrameCounter());
     }
 }
