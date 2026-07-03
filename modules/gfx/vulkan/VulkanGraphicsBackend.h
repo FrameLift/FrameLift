@@ -185,6 +185,17 @@ public:
     bool HostTransitionImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
     bool HostCopyToImage(VkImage image, VkImageLayout layout, const void* pixels, uint32_t w, uint32_t h);
 
+    // ── Push descriptors (Vulkan 1.4 core / VK_KHR_push_descriptor on 1.3) ─────────
+    // Per-frame YCbCr image bindings push straight into the command buffer instead of
+    // allocating descriptor sets from a pool (whose exhaustion/invalidation dance they
+    // otherwise need). FRAMELIFT_VK_NO_PUSH_DESC=1 forces the pool path for testing.
+    [[nodiscard]] bool SupportsPushDescriptors() const
+    {
+        return pushDescriptors_;
+    }
+
+    void CmdPushDescriptorSet(VkCommandBuffer cmd, VkPipelineLayout layout, const VkWriteDescriptorSet& write);
+
     // Deferred destruction for objects frames in flight may still reference; collected
     // once per prepared frame (PrepareQtFrame), drained on idle teardown paths. Replaces
     // mid-frame vkDeviceWaitIdle stalls on resize / format change / pool swap.
@@ -232,6 +243,8 @@ private:
     VkImageLayout hostCopyDstLayout_ = VK_IMAGE_LAYOUT_GENERAL;
     PFN_vkTransitionImageLayoutEXT transitionImageLayoutFn_ = nullptr;
     PFN_vkCopyMemoryToImageEXT copyMemoryToImageFn_ = nullptr;
+    bool pushDescriptors_ = false;
+    PFN_vkCmdPushDescriptorSetKHR pushDescriptorSetFn_ = nullptr;
 
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessengerFn_ = nullptr;

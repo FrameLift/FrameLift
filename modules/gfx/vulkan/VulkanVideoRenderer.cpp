@@ -88,6 +88,7 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
     physicalDevice_ = backend_->PhysicalDevice();
     allocator_ = backend_->Allocator();
     useHostCopy_ = backend_->SupportsHostImageCopy();
+    usePushDesc_ = backend_->SupportsPushDescriptors();
     videoRing_.policy.Reset(HostRing::kSlots);
     overlayRing_.policy.Reset(HostRing::kSlots);
 
@@ -821,6 +822,10 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     binding.pImmutableSamplers = &ycbcrSampler_;
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    if (usePushDesc_)
+    {
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    }
     li.bindingCount = 1;
     li.pBindings = &binding;
     if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &ycbcrSetLayout_) != VK_SUCCESS)
@@ -829,7 +834,9 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
         return false;
     }
 
-    if (!CreateYcbcrDescPool())
+    // Push descriptors bind the per-frame view straight into the command buffer, so
+    // the pool (and its exhaustion/invalidation handling) exists only on the fallback.
+    if (!usePushDesc_ && !CreateYcbcrDescPool())
     {
         return false;
     }
@@ -876,7 +883,10 @@ void VulkanVideoRenderer::InvalidateFrameTextures()
         }
     );
     ycbcrDescPool_ = VK_NULL_HANDLE;
-    CreateYcbcrDescPool();
+    if (!usePushDesc_)
+    {
+        CreateYcbcrDescPool();
+    }
 }
 
 const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uint64_t image)
@@ -910,6 +920,13 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
     {
         Log::Error("VulkanVideoRenderer: YCbCr image view creation failed");
         return nullptr;
+    }
+
+    if (usePushDesc_)
+    {
+        // No set: the view is pushed into the command buffer at draw time.
+        auto pushed = frameTextures_.emplace(image, ft);
+        return &pushed.first->second;
     }
 
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -1043,7 +1060,22 @@ bool VulkanVideoRenderer::DrawVulkanFrame()
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ycbcrPipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ycbcrPipelineLayout_, 0, 1, &ft->set, 0, nullptr);
+    if (usePushDesc_)
+    {
+        VkDescriptorImageInfo dii{};
+        dii.imageView = ft->view; // sampler comes from the immutable-sampler layout
+        dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w0{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w0.dstBinding = 0;
+        w0.descriptorCount = 1;
+        w0.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w0.pImageInfo = &dii;
+        backend_->CmdPushDescriptorSet(cmd, ycbcrPipelineLayout_, w0);
+    }
+    else
+    {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ycbcrPipelineLayout_, 0, 1, &ft->set, 0, nullptr);
+    }
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // 4. Publish the post-sample state so FFmpeg/next consumer observes the right layout,

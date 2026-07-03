@@ -439,6 +439,24 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
 #endif
 
+    // Push descriptors: core feature bit on 1.4, plain extension (no feature struct)
+    // on a 1.3 device.
+    const bool hasPushDescExt = HasExtension(chosenExtensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    bool pushDescSupported = false;
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+    if (deviceApiVersion_ >= VK_API_VERSION_1_4 && supportedF14.pushDescriptor)
+    {
+        enabledF14_.pushDescriptor = VK_TRUE;
+        pushDescSupported = true;
+    }
+    else if (deviceApiVersion_ < VK_API_VERSION_1_4 && hasPushDescExt)
+#else
+    if (hasPushDescExt)
+#endif
+    {
+        pushDescSupported = true;
+    }
+
     // Host image copy: core feature bit on 1.4, EXT feature struct (+ extension,
     // enabled below with the other optionals) on a 1.3 device.
     bool hostCopySupported = false;
@@ -495,6 +513,10 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     {
         enableOptional(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
     }
+    if (pushDescSupported && deviceApiVersion_ < VK_API_VERSION_1_4)
+    {
+        enableOptional(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    }
 
     static constexpr float priorities[] = {1.0f, 1.0f};
     std::vector<VkDeviceQueueCreateInfo> queueInfos;
@@ -534,6 +556,22 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, graphicsQueue_, "FrameLift graphics queue (Qt)");
 
     SetupHostImageCopy(hostCopySupported, chosenDiscrete);
+
+    pushDescriptors_ = false;
+    if (pushDescSupported)
+    {
+        if (const char* env = std::getenv("FRAMELIFT_VK_NO_PUSH_DESC"); env && *env == '1')
+        {
+            Log::Debug("Vulkan: push descriptors disabled by FRAMELIFT_VK_NO_PUSH_DESC");
+        }
+        else
+        {
+            pushDescriptorSetFn_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(
+                device_, deviceApiVersion_ >= VK_API_VERSION_1_4 ? "vkCmdPushDescriptorSet" : "vkCmdPushDescriptorSetKHR"
+            ));
+            pushDescriptors_ = pushDescriptorSetFn_ != nullptr;
+        }
+    }
 
     DetectVideoDecodeQueue(chosenQueues);
     if (qtGraphicsQueueIndex_ == 0)
@@ -669,6 +707,14 @@ bool VulkanGraphicsBackend::HostTransitionImage(VkImage image, VkImageLayout old
     info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VK_CHECK_LOG_RETURN(transitionImageLayoutFn_(device_, 1, &info), "Vulkan: host image layout transition failed", false);
     return true;
+}
+
+void VulkanGraphicsBackend::CmdPushDescriptorSet(VkCommandBuffer cmd, VkPipelineLayout layout, const VkWriteDescriptorSet& write)
+{
+    if (pushDescriptorSetFn_ && cmd != VK_NULL_HANDLE)
+    {
+        pushDescriptorSetFn_(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &write);
+    }
 }
 
 bool VulkanGraphicsBackend::HostCopyToImage(VkImage image, VkImageLayout layout, const void* pixels, uint32_t w, uint32_t h)
@@ -951,6 +997,8 @@ void VulkanGraphicsBackend::DestroyDevice()
     hostImageCopy_ = false;
     transitionImageLayoutFn_ = nullptr;
     copyMemoryToImageFn_ = nullptr;
+    pushDescriptors_ = false;
+    pushDescriptorSetFn_ = nullptr;
 }
 
 void VulkanGraphicsBackend::Shutdown()

@@ -145,6 +145,8 @@ private:
     Texture overlay_{};
     // …or host-copy rings when the backend supports host image copy (decided in Init).
     bool useHostCopy_ = false;
+    // Push per-frame YCbCr views into the command buffer instead of pool-allocated sets.
+    bool usePushDesc_ = false;
     HostRing videoRing_{};
     HostRing overlayRing_{};
 
