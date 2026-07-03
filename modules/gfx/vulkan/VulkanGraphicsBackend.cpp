@@ -11,6 +11,9 @@
 #include <vk_mem_alloc.h>
 
 #include <QtCore/QByteArray>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QVersionNumber>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QSurface>
@@ -625,6 +628,8 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, cmd, "FrameLift frame-ops cmd");
     }
 
+    LoadPipelineCache();
+
     Log::Debug(
         "Vulkan: {} (device API {}, negotiated {}; zero-copy prerequisites {}, video decode queue {})",
         properties.deviceName, VersionString(properties.apiVersion), VersionString(deviceApiVersion_),
@@ -734,6 +739,68 @@ bool VulkanGraphicsBackend::HostCopyToImage(VkImage image, VkImageLayout layout,
     info.pRegions = &region;
     VK_CHECK_LOG_RETURN(copyMemoryToImageFn_(device_, &info), "Vulkan: host memory-to-image copy failed", false);
     return true;
+}
+
+QString VulkanGraphicsBackend::PipelineCachePath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/vulkan_pipeline_cache.bin");
+}
+
+void VulkanGraphicsBackend::LoadPipelineCache()
+{
+    QByteArray blob;
+    if (QFile file(PipelineCachePath()); file.open(QIODevice::ReadOnly))
+    {
+        blob = file.readAll();
+    }
+
+    // Only feed data back that this exact device/driver produced; anything else is
+    // discarded (the spec requires the application to validate the header).
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    bool blobValid = static_cast<size_t>(blob.size()) >= sizeof(VkPipelineCacheHeaderVersionOne);
+    if (blobValid)
+    {
+        VkPipelineCacheHeaderVersionOne header{};
+        std::memcpy(&header, blob.constData(), sizeof(header));
+        blobValid = header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+                    header.vendorID == props.vendorID && header.deviceID == props.deviceID &&
+                    std::memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+    }
+
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = blobValid ? static_cast<size_t>(blob.size()) : 0;
+    ci.pInitialData = blobValid ? blob.constData() : nullptr;
+    if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS && blobValid)
+    {
+        // Stale/corrupt blob: retry empty rather than running uncached.
+        ci.initialDataSize = 0;
+        ci.pInitialData = nullptr;
+        VK_CHECK_LOG(vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_), "Vulkan: pipeline cache creation failed");
+    }
+}
+
+void VulkanGraphicsBackend::SavePipelineCache()
+{
+    if (pipelineCache_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr) != VK_SUCCESS || size == 0)
+    {
+        return;
+    }
+    QByteArray blob(static_cast<qsizetype>(size), Qt::Uninitialized);
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, blob.data()) != VK_SUCCESS)
+    {
+        return;
+    }
+    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
+    if (QFile file(PipelineCachePath()); file.open(QIODevice::WriteOnly))
+    {
+        file.write(blob.constData(), static_cast<qsizetype>(size));
+    }
 }
 
 void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties)
@@ -976,6 +1043,12 @@ void VulkanGraphicsBackend::DestroyDevice()
         vkDeviceWaitIdle(device_);
     }
     retireQueue_.Drain(); // device idle; free retired objects before their pools/allocator go
+    SavePipelineCache();
+    if (pipelineCache_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+        pipelineCache_ = VK_NULL_HANDLE;
+    }
     if (frameOpsPool_ != VK_NULL_HANDLE)
     {
         vkDestroyCommandPool(device_, frameOpsPool_, nullptr);

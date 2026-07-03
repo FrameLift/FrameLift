@@ -255,7 +255,7 @@ bool VulkanVideoRenderer::CreateBlitPipeline(
     gp.renderPass = backend_->RenderPass();
     gp.subpass = 0;
 
-    const VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &outPipeline);
+    const VkResult r = vkCreateGraphicsPipelines(device_, backend_->PipelineCache(), 1, &gp, nullptr, &outPipeline);
     vkDestroyShaderModule(device_, vs, nullptr);
     vkDestroyShaderModule(device_, fs, nullptr);
     if (r != VK_SUCCESS)

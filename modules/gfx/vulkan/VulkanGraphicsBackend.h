@@ -15,6 +15,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <QtCore/QString>
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -67,11 +69,6 @@ public:
 
     [[nodiscard]] std::unique_ptr<IVideoRenderer> CreateVideoRenderer() override;
 
-    [[nodiscard]] uintptr_t CreateUITexture(const unsigned char*, int, int) override
-    {
-        return 0;
-    }
-
     [[nodiscard]] void* GetProcAddr(const char* name) const override;
     [[nodiscard]] bool GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noexcept override;
 
@@ -88,6 +85,13 @@ public:
     [[nodiscard]] VmaAllocator Allocator() const
     {
         return allocator_;
+    }
+
+    // Persisted across runs (disk-backed): removes the pipeline-rebuild hitch on YCbCr
+    // format changes and first frames. VK_NULL_HANDLE is a valid fallback everywhere.
+    [[nodiscard]] VkPipelineCache PipelineCache() const
+    {
+        return pipelineCache_;
     }
 
     [[nodiscard]] VkRenderPass RenderPass() const
@@ -254,7 +258,12 @@ private:
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessengerFn_ = nullptr;
 
+    void LoadPipelineCache();
+    void SavePipelineCache();
+    [[nodiscard]] static QString PipelineCachePath();
+
     std::unique_ptr<QVulkanInstance> qtInstance_;
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     VmaAllocator allocator_ = nullptr;
     VulkanQueueLock queueLock_;
     VulkanRetireQueue retireQueue_;
