@@ -343,6 +343,9 @@ void App::LoadPlugins()
     // writes host sections only, so without this flush module sections appear only
     // after the user presses Save in the Settings menu.
     moduleCtx_->Settings().SaveSettings();
+
+    settings_.ApplyLaunchEnvironmentOverrides();
+    ffmpeg_->ApplySettings(settings_);
 }
 
 // ── Renderables ───────────────────────────────────────────────────────────────
@@ -571,7 +574,7 @@ void App::Dispatch(const AppEvent& e)
 void App::ScheduleTestExitIfRequested()
 {
     bool ok = false;
-    int delayMs = qEnvironmentVariableIntValue("FRAMELIFT_TEST_EXIT_AFTER_MS", &ok);
+    int delayMs = qEnvironmentVariableIntValue("FL_TEST_EXIT_AFTER_MS", &ok);
     if (!ok)
     {
         return;

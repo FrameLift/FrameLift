@@ -65,13 +65,13 @@ void ThrowVk(const char* message, VkResult result)
     throw std::runtime_error(std::string(message) + " (VkResult " + std::to_string(result) + ")");
 }
 
-// Validation is on by default in debug builds; FRAMELIFT_VULKAN_VALIDATION=1/0 overrides
+// Validation is on by default in debug builds; FL_VULKAN_VALIDATION=1/0 overrides
 // either way (e.g. to debug a release build, or to silence a debug build). Synchronization
 // validation is enabled externally through the layer's own settings
 // (VK_LAYER_KHRONOS_validation with khronos_validation.validate_sync, or vkconfig).
 bool ValidationRequested()
 {
-    if (const char* env = std::getenv("FRAMELIFT_VULKAN_VALIDATION"); env && *env != '\0')
+    if (const char* env = std::getenv("FL_VULKAN_VALIDATION"); env && *env != '\0')
     {
         return *env == '1';
     }
@@ -471,11 +471,11 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     capIn.extPushDescriptor = HasExtension(chosenExtensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     capIn.hostTransferFormatOk = HostTransferFormatSupported();
     capIn.discreteAdapter = chosenDiscrete;
-    if (const char* env = std::getenv("FRAMELIFT_VK_HOST_COPY"); env && *env != '\0')
+    if (const char* env = std::getenv("FL_VK_HOST_COPY"); env && *env != '\0')
     {
         capIn.hostCopyEnv = *env == '1' ? 1 : 0;
     }
-    if (const char* env = std::getenv("FRAMELIFT_VK_NO_PUSH_DESC"); env && *env == '1')
+    if (const char* env = std::getenv("FL_VK_NO_PUSH_DESC"); env && *env == '1')
     {
         capIn.noPushDescEnv = true;
     }
@@ -593,7 +593,7 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
     else if (capIn.noPushDescEnv)
     {
-        Log::Debug("Vulkan: push descriptors disabled by FRAMELIFT_VK_NO_PUSH_DESC");
+        Log::Debug("Vulkan: push descriptors disabled by FL_VK_NO_PUSH_DESC");
     }
 
     DetectVideoDecodeQueue(chosenQueues);

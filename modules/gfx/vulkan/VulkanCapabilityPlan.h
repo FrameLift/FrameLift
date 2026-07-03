@@ -16,10 +16,10 @@ struct Inputs
     bool extHostImageCopy = false;    // VK_EXT_host_image_copy present with its feature bit
     bool hostTransferFormatOk = false; // R8G8B8A8 optimal tiling supports host transfer
     bool discreteAdapter = false;
-    int hostCopyEnv = -1;             // FRAMELIFT_VK_HOST_COPY: -1 unset, else 0/1
+    int hostCopyEnv = -1;             // FL_VK_HOST_COPY: -1 unset, else 0/1
     bool corePushDescriptor = false;  // Vulkan14Features::pushDescriptor
     bool extPushDescriptor = false;   // VK_KHR_push_descriptor present
-    bool noPushDescEnv = false;       // FRAMELIFT_VK_NO_PUSH_DESC=1
+    bool noPushDescEnv = false;       // FL_VK_NO_PUSH_DESC=1
 };
 
 struct Plan
