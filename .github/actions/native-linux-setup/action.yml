@@ -1,7 +1,8 @@
 name: Native Linux setup
 description: >-
-  Install the system Qt/FFmpeg/libass/GL dev stack plus a Kitware CMake build
-  (newer than the distro package).
+  Install the system FFmpeg/libass/GL/Vulkan dev stack plus a Kitware CMake build
+  (newer than the distro package). Qt is installed separately by the install-qt
+  action (pinned to QT_VERSION), not from distro packages.
 
 inputs:
   cmake-version:
@@ -22,9 +23,6 @@ runs:
           curl \
           ca-certificates \
           pkg-config \
-          qt6-base-dev \
-          qt6-declarative-dev \
-          qt6-multimedia-dev \
           libavformat-dev \
           libavcodec-dev \
           libavutil-dev \
