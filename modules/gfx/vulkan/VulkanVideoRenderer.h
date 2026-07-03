@@ -18,8 +18,8 @@ typedef struct VmaAllocation_T* VmaAllocation;
 //
 // A single persistent image per stream (video + overlay), like GlVideoRenderer, so the
 // last uploaded frame stays on screen across presents (paused / low-fps content). The
-// upload's blocking transfer (Phase 2 parity; zero-copy in Phase 3) barriers against
-    // prior fragment-shader reads on the graphics queue, so overwriting is hazard-free.
+// upload's blocking transfer barriers against prior fragment-shader reads on the
+// graphics queue, so overwriting the shared image is hazard-free.
 class VulkanVideoRenderer final : public IVideoRenderer
 {
 public:
@@ -74,13 +74,19 @@ private:
     };
 
     const FrameTex* EnsureFrameTexture(uint64_t image);
+    // Drop all cached per-image views/sets (device-idle first: an in-flight frame may
+    // still sample them). Used when the decoder's frames pool is replaced and when the
+    // descriptor pool is exhausted.
+    void InvalidateFrameTextures();
     // Record the frame image's transition (decode→sample layout, queue-ownership acquire)
     // into its own command buffer and register it with the backend to run, in the single
     // per-frame submit, just before the main render CB. Must run OUTSIDE the render pass,
     // hence its own command buffer (Draw runs inside the pass). NOT submitted separately:
     // a standalone submit here would stall the queue ahead of Qt Quick's scene-graph work.
     VkCommandBuffer RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
-    void DrawVulkanFrame();
+    // Returns true when it recorded the video draw (and thus set viewport/scissor);
+    // false on any early-out, so Draw() knows the overlay must set its own.
+    bool DrawVulkanFrame();
 
     VulkanGraphicsBackend* backend_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
@@ -108,6 +114,10 @@ private:
     void* vkFrame_ = nullptr;
     int vkDisplayW_ = 0;
     int vkDisplayH_ = 0;
+
+    // Identity of the decoder's hw-frames pool the cached views/sets were built against
+    // (VulkanFrameInfo::framesContextId); a change invalidates frameTextures_.
+    uint64_t framesContextId_ = 0;
 
     // Conversion is rebuilt only when the format/colorspace/range changes.
     int ycbcrFormat_ = 0;

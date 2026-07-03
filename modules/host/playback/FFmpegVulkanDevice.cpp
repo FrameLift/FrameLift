@@ -147,6 +147,7 @@ bool GetVulkanFrameInfo(void* avFrame, VulkanFrameInfo& out)
     auto* fc = reinterpret_cast<AVHWFramesContext*>(frame->hw_frames_ctx->data);
     auto* vfc = static_cast<AVVulkanFramesContext*>(fc->hwctx);
 
+    out.framesContextId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fc));
     vfc->lock_frame(fc, vkf);
     out.image = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->img[0]));
     out.semaphore = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->sem[0]));

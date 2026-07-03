@@ -669,6 +669,25 @@ void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t val
     }
 }
 
+void VulkanGraphicsBackend::HostSignalPendingFrameSignals()
+{
+    if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    vkDeviceWaitIdle(device_);
+    // Queue order is chronological, so per-semaphore values are signalled in
+    // increasing order as vkSignalSemaphore requires.
+    for (const TimelineSignal& signal : pendingFrameSignals_)
+    {
+        VkSemaphoreSignalInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+        si.semaphore = signal.semaphore;
+        si.value = signal.value;
+        VK_CHECK_LOG(vkSignalSemaphore(device_, &si), "Vulkan: host signal of pending frame semaphore failed");
+    }
+    pendingFrameSignals_.clear();
+}
+
 void VulkanGraphicsBackend::FlushFrameSignals()
 {
     if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
@@ -772,7 +791,7 @@ void VulkanGraphicsBackend::Shutdown()
     shutdown_ = true;
     currentCmd_ = VK_NULL_HANDLE;
     renderPass_ = VK_NULL_HANDLE;
-    pendingFrameSignals_.clear();
+    HostSignalPendingFrameSignals();
     DestroyDevice();
     if (debugMessenger_ != VK_NULL_HANDLE && destroyDebugMessengerFn_)
     {

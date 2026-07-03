@@ -28,6 +28,11 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     // the device (see App member order / destructor), so the device is still live.
     vkDeviceWaitIdle(device_);
 
+    // Deliver any frame signals queued this frame but not yet flushed (afterFrameEnd may
+    // never fire again). The player releases its AVVkFrame refs right after this dtor;
+    // FFmpeg would otherwise wait forever on the advertised timeline values.
+    backend_->HostSignalPendingFrameSignals();
+
     DestroyYcbcr();
     if (transitionPool_ != VK_NULL_HANDLE)
     {
@@ -220,6 +225,13 @@ bool VulkanVideoRenderer::CreateBlitPipeline(
     ds.dynamicStateCount = 2;
     ds.pDynamicStates = dyn;
 
+    // Qt's render pass carries a depth/stencil attachment, so the pipeline must supply
+    // this state even though the video blit neither tests nor writes depth (VUID-09028).
+    VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dss.depthTestEnable = VK_FALSE;
+    dss.depthWriteEnable = VK_FALSE;
+    dss.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+
     VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     gp.stageCount = 2;
     gp.pStages = stages;
@@ -228,6 +240,7 @@ bool VulkanVideoRenderer::CreateBlitPipeline(
     gp.pViewportState = &vp;
     gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &dss;
     gp.pColorBlendState = &cb;
     gp.pDynamicState = &ds;
     gp.layout = outLayout;
@@ -441,6 +454,9 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h
         return;
     }
     std::memcpy(stagingMapped_, rgba, static_cast<size_t>(bytes));
+    // VMA_MEMORY_USAGE_AUTO does not guarantee a HOST_COHERENT heap; flush so the GPU
+    // copy sees the bytes just written (no-op when the memory is coherent).
+    vmaFlushAllocation(allocator_, stagingAlloc_, 0, bytes);
 
     CopyJob job{staging_, t.image, t.layout, static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
     backend_->ImmediateSubmit(RecordCopy, &job);
@@ -645,6 +661,24 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
     return true;
 }
 
+void VulkanVideoRenderer::InvalidateFrameTextures()
+{
+    if (frameTextures_.empty())
+    {
+        return;
+    }
+    vkDeviceWaitIdle(device_);
+    for (auto& kv : frameTextures_)
+    {
+        vkDestroyImageView(device_, kv.second.view, nullptr);
+    }
+    frameTextures_.clear();
+    if (ycbcrDescPool_ != VK_NULL_HANDLE)
+    {
+        vkResetDescriptorPool(device_, ycbcrDescPool_, 0);
+    }
+}
+
 const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uint64_t image)
 {
     if (auto it = frameTextures_.find(image); it != frameTextures_.end())
@@ -655,13 +689,7 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
     {
         // Pool exhausted (shouldn't happen — bounded decode pool). Drop the cache and
         // wait so the views/sets can be rebuilt safely.
-        vkDeviceWaitIdle(device_);
-        for (auto& kv : frameTextures_)
-        {
-            vkDestroyImageView(device_, kv.second.view, nullptr);
-        }
-        frameTextures_.clear();
-        vkResetDescriptorPool(device_, ycbcrDescPool_, 0);
+        InvalidateFrameTextures();
     }
 
     FrameTex ft{};
@@ -744,22 +772,30 @@ VkCommandBuffer VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int o
     return cmd;
 }
 
-void VulkanVideoRenderer::DrawVulkanFrame()
+bool VulkanVideoRenderer::DrawVulkanFrame()
 {
     VulkanFrameInfo info{};
     if (!GetVulkanFrameInfo(vkFrame_, info) || !info.valid || info.image == 0)
     {
         vkFrame_ = nullptr; // not a usable Vulkan frame (e.g. multi-image fallback)
-        return;
+        return false;
+    }
+    // The decoder can rebuild its hw-frames pool without a format change (seeks, stream
+    // switches); the cached views then dangle over destroyed images whose handle values
+    // the driver may reuse. Drop the cache whenever the pool identity changes.
+    if (info.framesContextId != framesContextId_)
+    {
+        InvalidateFrameTextures();
+        framesContextId_ = info.framesContextId;
     }
     if (!EnsureYcbcr(info.vkFormat, info.colorSpace, info.colorRange))
     {
-        return;
+        return false;
     }
     const FrameTex* ft = EnsureFrameTexture(info.image);
     if (!ft)
     {
-        return;
+        return false;
     }
 
     // The decoder always hands us a fresh frame in its decode layout, owned by the decode queue;
@@ -783,7 +819,7 @@ void VulkanVideoRenderer::DrawVulkanFrame()
         if (!backend_->SubmitFrameTransition(transition, frameSem, info.semValue))
         {
             Log::Error("VulkanVideoRenderer: zero-copy transition submit failed");
-            return;
+            return false;
         }
     }
 
@@ -819,6 +855,7 @@ void VulkanVideoRenderer::DrawVulkanFrame()
             vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1, backend_->GraphicsQueueFamily()
         );
     }
+    return true;
 }
 
 void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
@@ -832,19 +869,15 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
     }
 
     VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
+    bool viewportSet = false;
 
     if (vkFrame_)
     {
-        DrawVulkanFrame(); // zero-copy YCbCr video
+        viewportSet = DrawVulkanFrame(); // zero-copy YCbCr video
     }
-    else
+    else if (video_.valid)
     {
         const Texture& vid = video_;
-        if (!vid.valid)
-        {
-            return; // backend's render-pass clear already painted black
-        }
-
         const VkExtent2D extent = backend_->SwapchainExtent();
         // Aspect-preserving fit, centered. The overlay is uploaded at this same on-screen
         // size, so it maps 1:1 over the video within the same letterbox rectangle.
@@ -865,12 +898,35 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &vid.set, 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
+        viewportSet = true;
     }
+    // No video drawn (no frame yet, or the zero-copy path bailed): the render-pass clear
+    // shows black; the overlay below sets its own viewport if it still needs to draw.
 
     // Subtitle overlay (always RGBA via the standard pipeline), composited over the video
-    // within the same letterbox viewport/scissor set above.
+    // within the same letterbox viewport/scissor.
     if (drawOverlay && overlay_.valid)
     {
+        if (!viewportSet)
+        {
+            // The overlay was rendered at the video's on-screen letterbox size, so its own
+            // dimensions reproduce the same rectangle; never rely on a previous frame's
+            // dynamic state (a bailed video draw leaves it stale or unset).
+            const VkExtent2D extent = backend_->SwapchainExtent();
+            const LetterboxRect lb = ComputeLetterbox(
+                static_cast<int>(extent.width), static_cast<int>(extent.height), overlay_.w, overlay_.h
+            );
+            VkViewport vp{};
+            vp.x = static_cast<float>(lb.x);
+            vp.y = static_cast<float>(lb.y);
+            vp.width = static_cast<float>(lb.w);
+            vp.height = static_cast<float>(lb.h);
+            vp.minDepth = 0.0f;
+            vp.maxDepth = 1.0f;
+            VkRect2D scissor{{lb.x, lb.y}, {static_cast<uint32_t>(lb.w), static_cast<uint32_t>(lb.h)}};
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+        }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &overlay_.set, 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);

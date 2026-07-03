@@ -132,6 +132,16 @@ public:
     bool SubmitFrameTransition(VkCommandBuffer cmd, VkSemaphore waitSemaphore, uint64_t waitValue);
     void QueueFrameSignal(VkSemaphore semaphore, uint64_t value);
 
+    // Last-resort delivery of queued-but-unsubmitted frame signals: waits for the device
+    // to go idle, then host-signals each pending timeline value (vkSignalSemaphore).
+    // The renderer already published value+1 into the AVVkFrame via SetVulkanFrameState,
+    // so dropping a pending signal would leave FFmpeg waiting on it forever when it frees
+    // or reuses the frame. Idle-first makes the host signal semantically correct: all GPU
+    // reads of the frame have completed. Called from ~VulkanVideoRenderer (while the
+    // AVVkFrame semaphores are still alive — the player destroys the renderer before
+    // releasing its frame refs) and from Shutdown().
+    void HostSignalPendingFrameSignals();
+
     bool ImmediateSubmit(void (*record)(VkCommandBuffer cmd, void* ud), void* ud);
 
 private:

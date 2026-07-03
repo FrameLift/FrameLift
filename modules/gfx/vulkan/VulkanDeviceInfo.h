@@ -48,6 +48,12 @@ struct VulkanDeviceInfo
 // can build a view, barrier, and register the wait/signal with the backend's submit.
 struct VulkanFrameInfo
 {
+    // Identity of the decoder's hw-frames pool (the AVHWFramesContext address). The
+    // renderer caches per-VkImage views/sets; when FFmpeg rebuilds its pool — possible
+    // at an unchanged format, e.g. on seeks or stream switches — the old images die and
+    // the driver may reuse their handle values, so the cache must be invalidated on any
+    // change of this id, not only on format changes.
+    uint64_t framesContextId = 0;
     uint64_t image = 0;     // VkImage  (AVVkFrame::img[0]; multiplanar single image)
     uint64_t semaphore = 0; // VkSemaphore (AVVkFrame::sem[0]; timeline)
     uint64_t semValue = 0;  // value to wait on before sampling (AVVkFrame::sem_value[0])
