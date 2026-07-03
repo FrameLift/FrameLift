@@ -77,7 +77,6 @@ private Q_SLOTS:
     void PlaybackOptionsMapBooleans()
     {
         PlaybackSettings s;
-        s.hwdec = false;
         s.hwdecMode = "off";
         s.hrSeek = true;
         s.subAutoLoad = true;
@@ -93,7 +92,6 @@ private Q_SLOTS:
     void PlaybackOptionsTreatHwdecModeOffAsDisabled()
     {
         PlaybackSettings s;
-        s.hwdec = true;
         s.hwdecMode = "off";
 
         const PlaybackOptions o = ToPlaybackOptions(s);
@@ -107,7 +105,7 @@ private Q_SLOTS:
         s.hwdecMode = "vulkan-zero-copy";
         QVERIFY((ToVideoDecodeMode(s)) == (VideoDecodeMode::VulkanZeroCopy));
 
-        s.hwdec = false;
+        s.hwdecMode = "off";
         QVERIFY((ToVideoDecodeMode(s)) == (VideoDecodeMode::Off));
     }
 

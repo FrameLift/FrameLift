@@ -11,7 +11,7 @@ public:
     virtual ~ISettingsStore() = default;
 
     // ── Typed getters ──────────────────────────────────────────────────────────
-    // Keys are "section.name" (e.g. "playback.hwdec", "ui.panelWidth").
+    // Keys are "section.name" (e.g. "playback.hwdecMode", "ui.panelWidth").
     virtual float GetSettingFloat(const char* key) const noexcept = 0;
     virtual bool GetSettingBool(const char* key) const noexcept = 0;
     virtual int GetSettingInt(const char* key) const noexcept = 0;
