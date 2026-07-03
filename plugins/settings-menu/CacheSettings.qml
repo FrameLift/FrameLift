@@ -28,6 +28,7 @@ ScrollView {
             FLSettingRow {
                 title: "Enable read-ahead"
                 description: "Buffer upcoming data while playing."
+                keyName: "cache.readAheadEnabled"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("cache.readAheadEnabled"))
                     onToggled: root.vm.setFieldValue("cache.readAheadEnabled", checked)
@@ -36,6 +37,7 @@ ScrollView {
             FLSettingRow {
                 title: "Buffer size (MB)"
                 description: "Maximum read-ahead buffer size, in megabytes."
+                keyName: "cache.readAheadSizeMB"
                 FLSpinBox {
                     from: 1; to: 4096; stepSize: 16
                     value: (root.rev, root.vm.fieldValue("cache.readAheadSizeMB"))

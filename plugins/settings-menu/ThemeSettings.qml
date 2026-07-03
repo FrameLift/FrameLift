@@ -28,6 +28,7 @@ ScrollView {
             FLSettingRow {
                 title: "Colour preset"
                 description: "Base UI colour scheme."
+                keyName: "theme.preset"
                 FLComboBox {
                     model: ["dark", "light", "classic"]
                     currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("theme.preset"))))
@@ -37,6 +38,7 @@ ScrollView {
             FLSettingRow {
                 title: "Accent colour"
                 description: "Accent colour as #RRGGBB."
+                keyName: "theme.accentColor"
                 RowLayout {
                     spacing: 8
                     Rectangle {

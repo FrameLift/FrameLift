@@ -29,6 +29,7 @@ ScrollView {
             FLSettingRow {
                 title: "Default volume"
                 description: "Default playback volume (0-100)."
+                keyName: "audio.defaultVolume"
                 RowLayout {
                     spacing: 10
                     FLSlider {
@@ -48,6 +49,7 @@ ScrollView {
             FLSettingRow {
                 title: "Channel mode"
                 description: "How decoded audio is mapped to output channels."
+                keyName: "audio.channelMode"
                 FLComboBox {
                     model: ["Auto", "Mono", "Stereo", "Surround"]
                     currentIndex: (root.rev, root.vm.fieldValue("audio.channelMode"))
@@ -57,6 +59,7 @@ ScrollView {
             FLSettingRow {
                 title: "Output device"
                 description: "Preferred output device name; empty uses the system default."
+                keyName: "audio.outputDevice"
                 FLTextField {
                     implicitWidth: 220
                     text: (root.rev, root.vm.fieldValue("audio.outputDevice"))
@@ -67,6 +70,7 @@ ScrollView {
             FLSettingRow {
                 title: "Preferred language"
                 description: "Audio language to auto-select (ISO 639 code, e.g. eng)."
+                keyName: "audio.defaultLanguage"
                 FLTextField {
                     implicitWidth: 120
                     text: (root.rev, root.vm.fieldValue("audio.defaultLanguage"))
@@ -76,6 +80,7 @@ ScrollView {
             FLSettingRow {
                 title: "Sync offset (ms)"
                 description: "Positive delays audio relative to video."
+                keyName: "audio.syncOffsetMs"
                 FLSpinBox {
                     from: -5000; to: 5000; stepSize: 10
                     value: (root.rev, root.vm.fieldValue("audio.syncOffsetMs"))
@@ -90,6 +95,7 @@ ScrollView {
             FLSettingRow {
                 title: "Enable ducking"
                 description: "Reduce playback volume while app-owned transient audio is active."
+                keyName: "audio.duckingEnabled"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("audio.duckingEnabled"))
                     onToggled: root.vm.setFieldValue("audio.duckingEnabled", checked)
@@ -98,6 +104,7 @@ ScrollView {
             FLSettingRow {
                 title: "Ducked level"
                 description: "Playback gain while ducked, as percent of current volume."
+                keyName: "audio.duckingLevel"
                 RowLayout {
                     spacing: 10
                     FLSlider {
@@ -122,6 +129,7 @@ ScrollView {
             FLSettingRow {
                 title: "Enable by default"
                 description: "Enable dynamic audio normalization by default."
+                keyName: "audio.normalizeEnabled"
                 FLSwitch {
                     checked: (root.rev, root.vm.fieldValue("audio.normalizeEnabled"))
                     onToggled: root.vm.setFieldValue("audio.normalizeEnabled", checked)
@@ -130,6 +138,7 @@ ScrollView {
             FLSettingRow {
                 title: "Frame length (ms)"
                 description: "Filter frame length in milliseconds."
+                keyName: "audio.dynaudnormFrameLen"
                 FLSpinBox {
                     from: 10; to: 8000; stepSize: 10
                     value: (root.rev, root.vm.fieldValue("audio.dynaudnormFrameLen"))
@@ -139,6 +148,7 @@ ScrollView {
             FLSettingRow {
                 title: "Gaussian window"
                 description: "Gaussian filter window size (odd number)."
+                keyName: "audio.dynaudnormGaussSize"
                 FLSpinBox {
                     from: 3; to: 301; stepSize: 2
                     value: (root.rev, root.vm.fieldValue("audio.dynaudnormGaussSize"))
@@ -148,6 +158,7 @@ ScrollView {
             FLSettingRow {
                 title: "Target peak"
                 description: "Target peak magnitude (0.0-1.0)."
+                keyName: "audio.dynaudnormPeak"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.0; top: 1.0 }
@@ -158,6 +169,7 @@ ScrollView {
             FLSettingRow {
                 title: "Max gain"
                 description: "Maximum gain factor."
+                keyName: "audio.dynaudnormMaxGain"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 1.0 }
@@ -168,6 +180,7 @@ ScrollView {
             FLSettingRow {
                 title: "Target RMS"
                 description: "Target RMS volume factor."
+                keyName: "audio.dynaudnormVolume"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.0 }

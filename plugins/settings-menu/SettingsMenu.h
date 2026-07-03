@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class EditModel
@@ -84,6 +85,42 @@ private:
     SettingsMenu& owner_;
 };
 
+// View-model for the Advanced page: a raw editor over the on-disk settings.ini. The
+// draft `text` is seeded from the file on load(); save() writes it back and asks the
+// host to reload (ISettingsStore::ReloadSettings), so live settings and other pages'
+// drafts pick up the hand edits instead of being clobbered by the next Save.
+class SettingsAdvancedPageModel final : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(QString title READ Title CONSTANT)
+    Q_PROPERTY(QString filePath READ FilePath NOTIFY changed)
+    Q_PROPERTY(QString text READ Text NOTIFY changed)
+    Q_PROPERTY(bool dirty READ Dirty NOTIFY changed)
+
+public:
+    explicit SettingsAdvancedPageModel(SettingsMenu& owner);
+
+    [[nodiscard]] QString Title() const;
+    [[nodiscard]] QString FilePath() const;
+    [[nodiscard]] QString Text() const;
+    [[nodiscard]] bool Dirty() const;
+
+    // Re-read settings.ini into the draft and clear dirty. Named "load" so the
+    // owner's ReseedActivePage() hook refreshes it on open / navigation.
+    Q_INVOKABLE void load();
+    Q_INVOKABLE void setText(const QString& text);
+    Q_INVOKABLE void save();
+    Q_INVOKABLE void reset();
+
+Q_SIGNALS:
+    void changed();
+
+private:
+    SettingsMenu& owner_;
+    QString text_;
+    bool dirty_ = false;
+};
+
 // Dedicated view-model for the Keybinds page: core ("Application") keybinds plus one
 // group per plugin, each action with two capture slots. Delegates to SettingsMenu,
 // which owns the draft state and the conflict/apply logic.
@@ -156,6 +193,9 @@ public:
     Q_INVOKABLE void setPluginEnabled(const QString& pluginId, bool enabled);
     Q_INVOKABLE void saveActivePage();
     Q_INVOKABLE void resetActivePage();
+    // Reset only the active page's scope (its section's fields, or — for the Advanced
+    // and Plugins pages — that page's own reset semantics). Distinct from resetAllQml.
+    Q_INVOKABLE void resetActivePageOnly();
     Q_INVOKABLE void saveQml();
     Q_INVOKABLE void resetAllQml();
     Q_INVOKABLE void closeQml();
@@ -164,6 +204,13 @@ public:
     [[nodiscard]] int SettingInt(const std::string& key);
     [[nodiscard]] float SettingFloat(const std::string& key);
     [[nodiscard]] std::string SettingString(const std::string& key);
+
+    // ── Advanced (raw settings.ini) page support ─────────────────────────────────
+    // Absolute path of the on-disk settings.ini (empty if the store is unavailable).
+    [[nodiscard]] std::string SettingsFilePath() const;
+    // Re-read settings.ini from disk (after a raw edit) and re-seed all drafts so no
+    // page keeps a stale value that a later Save would write back.
+    void ReloadSettingsFromDisk();
 
     // Draft value for a key as a typed QVariant (type resolved from the registered
     // field). Returns an invalid QVariant for unknown keys.
@@ -222,6 +269,10 @@ private:
     void Save();
     void Reset();
     void RegisterBuiltInPages();
+    // Nav group for a page id: "core" (a built-in config section this module owns),
+    // "system" (its own management pages — Plugins, Advanced), or "plugin" (any other
+    // plugin's contributed page).
+    [[nodiscard]] const char* PageGroup(const std::string& id) const;
     [[nodiscard]] QVariantMap ActivePageRecord() const;
     void SetCapturing(bool v);
     [[nodiscard]] std::string FindKeyOwnerLabel(const std::string& canonicalKey, const char* exceptAction);
@@ -242,6 +293,12 @@ private:
     EditModel model_;
     std::string qmlActivePage_;
     std::vector<std::unique_ptr<QObject>> pageModels_;
+
+    // Page ids this module registers as built-in config sections (playback, audio, …).
+    // Drives the Core/Plugins/System grouping in the left nav: ids here are "core",
+    // the settings-menu's own management pages ("plugins", "advanced") are "system",
+    // and everything else (other plugins' pages) is "plugin".
+    std::unordered_set<std::string> corePageIds_;
 
     // Editable draft of one plugin-registered keybind. `draft` is seeded from the
     // plugin's live value on open and only written back (via setStr) on Save().

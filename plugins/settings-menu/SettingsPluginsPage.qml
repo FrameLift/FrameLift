@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import FrameLift.Controls
 
@@ -52,7 +51,7 @@ Item {
                     }
                 }
 
-                Switch {
+                FLSwitch {
                     checked: pluginDelegate.modelData.enabled
                     onToggled: {
                         if (root.viewModel !== null)

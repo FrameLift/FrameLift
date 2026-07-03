@@ -28,6 +28,7 @@ ScrollView {
             FLSettingRow {
                 title: "Panel width"
                 description: "Width in pixels of the side panels (playlist, etc.)."
+                keyName: "ui.panelWidth"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 120.0; top: 1200.0 }
@@ -38,6 +39,7 @@ ScrollView {
             FLSettingRow {
                 title: "Drawer slide speed"
                 description: "Side drawer slide-in/out animation speed."
+                keyName: "ui.slideSpeed"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 1.0; top: 100.0 }
