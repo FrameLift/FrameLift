@@ -12,7 +12,6 @@
 #include "QtTestRunner.h"
 
 #include <QtCore/QByteArray>
-#include <QtCore/qtenvironmentvariables.h>
 #include <QtTest/QtTest>
 #include <cstddef>
 #include <iterator>
@@ -42,18 +41,14 @@ std::size_t Count(const std::string& haystack, const std::string& needle)
 class EnvGuard
 {
 public:
-    EnvGuard(const char* name, const char* value) : name_(name), hadValue_(qEnvironmentVariableIsSet(name))
+    EnvGuard(const char* name, const char* value) : name_(name), oldValue_(qgetenv(name))
     {
-        if (hadValue_)
-        {
-            oldValue_ = qgetenv(name);
-        }
         qputenv(name, QByteArray(value));
     }
 
     ~EnvGuard()
     {
-        if (hadValue_)
+        if (!oldValue_.isNull())
         {
             qputenv(name_, oldValue_);
         }
@@ -68,7 +63,6 @@ public:
 
 private:
     const char* name_;
-    bool hadValue_ = false;
     QByteArray oldValue_;
 };
 } // namespace
