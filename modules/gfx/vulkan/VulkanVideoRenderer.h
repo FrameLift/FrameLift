@@ -17,9 +17,10 @@ typedef struct VmaAllocation_T* VmaAllocation;
 // the device/allocator/render-pass and the per-frame command buffer.
 //
 // A single persistent image per stream (video + overlay), like GlVideoRenderer, so the
-// last uploaded frame stays on screen across presents (paused / low-fps content). The
-// upload's blocking transfer barriers against prior fragment-shader reads on the
-// graphics queue, so overwriting the shared image is hazard-free.
+// last uploaded frame stays on screen across presents (paused / low-fps content).
+// Uploads record into the backend's per-frame frame-ops command buffer (no blocking
+// submit); the copy's barriers chain against prior frames' fragment-shader reads via
+// queue submission order, so overwriting the shared image is hazard-free.
 class VulkanVideoRenderer final : public IVideoRenderer
 {
 public:
@@ -49,6 +50,20 @@ private:
         bool valid = false;
     };
 
+    // Per-frame-slot staging arena: each Qt frame slot owns a growable, persistently
+    // mapped buffer that uploads bump-allocate from (video + overlay share it within a
+    // frame). CPU reuse is safe because Qt waits the slot's fence before the slot comes
+    // around again, which covers the frame-ops submit that read the buffer.
+    struct StagingSlot
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation alloc = nullptr;
+        void* mapped = nullptr;
+        VkDeviceSize size = 0;
+        VkDeviceSize used = 0;
+        uint64_t frame = 0; // backend FrameCounter() of last use; `used` resets on change
+    };
+
     bool BuildPipeline();
     // Shared blit-pipeline builder (fullscreen triangle, video.vert/.frag) against a
     // given descriptor-set layout; used for both the RGBA and YCbCr paths.
@@ -56,7 +71,10 @@ private:
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) const;
     bool EnsureTexture(Texture& t, int w, int h);
     void UploadTo(Texture& t, const uint8_t* rgba, int w, int h);
-    bool EnsureStaging(VkDeviceSize bytes);
+    // Make room for `bytes` more in the slot's arena, growing (old buffer retired — a
+    // recorded copy may still reference it) when needed; growth resets `used` because
+    // fresh space starts at offset 0 of the new buffer.
+    bool EnsureStagingSpace(StagingSlot& slot, VkDeviceSize bytes);
     void DestroyTexture(Texture& t);
 
     // ── Zero-copy YCbCr sampling (#18) ─────────────────────────────────────────
@@ -80,16 +98,16 @@ private:
     };
 
     const FrameTex* EnsureFrameTexture(uint64_t image);
-    // Drop all cached per-image views/sets (device-idle first: an in-flight frame may
-    // still sample them). Used when the decoder's frames pool is replaced and when the
-    // descriptor pool is exhausted.
+    // Drop all cached per-image views/sets (retired, not destroyed — an in-flight frame
+    // may still sample them). Used when the decoder's frames pool is replaced and when
+    // the descriptor pool is exhausted.
     void InvalidateFrameTextures();
-    // Record the frame image's transition (decode→sample layout, queue-ownership acquire)
-    // into its own command buffer and register it with the backend to run, in the single
-    // per-frame submit, just before the main render CB. Must run OUTSIDE the render pass,
-    // hence its own command buffer (Draw runs inside the pass). NOT submitted separately:
-    // a standalone submit here would stall the queue ahead of Qt Quick's scene-graph work.
-    VkCommandBuffer RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
+    // Record the frame image's transition (decode→sample layout, queue-ownership
+    // acquire) into the backend's per-frame frame-ops command buffer, which is submitted
+    // once — together with the accumulated timeline waits — just before Qt's scene-graph
+    // submit. It must run outside the render pass Draw records into, hence the separate
+    // command buffer; batching it there avoids a standalone submit stalling the queue.
+    bool RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
     // Returns true when it recorded the video draw (and thus set viewport/scissor);
     // false on any early-out, so Draw() knows the overlay must set its own.
     bool DrawVulkanFrame();
@@ -108,11 +126,7 @@ private:
     Texture video_{};
     Texture overlay_{};
 
-    // Growable host-visible staging buffer (uploads are serialized by ImmediateSubmit).
-    VkBuffer staging_ = VK_NULL_HANDLE;
-    VmaAllocation stagingAlloc_ = nullptr;
-    void* stagingMapped_ = nullptr;
-    VkDeviceSize stagingSize_ = 0;
+    std::array<StagingSlot, VulkanGraphicsBackend::kMaxFramesInFlight> staging_{};
 
     // ── Zero-copy YCbCr state (#18) ────────────────────────────────────────────
     // The AVFrame* (void*) handed in by UploadVulkanFrame, sampled in Draw. Non-null ⇒
@@ -138,9 +152,4 @@ private:
     // view + descriptor set per pooled decode image (bounded; the decoder reuses a small
     // set of images). Cleared on format change / shutdown — never re-pointed in flight.
     std::unordered_map<uint64_t, FrameTex> frameTextures_;
-
-    // Standalone transition command buffers (one per frame-in-flight), submitted before
-    // the main render submit to move the decode image into a sampleable layout.
-    VkCommandPool transitionPool_ = VK_NULL_HANDLE;
-    std::array<VkCommandBuffer, VulkanGraphicsBackend::kMaxFramesInFlight> transitionCmds_{};
 };

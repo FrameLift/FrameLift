@@ -15,6 +15,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -130,7 +131,19 @@ public:
         return queueLock_;
     }
 
-    bool SubmitFrameTransition(VkCommandBuffer cmd, VkSemaphore waitSemaphore, uint64_t waitValue);
+    // ── Per-frame batched GPU work ("frame ops") ────────────────────────────────
+    // One command buffer per Qt frame slot collects everything that must execute
+    // before Qt's scene-graph submit this frame: staging copies and zero-copy
+    // layout/ownership transitions. Timeline waits accumulate alongside and the whole
+    // batch goes out as a single vkQueueSubmit2 at afterRenderPassRecording — ahead of
+    // Qt's own submit in queue submission order, which is what lets the recorded
+    // barriers' src scopes reach prior frames' work and Qt's per-slot fence cover ours.
+    // CPU reuse of a slot's command buffer is safe for the same reason the retire queue
+    // is: Qt waits the slot fence before reusing the slot.
+    VkCommandBuffer FrameOpsCmd();
+    void AddFrameOpsWait(VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags2 stageMask);
+    bool FlushFrameOps();
+
     void QueueFrameSignal(VkSemaphore semaphore, uint64_t value);
 
     // Last-resort delivery of queued-but-unsubmitted frame signals: waits for the device
@@ -143,7 +156,12 @@ public:
     // releasing its frame refs) and from Shutdown().
     void HostSignalPendingFrameSignals();
 
-    bool ImmediateSubmit(void (*record)(VkCommandBuffer cmd, void* ud), void* ud);
+    // Frame counter driving the retire queue; also used by per-slot staging arenas to
+    // detect their first use in a new frame.
+    [[nodiscard]] uint64_t FrameCounter() const
+    {
+        return retireQueue_.CurrentFrame();
+    }
 
     // Deferred destruction for objects frames in flight may still reference; collected
     // once per prepared frame (PrepareQtFrame), drained on idle teardown paths. Replaces
@@ -196,9 +214,10 @@ private:
     VulkanQueueLock queueLock_;
     VulkanRetireQueue retireQueue_;
 
-    VkCommandPool immediatePool_ = VK_NULL_HANDLE;
-    VkCommandBuffer immediateCmd_ = VK_NULL_HANDLE;
-    VkFence immediateFence_ = VK_NULL_HANDLE;
+    VkCommandPool frameOpsPool_ = VK_NULL_HANDLE;
+    std::array<VkCommandBuffer, kMaxFramesInFlight> frameOpsCmds_{};
+    VkCommandBuffer frameOpsActiveCmd_ = VK_NULL_HANDLE; // recording this frame; null between flushes
+    std::vector<VkSemaphoreSubmitInfo> frameOpsWaits_;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;    // Qt-owned, current frame
     VkCommandBuffer currentCmd_ = VK_NULL_HANDLE; // Qt-owned, current frame

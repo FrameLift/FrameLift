@@ -8,6 +8,7 @@
 
 #include <framelift/Log.h>
 
+#include <algorithm>
 #include <cstring>
 
 // Embedded SPIR-V (generated at build time by cmake/FrameLiftShaders.cmake).
@@ -38,15 +39,14 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     backend_->DrainRetired();
 
     DestroyYcbcr();
-    if (transitionPool_ != VK_NULL_HANDLE)
-    {
-        vkDestroyCommandPool(device_, transitionPool_, nullptr);
-    }
     DestroyTexture(video_);
     DestroyTexture(overlay_);
-    if (staging_ != VK_NULL_HANDLE)
+    for (StagingSlot& slot : staging_)
     {
-        vmaDestroyBuffer(allocator_, staging_, stagingAlloc_);
+        if (slot.buffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator_, slot.buffer, slot.alloc);
+        }
     }
     if (pipeline_ != VK_NULL_HANDLE)
     {
@@ -79,20 +79,6 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
     device_ = backend_->Device();
     physicalDevice_ = backend_->PhysicalDevice();
     allocator_ = backend_->Allocator();
-
-    // Transient command buffers for the zero-copy frame layout/ownership transitions
-    // (#18), which must run outside the swapchain render pass that Draw records into.
-    VkCommandPoolCreateInfo tp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    tp.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    tp.queueFamilyIndex = backend_->GraphicsQueueFamily();
-    if (vkCreateCommandPool(device_, &tp, nullptr, &transitionPool_) == VK_SUCCESS)
-    {
-        VkCommandBufferAllocateInfo ci{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        ci.commandPool = transitionPool_;
-        ci.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ci.commandBufferCount = static_cast<uint32_t>(transitionCmds_.size());
-        vkAllocateCommandBuffers(device_, &ci, transitionCmds_.data());
-    }
 
     // Sampler: linear, clamp-to-edge (matches GlVideoRenderer).
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -362,50 +348,55 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
     return true;
 }
 
-bool VulkanVideoRenderer::EnsureStaging(VkDeviceSize bytes)
+bool VulkanVideoRenderer::EnsureStagingSpace(StagingSlot& slot, VkDeviceSize bytes)
 {
-    if (staging_ != VK_NULL_HANDLE && stagingSize_ >= bytes)
+    if (slot.buffer != VK_NULL_HANDLE && slot.used + bytes <= slot.size)
     {
         return true;
     }
-    if (staging_ != VK_NULL_HANDLE)
+    if (slot.buffer != VK_NULL_HANDLE)
     {
-        // A copy from the old buffer may still be in flight; grow by retiring it.
+        // Copies recorded this frame still reference the old buffer; retire, don't destroy.
         backend_->Retire(
-            [allocator = allocator_, buffer = staging_, alloc = stagingAlloc_]
+            [allocator = allocator_, buffer = slot.buffer, alloc = slot.alloc]
             {
                 vmaDestroyBuffer(allocator, buffer, alloc);
             }
         );
-        staging_ = VK_NULL_HANDLE;
-        stagingAlloc_ = nullptr;
-        stagingMapped_ = nullptr;
+        slot.buffer = VK_NULL_HANDLE;
+        slot.alloc = nullptr;
+        slot.mapped = nullptr;
     }
 
+    constexpr VkDeviceSize kMinStaging = 4ull << 20;
+    const VkDeviceSize newSize = std::max({bytes, slot.size * 2, kMinStaging});
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size = bytes;
+    bi.size = newSize;
     bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO;
     aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     VmaAllocationInfo info{};
-    if (vmaCreateBuffer(allocator_, &bi, &aci, &staging_, &stagingAlloc_, &info) != VK_SUCCESS)
+    if (vmaCreateBuffer(allocator_, &bi, &aci, &slot.buffer, &slot.alloc, &info) != VK_SUCCESS)
     {
-        Log::Error("VulkanVideoRenderer: staging buffer allocation failed");
+        Log::Error("VulkanVideoRenderer: staging buffer allocation failed ({} bytes)", newSize);
         return false;
     }
-    stagingMapped_ = info.pMappedData;
-    stagingSize_ = bytes;
-    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_BUFFER, staging_, "FrameLift upload staging buffer");
+    slot.mapped = info.pMappedData;
+    slot.size = newSize;
+    slot.used = 0; // fresh buffer: bump allocation restarts at offset 0
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_BUFFER, slot.buffer, "FrameLift staging arena");
     return true;
 }
 
 namespace
 {
-// Records the staging->image copy for ImmediateSubmit (transition, copy, transition).
+// Records the staging->image copy into the frame-ops command buffer
+// (transition, copy, transition).
 struct CopyJob
 {
     VkBuffer staging;
+    VkDeviceSize stagingOffset;
     VkImage image;
     VkImageLayout oldLayout;
     uint32_t w, h;
@@ -437,6 +428,7 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
     vkCmdPipelineBarrier2(cmd, &depToDst);
 
     VkBufferImageCopy region{};
+    region.bufferOffset = j.stagingOffset;
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {j.w, j.h, 1};
     vkCmdCopyBufferToImage(cmd, j.staging, j.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -469,18 +461,35 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h
     {
         return;
     }
+
+    StagingSlot& slot = staging_[backend_->CurrentFrameIndex() % staging_.size()];
+    if (slot.frame != backend_->FrameCounter())
+    {
+        slot.frame = backend_->FrameCounter();
+        slot.used = 0; // new frame: the slot's previous contents are provably consumed
+    }
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-    if (!EnsureStaging(bytes) || !stagingMapped_)
+    if (!EnsureStagingSpace(slot, bytes) || !slot.mapped)
     {
         return;
     }
-    std::memcpy(stagingMapped_, rgba, static_cast<size_t>(bytes));
+
+    VkCommandBuffer cmd = backend_->FrameOpsCmd();
+    if (cmd == VK_NULL_HANDLE)
+    {
+        return;
+    }
+
+    const VkDeviceSize offset = slot.used;
+    std::memcpy(static_cast<uint8_t*>(slot.mapped) + offset, rgba, static_cast<size_t>(bytes));
     // VMA_MEMORY_USAGE_AUTO does not guarantee a HOST_COHERENT heap; flush so the GPU
     // copy sees the bytes just written (no-op when the memory is coherent).
-    vmaFlushAllocation(allocator_, stagingAlloc_, 0, bytes);
+    vmaFlushAllocation(allocator_, slot.alloc, offset, bytes);
+    // Keep bufferOffset texel-aligned for the next upload in this frame.
+    slot.used = (offset + bytes + 15) & ~VkDeviceSize{15};
 
-    CopyJob job{staging_, t.image, t.layout, static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
-    backend_->ImmediateSubmit(RecordCopy, &job);
+    CopyJob job{slot.buffer, offset, t.image, t.layout, static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+    RecordCopy(cmd, &job);
     t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
@@ -841,19 +850,13 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
     return &res.first->second;
 }
 
-VkCommandBuffer VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily)
+bool VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily)
 {
-    const uint32_t slot = backend_->CurrentFrameIndex() % static_cast<uint32_t>(transitionCmds_.size());
-    VkCommandBuffer cmd = transitionCmds_[slot];
+    VkCommandBuffer cmd = backend_->FrameOpsCmd();
     if (cmd == VK_NULL_HANDLE)
     {
-        return VK_NULL_HANDLE;
+        return false;
     }
-    vkResetCommandBuffer(cmd, 0);
-
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &begin);
 
     const uint32_t gfxFamily = backend_->GraphicsQueueFamily();
     const bool ownershipXfer = srcQueueFamily != VK_QUEUE_FAMILY_IGNORED && srcQueueFamily != gfxFamily;
@@ -877,8 +880,7 @@ VkCommandBuffer VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int o
     dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(cmd, &dep);
-    vkEndCommandBuffer(cmd);
-    return cmd;
+    return true;
 }
 
 bool VulkanVideoRenderer::DrawVulkanFrame()
@@ -922,14 +924,15 @@ bool VulkanVideoRenderer::DrawVulkanFrame()
     const auto frameSem = reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(info.semaphore));
     if (!alreadyPrepared)
     {
-        // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into a
-        //    pre-cmd that runs first in the single per-frame submit, outside the render pass.
-        const VkCommandBuffer transition = RecordFrameTransition(info.image, info.layout, info.queueFamily);
-        if (!backend_->SubmitFrameTransition(transition, frameSem, info.semValue))
+        // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into
+        //    the frame-ops command buffer (runs before Qt's scene-graph submit) and queue
+        //    the decode semaphore as a wait on that same batched submit.
+        if (!RecordFrameTransition(info.image, info.layout, info.queueFamily))
         {
-            Log::Error("VulkanVideoRenderer: zero-copy transition submit failed");
+            Log::Error("VulkanVideoRenderer: zero-copy transition record failed");
             return false;
         }
+        backend_->AddFrameOpsWait(frameSem, info.semValue, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
     }
 
     // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed.

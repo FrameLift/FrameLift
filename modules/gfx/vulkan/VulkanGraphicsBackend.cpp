@@ -257,11 +257,30 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
             physicalDevice_, device_, static_cast<int>(graphicsQueueFamily_), static_cast<int>(qtGraphicsQueueIndex_)
         )
     );
+    // Frame-ops must be submitted after all recording (uploads in prepare, zero-copy
+    // transitions in render) but before Qt submits its scene-graph command buffer;
+    // afterRenderPassRecording is exactly that point. No-op on frames without ops.
     QObject::connect(
-        window, &QQuickWindow::afterFrameEnd, window,
+        window, &QQuickWindow::afterRenderPassRecording, window,
         [this]
         {
+            FlushFrameOps();
+        },
+        Qt::DirectConnection
+    );
+    // afterFrameEnd fires exactly once per rendered frame, making it the only safe
+    // place to advance the retire counter (PrepareQtFrame runs twice per frame — node
+    // prepare and render — and double ticks would halve the retire safety margin).
+    QObject::connect(
+        window, &QQuickWindow::afterFrameEnd, window,
+        [this, window]
+        {
             FlushFrameSignals();
+            const int reported = window->graphicsStateInfo().framesInFlight;
+            const uint32_t framesInFlight = reported >= 1 && reported <= static_cast<int>(kMaxFramesInFlight)
+                                                ? static_cast<uint32_t>(reported)
+                                                : kMaxFramesInFlight;
+            retireQueue_.BeginFrame(framesInFlight);
         },
         Qt::DirectConnection
     );
@@ -498,26 +517,23 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = graphicsQueueFamily_;
-    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &immediatePool_) != VK_SUCCESS)
+    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &frameOpsPool_) != VK_SUCCESS)
     {
-        throw std::runtime_error("Vulkan upload command pool creation failed");
+        throw std::runtime_error("Vulkan frame-ops command pool creation failed");
     }
     VkCommandBufferAllocateInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    commandInfo.commandPool = immediatePool_;
+    commandInfo.commandPool = frameOpsPool_;
     commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    commandInfo.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(device_, &commandInfo, &immediateCmd_) != VK_SUCCESS)
+    commandInfo.commandBufferCount = static_cast<uint32_t>(frameOpsCmds_.size());
+    if (vkAllocateCommandBuffers(device_, &commandInfo, frameOpsCmds_.data()) != VK_SUCCESS)
     {
-        throw std::runtime_error("Vulkan upload command buffer allocation failed");
+        throw std::runtime_error("Vulkan frame-ops command buffer allocation failed");
     }
-    VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    if (vkCreateFence(device_, &fenceInfo, nullptr, &immediateFence_) != VK_SUCCESS)
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_POOL, frameOpsPool_, "FrameLift frame-ops pool");
+    for (VkCommandBuffer cmd : frameOpsCmds_)
     {
-        throw std::runtime_error("Vulkan upload fence creation failed");
+        VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, cmd, "FrameLift frame-ops cmd");
     }
-    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_POOL, immediatePool_, "FrameLift immediate-upload pool");
-    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, immediateCmd_, "FrameLift immediate-upload cmd");
-    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_FENCE, immediateFence_, "FrameLift immediate-upload fence");
 
     Log::Debug(
         "Vulkan: {} (device API {}, negotiated {}; zero-copy prerequisites {}, video decode queue {})",
@@ -604,14 +620,7 @@ void VulkanGraphicsBackend::RefreshQtResources(QQuickWindow* window)
         static_cast<uint32_t>(std::max(0, pixelSize.width())),
         static_cast<uint32_t>(std::max(0, pixelSize.height())),
     };
-    const QQuickWindow::GraphicsStateInfo& state = window->graphicsStateInfo();
-    currentFrameSlot_ = static_cast<uint32_t>(std::max(0, state.currentFrameSlot));
-    // Tick deferred destruction once per prepared frame. Clamp a missing/absurd
-    // framesInFlight to the conservative maximum: over-waiting is always safe.
-    const uint32_t framesInFlight = state.framesInFlight >= 1 && state.framesInFlight <= static_cast<int>(kMaxFramesInFlight)
-                                        ? static_cast<uint32_t>(state.framesInFlight)
-                                        : kMaxFramesInFlight;
-    retireQueue_.BeginFrame(framesInFlight);
+    currentFrameSlot_ = static_cast<uint32_t>(std::max(0, window->graphicsStateInfo().currentFrameSlot));
 }
 
 std::unique_ptr<IVideoRenderer> VulkanGraphicsBackend::CreateVideoRenderer()
@@ -644,32 +653,74 @@ bool VulkanGraphicsBackend::GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noe
     return device_ != VK_NULL_HANDLE;
 }
 
-bool VulkanGraphicsBackend::SubmitFrameTransition(VkCommandBuffer cmd, VkSemaphore waitSemaphore, uint64_t waitValue)
+VkCommandBuffer VulkanGraphicsBackend::FrameOpsCmd()
 {
-    if (cmd == VK_NULL_HANDLE || waitSemaphore == VK_NULL_HANDLE)
+    if (device_ == VK_NULL_HANDLE)
     {
-        return false;
+        return VK_NULL_HANDLE;
     }
+    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+    {
+        VkCommandBuffer cmd = frameOpsCmds_[currentFrameSlot_ % frameOpsCmds_.size()];
+        if (cmd == VK_NULL_HANDLE)
+        {
+            return VK_NULL_HANDLE;
+        }
+        // Safe to reset: Qt waited this slot's fence before beginning the frame, which
+        // covers our earlier same-queue submit that used this buffer.
+        vkResetCommandBuffer(cmd, 0);
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VK_CHECK_LOG_RETURN(vkBeginCommandBuffer(cmd, &begin), "Vulkan: frame-ops begin failed", VK_NULL_HANDLE);
+        frameOpsActiveCmd_ = cmd;
+    }
+    return frameOpsActiveCmd_;
+}
 
-    // Wait at FRAGMENT_SHADER, not TOP_OF_PIPE: the transition barrier chains off that
-    // stage, and later submits' earlier pipeline stages stay free to run while the
-    // decode semaphore is still pending.
+void VulkanGraphicsBackend::AddFrameOpsWait(VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags2 stageMask)
+{
+    if (semaphore == VK_NULL_HANDLE)
+    {
+        return;
+    }
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    wait.semaphore = waitSemaphore;
-    wait.value = waitValue;
-    wait.stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    wait.semaphore = semaphore;
+    wait.value = value;
+    wait.stageMask = stageMask;
+    frameOpsWaits_.push_back(wait);
+}
+
+bool VulkanGraphicsBackend::FlushFrameOps()
+{
+    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+    {
+        return true; // nothing recorded this frame
+    }
+    VkCommandBuffer cmd = frameOpsActiveCmd_;
+    frameOpsActiveCmd_ = VK_NULL_HANDLE;
+    VK_CHECK_LOG(vkEndCommandBuffer(cmd), "Vulkan: frame-ops end failed");
 
     VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
     cmdInfo.commandBuffer = cmd;
 
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.waitSemaphoreInfoCount = 1;
-    submit.pWaitSemaphoreInfos = &wait;
+    submit.waitSemaphoreInfoCount = static_cast<uint32_t>(frameOpsWaits_.size());
+    submit.pWaitSemaphoreInfos = frameOpsWaits_.empty() ? nullptr : frameOpsWaits_.data();
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cmdInfo;
 
-    VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    return vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS;
+    VkResult result = VK_SUCCESS;
+    {
+        VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
+        result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    }
+    frameOpsWaits_.clear();
+    if (result != VK_SUCCESS)
+    {
+        Log::Error("Vulkan: frame-ops submit failed ({})", static_cast<int>(result));
+        return false;
+    }
+    return true;
 }
 
 void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t value)
@@ -730,38 +781,6 @@ void VulkanGraphicsBackend::FlushFrameSignals()
     pendingFrameSignals_.clear();
 }
 
-bool VulkanGraphicsBackend::ImmediateSubmit(void (*record)(VkCommandBuffer, void*), void* ud)
-{
-    if (!record || immediateCmd_ == VK_NULL_HANDLE)
-    {
-        return false;
-    }
-    vkResetFences(device_, 1, &immediateFence_);
-    vkResetCommandBuffer(immediateCmd_, 0);
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkBeginCommandBuffer(immediateCmd_, &begin) != VK_SUCCESS)
-    {
-        return false;
-    }
-    record(immediateCmd_, ud);
-    if (vkEndCommandBuffer(immediateCmd_) != VK_SUCCESS)
-    {
-        return false;
-    }
-    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmdInfo.commandBuffer = immediateCmd_;
-    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.commandBufferInfoCount = 1;
-    submit.pCommandBufferInfos = &cmdInfo;
-    VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    if (vkQueueSubmit2(graphicsQueue_, 1, &submit, immediateFence_) != VK_SUCCESS)
-    {
-        return false;
-    }
-    return vkWaitForFences(device_, 1, &immediateFence_, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
-}
-
 void VulkanGraphicsBackend::DestroyDevice()
 {
     if (device_ != VK_NULL_HANDLE)
@@ -769,17 +788,14 @@ void VulkanGraphicsBackend::DestroyDevice()
         vkDeviceWaitIdle(device_);
     }
     retireQueue_.Drain(); // device idle; free retired objects before their pools/allocator go
-    if (immediateFence_ != VK_NULL_HANDLE)
+    if (frameOpsPool_ != VK_NULL_HANDLE)
     {
-        vkDestroyFence(device_, immediateFence_, nullptr);
-        immediateFence_ = VK_NULL_HANDLE;
+        vkDestroyCommandPool(device_, frameOpsPool_, nullptr);
+        frameOpsPool_ = VK_NULL_HANDLE;
+        frameOpsCmds_.fill(VK_NULL_HANDLE);
+        frameOpsActiveCmd_ = VK_NULL_HANDLE;
     }
-    if (immediatePool_ != VK_NULL_HANDLE)
-    {
-        vkDestroyCommandPool(device_, immediatePool_, nullptr);
-        immediatePool_ = VK_NULL_HANDLE;
-        immediateCmd_ = VK_NULL_HANDLE;
-    }
+    frameOpsWaits_.clear();
     if (allocator_)
     {
         vmaDestroyAllocator(allocator_);
