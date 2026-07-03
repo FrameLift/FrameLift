@@ -21,8 +21,7 @@ Closes #___. / Part of #___. <!-- one-line summary of the change -->
 ## Build
 
 <!-- Dependency / build / toolchain impacts, if any.
-ABI: note the `FRAMELIFT_ABI_VERSION` bump if the plugin boundary changed,
-else state "No ABI change". -->
+ABI: note the `FRAMELIFT_ABI_VERSION` bump if the plugin boundary changed. -->
 
 ## Testing
 
