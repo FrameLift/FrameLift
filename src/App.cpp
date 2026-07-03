@@ -7,6 +7,7 @@
 #include "IGraphicsBackend.h"
 #include "LogBuffer.h"
 #include "QtAppWindow.h"
+#include "TestMediaGenerator.h"
 #if FRAMELIFT_MODULE_WIN_SHELL
 #include "WinShell.h"
 #endif
@@ -634,7 +635,18 @@ int App::Run()
     // open the first positional file/URL argument — the same request drag-drop and
     // the Open-File dialog publish, so Playlist/RemoteStream route it by scheme.
     moduleCtx_->Publish<CliCommandEvent>({cliArgc_, cliArgv_});
-    if (const std::string target = ParseOpenTarget(cliArgc_, cliArgv_); !target.empty())
+    if (const QString testSpec = qEnvironmentVariable("FL_TEST_FILE"); !testSpec.isEmpty())
+    {
+        // FL_TEST_FILE wins over the positional argument, even on failure: the
+        // cause is already logged, and starting with no file is less surprising
+        // than silently opening something other than the requested test clip.
+        if (const QString path = TestMediaGenerator::EnsureTestMedia(testSpec); !path.isEmpty())
+        {
+            const std::string p = path.toStdString();
+            moduleCtx_->Publish<OpenFileRequestEvent>({p.c_str(), true});
+        }
+    }
+    else if (const std::string target = ParseOpenTarget(cliArgc_, cliArgv_); !target.empty())
     {
         moduleCtx_->Publish<OpenFileRequestEvent>({target.c_str(), true});
     }
