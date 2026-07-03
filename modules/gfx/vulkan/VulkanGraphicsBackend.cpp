@@ -1,5 +1,8 @@
 #include "VulkanGraphicsBackend.h"
 
+#include "VulkanCapabilityPlan.h"
+#include "VulkanDeviceSelect.h"
+#include "VulkanUtil.h"
 #include "VulkanVideoRenderer.h"
 
 #define VMA_IMPLEMENTATION
@@ -8,6 +11,10 @@
 #include <vk_mem_alloc.h>
 
 #include <QtCore/QByteArray>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QLibraryInfo>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QVersionNumber>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QSurface>
@@ -21,6 +28,7 @@
 #include <framelift/Log.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_set>
@@ -55,6 +63,44 @@ std::string VersionString(uint32_t version)
 void ThrowVk(const char* message, VkResult result)
 {
     throw std::runtime_error(std::string(message) + " (VkResult " + std::to_string(result) + ")");
+}
+
+// Validation is on by default in debug builds; FRAMELIFT_VULKAN_VALIDATION=1/0 overrides
+// either way (e.g. to debug a release build, or to silence a debug build). Synchronization
+// validation is enabled externally through the layer's own settings
+// (VK_LAYER_KHRONOS_validation with khronos_validation.validate_sync, or vkconfig).
+bool ValidationRequested()
+{
+    if (const char* env = std::getenv("FRAMELIFT_VULKAN_VALIDATION"); env && *env != '\0')
+    {
+        return *env == '1';
+    }
+#ifndef NDEBUG
+    return true;
+#else
+    return false;
+#endif
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*types*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* /*userData*/
+)
+{
+    const char* message = data && data->pMessage ? data->pMessage : "(no message)";
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    {
+        Log::Error("Vulkan validation: {}", message);
+    }
+    else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+    {
+        Log::Warn("Vulkan validation: {}", message);
+    }
+    else
+    {
+        Log::Debug("Vulkan validation: {}", message);
+    }
+    return VK_FALSE;
 }
 } // namespace
 
@@ -96,7 +142,14 @@ void VulkanGraphicsBackend::CreateInstance()
     {
         throw std::runtime_error("Vulkan 1.3 loader support is required");
     }
-    instanceApiVersion_ = std::min(loaderVersion, VK_API_VERSION_1_4);
+    // Qt's RHI creates its own VMA allocator for the adopted device using this instance
+    // API version, and the VMA bundled before Qt 6.10 hard-asserts on anything newer
+    // than 1.3 (VMA accepted 1.4 upstream only in 3.2.1). Cap at 1.3 on older Qt — the
+    // device negotiation below then routes 1.4-preferred capabilities through their 1.3
+    // extension fallbacks (VK_EXT_host_image_copy, VK_KHR_push_descriptor).
+    const uint32_t qtApiCap =
+        QLibraryInfo::version() >= QVersionNumber(6, 10, 0) ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3;
+    instanceApiVersion_ = std::min(loaderVersion, qtApiCap);
 
     const QByteArrayList preferredExtensions = QQuickGraphicsConfiguration::preferredInstanceExtensions();
     instanceExtNames_.reserve(static_cast<std::size_t>(preferredExtensions.size()) + 2);
@@ -121,6 +174,26 @@ void VulkanGraphicsBackend::CreateInstance()
     }
 
     qtInstance_ = std::make_unique<QVulkanInstance>();
+
+    bool debugUtils = false;
+    if (ValidationRequested())
+    {
+        if (qtInstance_->supportedLayers().contains(QByteArrayLiteral("VK_LAYER_KHRONOS_validation")))
+        {
+            qtInstance_->setLayers({QByteArrayLiteral("VK_LAYER_KHRONOS_validation")});
+            validationActive_ = true;
+        }
+        else
+        {
+            Log::Warn("Vulkan: validation requested but VK_LAYER_KHRONOS_validation is not installed");
+        }
+        if (qtInstance_->supportedExtensions().contains(QByteArrayLiteral(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)))
+        {
+            AddUniqueExtension(instanceExtNames_, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            debugUtils = true;
+        }
+    }
+
     QByteArrayList qtExtensions;
     qtExtensions.reserve(static_cast<qsizetype>(instanceExtNames_.size()));
     for (const std::string& extension : instanceExtNames_)
@@ -136,7 +209,37 @@ void VulkanGraphicsBackend::CreateInstance()
         ThrowVk("Qt Vulkan instance creation failed", qtInstance_->errorCode());
     }
     instance_ = qtInstance_->vkInstance();
-    Log::Debug("Vulkan: loader {}, instance API {}", VersionString(loaderVersion), VersionString(instanceApiVersion_));
+
+    if (debugUtils)
+    {
+        SetupDebugUtils();
+    }
+    Log::Debug(
+        "Vulkan: loader {}, instance API {}{}", VersionString(loaderVersion), VersionString(instanceApiVersion_),
+        validationActive_ ? ", validation on" : ""
+    );
+}
+
+void VulkanGraphicsBackend::SetupDebugUtils()
+{
+    VulkanUtil::g_setObjectNameFn =
+        reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(instance_, "vkSetDebugUtilsObjectNameEXT"));
+    destroyDebugMessengerFn_ = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT")
+    );
+    const auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT")
+    );
+    if (!createMessenger || !destroyDebugMessengerFn_)
+    {
+        return;
+    }
+    VkDebugUtilsMessengerCreateInfoEXT ci{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    ci.messageSeverity =
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    ci.pfnUserCallback = DebugUtilsCallback;
+    VK_CHECK_LOG(createMessenger(instance_, &ci, nullptr, &debugMessenger_), "Vulkan: debug messenger creation failed");
 }
 
 void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
@@ -167,11 +270,30 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
             physicalDevice_, device_, static_cast<int>(graphicsQueueFamily_), static_cast<int>(qtGraphicsQueueIndex_)
         )
     );
+    // Frame-ops must be submitted after all recording (uploads in prepare, zero-copy
+    // transitions in render) but before Qt submits its scene-graph command buffer;
+    // afterRenderPassRecording is exactly that point. No-op on frames without ops.
     QObject::connect(
-        window, &QQuickWindow::afterFrameEnd, window,
+        window, &QQuickWindow::afterRenderPassRecording, window,
         [this]
         {
+            FlushFrameOps();
+        },
+        Qt::DirectConnection
+    );
+    // afterFrameEnd fires exactly once per rendered frame, making it the only safe
+    // place to advance the retire counter (PrepareQtFrame runs twice per frame — node
+    // prepare and render — and double ticks would halve the retire safety margin).
+    QObject::connect(
+        window, &QQuickWindow::afterFrameEnd, window,
+        [this, window]
+        {
             FlushFrameSignals();
+            const int reported = window->graphicsStateInfo().framesInFlight;
+            const uint32_t framesInFlight = reported >= 1 && reported <= static_cast<int>(kMaxFramesInFlight)
+                                                ? static_cast<uint32_t>(reported)
+                                                : kMaxFramesInFlight;
+            retireQueue_.BeginFrame(framesInFlight);
         },
         Qt::DirectConnection
     );
@@ -181,39 +303,50 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
 void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
 {
     uint32_t physicalCount = 0;
-    vkEnumeratePhysicalDevices(instance_, &physicalCount, nullptr);
+    VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &physicalCount, nullptr), "Vulkan device enumeration failed");
     if (physicalCount == 0)
     {
         throw std::runtime_error("No Vulkan physical devices were found");
     }
     std::vector<VkPhysicalDevice> devices(physicalCount);
-    vkEnumeratePhysicalDevices(instance_, &physicalCount, devices.data());
+    VK_CHECK_THROW(vkEnumeratePhysicalDevices(instance_, &physicalCount, devices.data()), "Vulkan device enumeration failed");
 
-    VkPhysicalDevice chosen = VK_NULL_HANDLE;
-    uint32_t chosenGraphics = 0;
-    bool chosenDiscrete = false;
-    bool chosenVideoCapable = false;
-    std::vector<VkQueueFamilyProperties> chosenQueues;
-    std::vector<VkExtensionProperties> chosenExtensions;
-
-    for (VkPhysicalDevice candidate : devices)
+    // Gather the Vulkan-side facts per device, then let the pure selection policy
+    // (VulkanDeviceSelect, unit-tested) pick the winner.
+    static_assert(VulkanDeviceSelect::kMinApiVersion == VK_API_VERSION_1_3);
+    struct CandidateData
     {
+        uint32_t graphicsFamily = 0;
+        std::vector<VkQueueFamilyProperties> queues;
+        std::vector<VkExtensionProperties> extensions;
+    };
+    std::vector<VulkanDeviceSelect::Candidate> candidates(devices.size());
+    std::vector<CandidateData> candidateData(devices.size());
+
+    for (std::size_t d = 0; d < devices.size(); ++d)
+    {
+        VkPhysicalDevice candidate = devices[d];
+        VulkanDeviceSelect::Candidate& facts = candidates[d];
+        CandidateData& data = candidateData[d];
+
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(candidate, &properties);
+        facts.apiVersion = properties.apiVersion;
+        facts.discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
         if (properties.apiVersion < VK_API_VERSION_1_3)
         {
-            continue;
+            continue; // remaining queries can't make it eligible
         }
 
         uint32_t queueCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, nullptr);
-        std::vector<VkQueueFamilyProperties> queues(queueCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, queues.data());
+        data.queues.resize(queueCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, data.queues.data());
 
         int graphicsFamily = -1;
         for (uint32_t i = 0; i < queueCount; ++i)
         {
-            if ((queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+            if ((data.queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
                 qtInstance_->supportsPresent(candidate, i, presentProbe))
             {
                 graphicsFamily = static_cast<int>(i);
@@ -224,12 +357,15 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         {
             continue;
         }
+        facts.hasGraphicsPresentQueue = true;
+        data.graphicsFamily = static_cast<uint32_t>(graphicsFamily);
 
         uint32_t extensionCount = 0;
         vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, nullptr);
-        std::vector<VkExtensionProperties> extensions(extensionCount);
-        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, extensions.data());
-        if (!HasExtension(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        data.extensions.resize(extensionCount);
+        vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, data.extensions.data());
+        facts.hasSwapchainExtension = HasExtension(data.extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        if (!facts.hasSwapchainExtension)
         {
             continue;
         }
@@ -244,48 +380,46 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         vkGetPhysicalDeviceFeatures2(candidate, &candidateF2);
 
         const bool hasDecodeQueue = std::ranges::any_of(
-            queues,
+            data.queues,
             [](const VkQueueFamilyProperties& queue)
             {
                 return (queue.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
             }
         );
-        const bool candidateVideoCapable = HasExtension(extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
-                                           HasExtension(extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
-                                           hasDecodeQueue && candidateF11.samplerYcbcrConversion &&
-                                           candidateF12.timelineSemaphore && candidateF13.synchronization2 &&
-                                           queues[static_cast<uint32_t>(graphicsFamily)].queueCount >= 2;
-        const bool discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-        if (!chosen || (candidateVideoCapable && !chosenVideoCapable) ||
-            (candidateVideoCapable == chosenVideoCapable && discrete && !chosenDiscrete))
-        {
-            chosen = candidate;
-            chosenGraphics = static_cast<uint32_t>(graphicsFamily);
-            chosenDiscrete = discrete;
-            chosenVideoCapable = candidateVideoCapable;
-            chosenQueues = std::move(queues);
-            chosenExtensions = std::move(extensions);
-        }
+        facts.videoCapable = HasExtension(data.extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
+                             HasExtension(data.extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
+                             hasDecodeQueue && candidateF11.samplerYcbcrConversion && candidateF12.timelineSemaphore &&
+                             candidateF13.synchronization2 && data.queues[data.graphicsFamily].queueCount >= 2;
     }
 
-    if (!chosen)
+    const int chosenIdx = VulkanDeviceSelect::SelectDevice(candidates);
+    if (chosenIdx < 0)
     {
         throw std::runtime_error("No Vulkan 1.3 device with a graphics/present queue is available");
     }
+    const bool chosenDiscrete = candidates[static_cast<std::size_t>(chosenIdx)].discrete;
+    std::vector<VkQueueFamilyProperties> chosenQueues = std::move(candidateData[static_cast<std::size_t>(chosenIdx)].queues);
+    std::vector<VkExtensionProperties> chosenExtensions =
+        std::move(candidateData[static_cast<std::size_t>(chosenIdx)].extensions);
 
-    physicalDevice_ = chosen;
-    graphicsQueueFamily_ = chosenGraphics;
-    graphicsQueueFlags_ = chosenQueues[chosenGraphics].queueFlags;
+    physicalDevice_ = devices[static_cast<std::size_t>(chosenIdx)];
+    graphicsQueueFamily_ = candidateData[static_cast<std::size_t>(chosenIdx)].graphicsFamily;
+    graphicsQueueFlags_ = chosenQueues[graphicsQueueFamily_].queueFlags;
 
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
     deviceApiVersion_ = std::min(instanceApiVersion_, properties.apiVersion);
     nvidiaAdapter_ = properties.vendorID == 0x10DE;
 
+    const bool hasHostCopyExt = HasExtension(chosenExtensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+
     VkPhysicalDeviceVulkan13Features supportedF13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan12Features supportedF12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceVulkan11Features supportedF11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     VkPhysicalDeviceFeatures2 supportedF2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceHostImageCopyFeaturesEXT supportedHostCopy{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT
+    };
     supportedF2.pNext = &supportedF11;
     supportedF11.pNext = &supportedF12;
     supportedF12.pNext = &supportedF13;
@@ -294,6 +428,16 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     if (deviceApiVersion_ >= VK_API_VERSION_1_4)
     {
         supportedF13.pNext = &supportedF14;
+        supportedF14.pNext = hasHostCopyExt ? &supportedHostCopy : nullptr;
+    }
+    else if (hasHostCopyExt)
+    {
+        supportedF13.pNext = &supportedHostCopy;
+    }
+#else
+    if (hasHostCopyExt)
+    {
+        supportedF13.pNext = &supportedHostCopy;
     }
 #endif
     vkGetPhysicalDeviceFeatures2(physicalDevice_, &supportedF2);
@@ -312,6 +456,49 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     if (deviceApiVersion_ >= VK_API_VERSION_1_4)
     {
         enabledF13_.pNext = &enabledF14_;
+    }
+#endif
+
+    // Negotiate the optional 1.4-preferred capabilities (host image copy, push
+    // descriptors) with the pure, unit-tested decision table in VulkanCapabilityPlan.
+    VulkanCapabilityPlan::Inputs capIn;
+    capIn.deviceIs14 = deviceApiVersion_ >= VK_API_VERSION_1_4;
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+    capIn.coreHostImageCopy = supportedF14.hostImageCopy == VK_TRUE;
+    capIn.corePushDescriptor = supportedF14.pushDescriptor == VK_TRUE;
+#endif
+    capIn.extHostImageCopy = hasHostCopyExt && supportedHostCopy.hostImageCopy == VK_TRUE;
+    capIn.extPushDescriptor = HasExtension(chosenExtensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    capIn.hostTransferFormatOk = HostTransferFormatSupported();
+    capIn.discreteAdapter = chosenDiscrete;
+    if (const char* env = std::getenv("FRAMELIFT_VK_HOST_COPY"); env && *env != '\0')
+    {
+        capIn.hostCopyEnv = *env == '1' ? 1 : 0;
+    }
+    if (const char* env = std::getenv("FRAMELIFT_VK_NO_PUSH_DESC"); env && *env == '1')
+    {
+        capIn.noPushDescEnv = true;
+    }
+    const VulkanCapabilityPlan::Plan capPlan = VulkanCapabilityPlan::Negotiate(capIn);
+
+    if (capPlan.enableHostCopyFeature)
+    {
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+        if (capIn.deviceIs14)
+        {
+            enabledF14_.hostImageCopy = VK_TRUE;
+        }
+        else
+#endif
+        {
+            enabledHostCopy_.hostImageCopy = VK_TRUE;
+            enabledF13_.pNext = &enabledHostCopy_;
+        }
+    }
+#ifdef VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES
+    if (capPlan.enablePushDescFeature)
+    {
+        enabledF14_.pushDescriptor = VK_TRUE;
     }
 #endif
 
@@ -347,6 +534,14 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
          })
     {
         enableOptional(optional);
+    }
+    if (capPlan.enableHostCopyExt)
+    {
+        enableOptional(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+    }
+    if (capPlan.enablePushDescExt)
+    {
+        enableOptional(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     }
 
     static constexpr float priorities[] = {1.0f, 1.0f};
@@ -384,6 +579,22 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
     qtGraphicsQueueIndex_ = chosenQueues[graphicsQueueFamily_].queueCount >= 2 ? 1u : 0u;
     vkGetDeviceQueue(device_, graphicsQueueFamily_, qtGraphicsQueueIndex_, &graphicsQueue_);
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, graphicsQueue_, "FrameLift graphics queue (Qt)");
+
+    SetupHostImageCopy(capPlan.useHostCopy);
+
+    pushDescriptors_ = false;
+    if (capPlan.usePushDesc)
+    {
+        pushDescriptorSetFn_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(vkGetDeviceProcAddr(
+            device_, deviceApiVersion_ >= VK_API_VERSION_1_4 ? "vkCmdPushDescriptorSet" : "vkCmdPushDescriptorSetKHR"
+        ));
+        pushDescriptors_ = pushDescriptorSetFn_ != nullptr;
+    }
+    else if (capIn.noPushDescEnv)
+    {
+        Log::Debug("Vulkan: push descriptors disabled by FRAMELIFT_VK_NO_PUSH_DESC");
+    }
 
     DetectVideoDecodeQueue(chosenQueues);
     if (qtGraphicsQueueIndex_ == 0)
@@ -407,23 +618,25 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = graphicsQueueFamily_;
-    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &immediatePool_) != VK_SUCCESS)
+    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &frameOpsPool_) != VK_SUCCESS)
     {
-        throw std::runtime_error("Vulkan upload command pool creation failed");
+        throw std::runtime_error("Vulkan frame-ops command pool creation failed");
     }
     VkCommandBufferAllocateInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    commandInfo.commandPool = immediatePool_;
+    commandInfo.commandPool = frameOpsPool_;
     commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    commandInfo.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(device_, &commandInfo, &immediateCmd_) != VK_SUCCESS)
+    commandInfo.commandBufferCount = static_cast<uint32_t>(frameOpsCmds_.size());
+    if (vkAllocateCommandBuffers(device_, &commandInfo, frameOpsCmds_.data()) != VK_SUCCESS)
     {
-        throw std::runtime_error("Vulkan upload command buffer allocation failed");
+        throw std::runtime_error("Vulkan frame-ops command buffer allocation failed");
     }
-    VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    if (vkCreateFence(device_, &fenceInfo, nullptr, &immediateFence_) != VK_SUCCESS)
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_POOL, frameOpsPool_, "FrameLift frame-ops pool");
+    for (VkCommandBuffer cmd : frameOpsCmds_)
     {
-        throw std::runtime_error("Vulkan upload fence creation failed");
+        VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, cmd, "FrameLift frame-ops cmd");
     }
+
+    LoadPipelineCache();
 
     Log::Debug(
         "Vulkan: {} (device API {}, negotiated {}; zero-copy prerequisites {}, video decode queue {})",
@@ -436,6 +649,166 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         "Vulkan: Qt graphics queue family {}, index {}; FFmpeg graphics queue index 0", graphicsQueueFamily_,
         qtGraphicsQueueIndex_
     );
+}
+
+// The upload format must support host transfer with optimal tiling; folded into the
+// capability plan's inputs.
+bool VulkanGraphicsBackend::HostTransferFormatSupported() const
+{
+    VkFormatProperties3 fp3{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+    VkFormatProperties2 fp2{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+    fp2.pNext = &fp3;
+    vkGetPhysicalDeviceFormatProperties2(physicalDevice_, VK_FORMAT_R8G8B8A8_UNORM, &fp2);
+    return (fp3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT) != 0;
+}
+
+// `selected` comes from VulkanCapabilityPlan: support, adapter-type default (see the
+// measured discrete-GPU detiling cost documented there) and env override already folded.
+void VulkanGraphicsBackend::SetupHostImageCopy(bool selected)
+{
+    hostImageCopy_ = false;
+    if (!selected)
+    {
+        Log::Debug("Vulkan: host image copy not selected (unsupported, discrete-adapter default, or env override)");
+        return;
+    }
+
+    const bool coreNames = deviceApiVersion_ >= VK_API_VERSION_1_4;
+    transitionImageLayoutFn_ = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
+        vkGetDeviceProcAddr(device_, coreNames ? "vkTransitionImageLayout" : "vkTransitionImageLayoutEXT")
+    );
+    copyMemoryToImageFn_ = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
+        vkGetDeviceProcAddr(device_, coreNames ? "vkCopyMemoryToImage" : "vkCopyMemoryToImageEXT")
+    );
+    if (!transitionImageLayoutFn_ || !copyMemoryToImageFn_)
+    {
+        Log::Warn("Vulkan: host image copy entry points missing; falling back to staging uploads");
+        transitionImageLayoutFn_ = nullptr;
+        copyMemoryToImageFn_ = nullptr;
+        return;
+    }
+
+    // Sample host-copied images in SHADER_READ_ONLY_OPTIMAL when the implementation
+    // accepts it as a copy-dst layout; GENERAL is the spec-guaranteed fallback.
+    VkPhysicalDeviceHostImageCopyPropertiesEXT hicProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props2.pNext = &hicProps;
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+    std::vector<VkImageLayout> dstLayouts(hicProps.copyDstLayoutCount);
+    hicProps.pCopyDstLayouts = dstLayouts.data();
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+    hostCopyDstLayout_ = std::ranges::find(dstLayouts, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) != dstLayouts.end()
+                             ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_GENERAL;
+    hostImageCopy_ = true;
+    Log::Debug(
+        "Vulkan: host image copy active ({}; dst layout {})", deviceApiVersion_ >= VK_API_VERSION_1_4 ? "1.4 core" : "EXT",
+        hostCopyDstLayout_ == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ? "shader-read-only" : "general"
+    );
+}
+
+bool VulkanGraphicsBackend::HostTransitionImage(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout)
+{
+    if (!transitionImageLayoutFn_ || image == VK_NULL_HANDLE)
+    {
+        return false;
+    }
+    VkHostImageLayoutTransitionInfoEXT info{VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT};
+    info.image = image;
+    info.oldLayout = oldLayout;
+    info.newLayout = newLayout;
+    info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK_LOG_RETURN(transitionImageLayoutFn_(device_, 1, &info), "Vulkan: host image layout transition failed", false);
+    return true;
+}
+
+void VulkanGraphicsBackend::CmdPushDescriptorSet(VkCommandBuffer cmd, VkPipelineLayout layout, const VkWriteDescriptorSet& write)
+{
+    if (pushDescriptorSetFn_ && cmd != VK_NULL_HANDLE)
+    {
+        pushDescriptorSetFn_(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &write);
+    }
+}
+
+bool VulkanGraphicsBackend::HostCopyToImage(VkImage image, VkImageLayout layout, const void* pixels, uint32_t w, uint32_t h)
+{
+    if (!copyMemoryToImageFn_ || image == VK_NULL_HANDLE || !pixels)
+    {
+        return false;
+    }
+    VkMemoryToImageCopyEXT region{VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT};
+    region.pHostPointer = pixels;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    VkCopyMemoryToImageInfoEXT info{VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT};
+    info.dstImage = image;
+    info.dstImageLayout = layout;
+    info.regionCount = 1;
+    info.pRegions = &region;
+    VK_CHECK_LOG_RETURN(copyMemoryToImageFn_(device_, &info), "Vulkan: host memory-to-image copy failed", false);
+    return true;
+}
+
+QString VulkanGraphicsBackend::PipelineCachePath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/vulkan_pipeline_cache.bin");
+}
+
+void VulkanGraphicsBackend::LoadPipelineCache()
+{
+    QByteArray blob;
+    if (QFile file(PipelineCachePath()); file.open(QIODevice::ReadOnly))
+    {
+        blob = file.readAll();
+    }
+
+    // Only feed data back that this exact device/driver produced; anything else is
+    // discarded (the spec requires the application to validate the header).
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    bool blobValid = static_cast<size_t>(blob.size()) >= sizeof(VkPipelineCacheHeaderVersionOne);
+    if (blobValid)
+    {
+        VkPipelineCacheHeaderVersionOne header{};
+        std::memcpy(&header, blob.constData(), sizeof(header));
+        blobValid = header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+                    header.vendorID == props.vendorID && header.deviceID == props.deviceID &&
+                    std::memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+    }
+
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = blobValid ? static_cast<size_t>(blob.size()) : 0;
+    ci.pInitialData = blobValid ? blob.constData() : nullptr;
+    if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS && blobValid)
+    {
+        // Stale/corrupt blob: retry empty rather than running uncached.
+        ci.initialDataSize = 0;
+        ci.pInitialData = nullptr;
+        VK_CHECK_LOG(vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_), "Vulkan: pipeline cache creation failed");
+    }
+}
+
+void VulkanGraphicsBackend::SavePipelineCache()
+{
+    if (pipelineCache_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr) != VK_SUCCESS || size == 0)
+    {
+        return;
+    }
+    QByteArray blob(static_cast<qsizetype>(size), Qt::Uninitialized);
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, blob.data()) != VK_SUCCESS)
+    {
+        return;
+    }
+    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
+    if (QFile file(PipelineCachePath()); file.open(QIODevice::WriteOnly))
+    {
+        file.write(blob.constData(), static_cast<qsizetype>(size));
+    }
 }
 
 void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties)
@@ -469,6 +842,7 @@ void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFami
         videoDecodeQueueFlags_ = queueProperties[i].queueFlags;
         videoDecodeCaps_ = videoProperties[i].videoCodecOperations;
         vkGetDeviceQueue(device_, i, 0, &videoDecodeQueue_);
+        VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, videoDecodeQueue_, "FrameLift video decode queue");
         supportsVulkanVideo_ = videoDecodeQueue_ != VK_NULL_HANDLE && videoDecodeCaps_ != 0 &&
                                enabledF11_.samplerYcbcrConversion && enabledF12_.timelineSemaphore &&
                                enabledF13_.synchronization2;
@@ -542,28 +916,74 @@ bool VulkanGraphicsBackend::GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noe
     return device_ != VK_NULL_HANDLE;
 }
 
-bool VulkanGraphicsBackend::SubmitFrameTransition(VkCommandBuffer cmd, VkSemaphore waitSemaphore, uint64_t waitValue)
+VkCommandBuffer VulkanGraphicsBackend::FrameOpsCmd()
 {
-    if (cmd == VK_NULL_HANDLE || waitSemaphore == VK_NULL_HANDLE)
+    if (device_ == VK_NULL_HANDLE)
     {
+        return VK_NULL_HANDLE;
+    }
+    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+    {
+        VkCommandBuffer cmd = frameOpsCmds_[currentFrameSlot_ % frameOpsCmds_.size()];
+        if (cmd == VK_NULL_HANDLE)
+        {
+            return VK_NULL_HANDLE;
+        }
+        // Safe to reset: Qt waited this slot's fence before beginning the frame, which
+        // covers our earlier same-queue submit that used this buffer.
+        VK_CHECK_LOG(vkResetCommandBuffer(cmd, 0), "Vulkan: frame-ops reset failed");
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VK_CHECK_LOG_RETURN(vkBeginCommandBuffer(cmd, &begin), "Vulkan: frame-ops begin failed", VK_NULL_HANDLE);
+        frameOpsActiveCmd_ = cmd;
+    }
+    return frameOpsActiveCmd_;
+}
+
+void VulkanGraphicsBackend::AddFrameOpsWait(VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags2 stageMask)
+{
+    if (semaphore == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = semaphore;
+    wait.value = value;
+    wait.stageMask = stageMask;
+    frameOpsWaits_.push_back(wait);
+}
+
+bool VulkanGraphicsBackend::FlushFrameOps()
+{
+    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+    {
+        return true; // nothing recorded this frame
+    }
+    VkCommandBuffer cmd = frameOpsActiveCmd_;
+    frameOpsActiveCmd_ = VK_NULL_HANDLE;
+    VK_CHECK_LOG(vkEndCommandBuffer(cmd), "Vulkan: frame-ops end failed");
+
+    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = cmd;
+
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = static_cast<uint32_t>(frameOpsWaits_.size());
+    submit.pWaitSemaphoreInfos = frameOpsWaits_.empty() ? nullptr : frameOpsWaits_.data();
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
+
+    VkResult result = VK_SUCCESS;
+    {
+        VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
+        result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    }
+    frameOpsWaits_.clear();
+    if (result != VK_SUCCESS)
+    {
+        Log::Error("Vulkan: frame-ops submit failed ({})", static_cast<int>(result));
         return false;
     }
-
-    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timeline.waitSemaphoreValueCount = 1;
-    timeline.pWaitSemaphoreValues = &waitValue;
-
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.pNext = &timeline;
-    submit.waitSemaphoreCount = 1;
-    submit.pWaitSemaphores = &waitSemaphore;
-    submit.pWaitDstStageMask = &waitStage;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &cmd;
-
-    VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    return vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS;
+    return true;
 }
 
 void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t value)
@@ -574,6 +994,25 @@ void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t val
     }
 }
 
+void VulkanGraphicsBackend::HostSignalPendingFrameSignals()
+{
+    if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    vkDeviceWaitIdle(device_);
+    // Queue order is chronological, so per-semaphore values are signalled in
+    // increasing order as vkSignalSemaphore requires.
+    for (const TimelineSignal& signal : pendingFrameSignals_)
+    {
+        VkSemaphoreSignalInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+        si.semaphore = signal.semaphore;
+        si.value = signal.value;
+        VK_CHECK_LOG(vkSignalSemaphore(device_, &si), "Vulkan: host signal of pending frame semaphore failed");
+    }
+    pendingFrameSignals_.clear();
+}
+
 void VulkanGraphicsBackend::FlushFrameSignals()
 {
     if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
@@ -581,62 +1020,28 @@ void VulkanGraphicsBackend::FlushFrameSignals()
         return;
     }
 
-    std::vector<VkSemaphore> semaphores;
-    std::vector<uint64_t> values;
-    semaphores.reserve(pendingFrameSignals_.size());
-    values.reserve(pendingFrameSignals_.size());
+    frameSignalScratch_.clear();
+    frameSignalScratch_.reserve(pendingFrameSignals_.size());
     for (const TimelineSignal& signal : pendingFrameSignals_)
     {
-        semaphores.push_back(signal.semaphore);
-        values.push_back(signal.value);
+        VkSemaphoreSubmitInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        si.semaphore = signal.semaphore;
+        si.value = signal.value;
+        si.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        frameSignalScratch_.push_back(si);
     }
 
-    VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timeline.signalSemaphoreValueCount = static_cast<uint32_t>(values.size());
-    timeline.pSignalSemaphoreValues = values.data();
-
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.pNext = &timeline;
-    submit.signalSemaphoreCount = static_cast<uint32_t>(semaphores.size());
-    submit.pSignalSemaphores = semaphores.data();
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.signalSemaphoreInfoCount = static_cast<uint32_t>(frameSignalScratch_.size());
+    submit.pSignalSemaphoreInfos = frameSignalScratch_.data();
 
     VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    const VkResult result = vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    const VkResult result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
     if (result != VK_SUCCESS)
     {
         Log::Error("Vulkan: zero-copy completion signal submit failed ({})", static_cast<int>(result));
     }
     pendingFrameSignals_.clear();
-}
-
-bool VulkanGraphicsBackend::ImmediateSubmit(void (*record)(VkCommandBuffer, void*), void* ud)
-{
-    if (!record || immediateCmd_ == VK_NULL_HANDLE)
-    {
-        return false;
-    }
-    vkResetFences(device_, 1, &immediateFence_);
-    vkResetCommandBuffer(immediateCmd_, 0);
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkBeginCommandBuffer(immediateCmd_, &begin) != VK_SUCCESS)
-    {
-        return false;
-    }
-    record(immediateCmd_, ud);
-    if (vkEndCommandBuffer(immediateCmd_) != VK_SUCCESS)
-    {
-        return false;
-    }
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &immediateCmd_;
-    VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    if (vkQueueSubmit(graphicsQueue_, 1, &submit, immediateFence_) != VK_SUCCESS)
-    {
-        return false;
-    }
-    return vkWaitForFences(device_, 1, &immediateFence_, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
 }
 
 void VulkanGraphicsBackend::DestroyDevice()
@@ -645,17 +1050,21 @@ void VulkanGraphicsBackend::DestroyDevice()
     {
         vkDeviceWaitIdle(device_);
     }
-    if (immediateFence_ != VK_NULL_HANDLE)
+    retireQueue_.Drain(); // device idle; free retired objects before their pools/allocator go
+    SavePipelineCache();
+    if (pipelineCache_ != VK_NULL_HANDLE)
     {
-        vkDestroyFence(device_, immediateFence_, nullptr);
-        immediateFence_ = VK_NULL_HANDLE;
+        vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+        pipelineCache_ = VK_NULL_HANDLE;
     }
-    if (immediatePool_ != VK_NULL_HANDLE)
+    if (frameOpsPool_ != VK_NULL_HANDLE)
     {
-        vkDestroyCommandPool(device_, immediatePool_, nullptr);
-        immediatePool_ = VK_NULL_HANDLE;
-        immediateCmd_ = VK_NULL_HANDLE;
+        vkDestroyCommandPool(device_, frameOpsPool_, nullptr);
+        frameOpsPool_ = VK_NULL_HANDLE;
+        frameOpsCmds_.fill(VK_NULL_HANDLE);
+        frameOpsActiveCmd_ = VK_NULL_HANDLE;
     }
+    frameOpsWaits_.clear();
     if (allocator_)
     {
         vmaDestroyAllocator(allocator_);
@@ -666,6 +1075,11 @@ void VulkanGraphicsBackend::DestroyDevice()
         vkDestroyDevice(device_, nullptr);
         device_ = VK_NULL_HANDLE;
     }
+    hostImageCopy_ = false;
+    transitionImageLayoutFn_ = nullptr;
+    copyMemoryToImageFn_ = nullptr;
+    pushDescriptors_ = false;
+    pushDescriptorSetFn_ = nullptr;
 }
 
 void VulkanGraphicsBackend::Shutdown()
@@ -677,8 +1091,14 @@ void VulkanGraphicsBackend::Shutdown()
     shutdown_ = true;
     currentCmd_ = VK_NULL_HANDLE;
     renderPass_ = VK_NULL_HANDLE;
-    pendingFrameSignals_.clear();
+    HostSignalPendingFrameSignals();
     DestroyDevice();
+    if (debugMessenger_ != VK_NULL_HANDLE && destroyDebugMessengerFn_)
+    {
+        destroyDebugMessengerFn_(instance_, debugMessenger_, nullptr);
+        debugMessenger_ = VK_NULL_HANDLE;
+    }
+    VulkanUtil::g_setObjectNameFn = nullptr;
     qtInstance_.reset();
     instance_ = VK_NULL_HANDLE;
 }

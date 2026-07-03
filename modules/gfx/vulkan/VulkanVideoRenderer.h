@@ -6,6 +6,7 @@
 
 #include "IVideoRenderer.h"
 #include "VulkanGraphicsBackend.h"
+#include "VulkanTextureRing.h"
 
 // VMA handle, forward-declared (impl lives in VulkanGraphicsBackend.cpp).
 typedef struct VmaAllocation_T* VmaAllocation;
@@ -17,9 +18,10 @@ typedef struct VmaAllocation_T* VmaAllocation;
 // the device/allocator/render-pass and the per-frame command buffer.
 //
 // A single persistent image per stream (video + overlay), like GlVideoRenderer, so the
-// last uploaded frame stays on screen across presents (paused / low-fps content). The
-// upload's blocking transfer (Phase 2 parity; zero-copy in Phase 3) barriers against
-    // prior fragment-shader reads on the graphics queue, so overwriting is hazard-free.
+// last uploaded frame stays on screen across presents (paused / low-fps content).
+// Uploads record into the backend's per-frame frame-ops command buffer (no blocking
+// submit); the copy's barriers chain against prior frames' fragment-shader reads via
+// queue submission order, so overwriting the shared image is hazard-free.
 class VulkanVideoRenderer final : public IVideoRenderer
 {
 public:
@@ -36,7 +38,7 @@ public:
     void Draw(int fbW, int fbH, bool drawOverlay = false) override;
 
 private:
-    // One sampled RGBA image (+ its view and descriptor set) per frame-in-flight slot.
+    // One sampled RGBA image with its view and descriptor set.
     struct Texture
     {
         VkImage image = VK_NULL_HANDLE;
@@ -49,21 +51,60 @@ private:
         bool valid = false;
     };
 
+    // Host-image-copy upload target: a ring of sampled images the CPU writes directly
+    // (no staging, no barriers, no submit). Ring size covers the worst-case frames in
+    // flight plus the steady-state slack the policy needs (see VulkanTextureRing.h).
+    struct HostRing
+    {
+        static constexpr uint32_t kSlots = VulkanGraphicsBackend::kMaxFramesInFlight + 2;
+        std::array<Texture, kSlots> tex{};
+        VulkanTextureRing policy;
+    };
+
+    // Per-frame-slot staging arena: each Qt frame slot owns a growable, persistently
+    // mapped buffer that uploads bump-allocate from (video + overlay share it within a
+    // frame). CPU reuse is safe because Qt waits the slot's fence before the slot comes
+    // around again, which covers the frame-ops submit that read the buffer.
+    struct StagingSlot
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VmaAllocation alloc = nullptr;
+        void* mapped = nullptr;
+        VkDeviceSize size = 0;
+        VkDeviceSize used = 0;
+        uint64_t frame = 0; // backend FrameCounter() of last use; `used` resets on change
+    };
+
     bool BuildPipeline();
     // Shared blit-pipeline builder (fullscreen triangle, video.vert/.frag) against a
     // given descriptor-set layout; used for both the RGBA and YCbCr paths.
     bool CreateBlitPipeline(VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline);
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) const;
-    bool EnsureTexture(Texture& t, int w, int h);
+    // hostCopy selects HOST_TRANSFER usage + host-copy sampling layout instead of the
+    // staging path's TRANSFER_DST + SHADER_READ_ONLY.
+    bool EnsureTexture(Texture& t, int w, int h, bool hostCopy);
     void UploadTo(Texture& t, const uint8_t* rgba, int w, int h);
-    bool EnsureStaging(VkDeviceSize bytes);
+    void UploadHostCopy(HostRing& ring, const uint8_t* rgba, int w, int h);
+    // Currently displayable texture for a stream: the ring's displayed slot on the
+    // host-copy path, the single texture otherwise; null when nothing was uploaded yet.
+    const Texture* CurrentTexture(HostRing& ring, const Texture& single) const;
+    // Make room for `bytes` more in the slot's arena, growing (old buffer retired — a
+    // recorded copy may still reference it) when needed; growth resets `used` because
+    // fresh space starts at offset 0 of the new buffer.
+    bool EnsureStagingSpace(StagingSlot& slot, VkDeviceSize bytes);
     void DestroyTexture(Texture& t);
 
     // ── Zero-copy YCbCr sampling (#18) ─────────────────────────────────────────
     // (Re)build the YCbCr conversion + immutable sampler + set layout + pipeline for a
     // decoded VkFormat / colorspace / range; cheap no-op when unchanged.
     bool EnsureYcbcr(int vkFormat, int colorSpace, int colorRange);
+    // Immediate teardown (dtor only — requires an idle device).
     void DestroyYcbcr();
+    // Deferred teardown for a live rebuild: hands every current YCbCr object (conversion,
+    // sampler, layouts, pipeline, descriptor pool, cached views) to the retire queue and
+    // nulls the members so EnsureYcbcr can build fresh ones without a device stall.
+    void RetireYcbcr();
+    bool CreateYcbcrDescPool();
 
     // Get (or create + cache, keyed by VkImage handle) the view + descriptor set for one
     // pooled decode image. Views/sets live until the format changes or shutdown.
@@ -74,13 +115,19 @@ private:
     };
 
     const FrameTex* EnsureFrameTexture(uint64_t image);
-    // Record the frame image's transition (decode→sample layout, queue-ownership acquire)
-    // into its own command buffer and register it with the backend to run, in the single
-    // per-frame submit, just before the main render CB. Must run OUTSIDE the render pass,
-    // hence its own command buffer (Draw runs inside the pass). NOT submitted separately:
-    // a standalone submit here would stall the queue ahead of Qt Quick's scene-graph work.
-    VkCommandBuffer RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
-    void DrawVulkanFrame();
+    // Drop all cached per-image views/sets (retired, not destroyed — an in-flight frame
+    // may still sample them). Used when the decoder's frames pool is replaced and when
+    // the descriptor pool is exhausted.
+    void InvalidateFrameTextures();
+    // Record the frame image's transition (decode→sample layout, queue-ownership
+    // acquire) into the backend's per-frame frame-ops command buffer, which is submitted
+    // once — together with the accumulated timeline waits — just before Qt's scene-graph
+    // submit. It must run outside the render pass Draw records into, hence the separate
+    // command buffer; batching it there avoids a standalone submit stalling the queue.
+    bool RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
+    // Returns true when it recorded the video draw (and thus set viewport/scissor);
+    // false on any early-out, so Draw() knows the overlay must set its own.
+    bool DrawVulkanFrame();
 
     VulkanGraphicsBackend* backend_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
@@ -93,14 +140,17 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 
+    // Staging-path textures (one per stream)…
     Texture video_{};
     Texture overlay_{};
+    // …or host-copy rings when the backend supports host image copy (decided in Init).
+    bool useHostCopy_ = false;
+    // Push per-frame YCbCr views into the command buffer instead of pool-allocated sets.
+    bool usePushDesc_ = false;
+    HostRing videoRing_{};
+    HostRing overlayRing_{};
 
-    // Growable host-visible staging buffer (uploads are serialized by ImmediateSubmit).
-    VkBuffer staging_ = VK_NULL_HANDLE;
-    VmaAllocation stagingAlloc_ = nullptr;
-    void* stagingMapped_ = nullptr;
-    VkDeviceSize stagingSize_ = 0;
+    std::array<StagingSlot, VulkanGraphicsBackend::kMaxFramesInFlight> staging_{};
 
     // ── Zero-copy YCbCr state (#18) ────────────────────────────────────────────
     // The AVFrame* (void*) handed in by UploadVulkanFrame, sampled in Draw. Non-null ⇒
@@ -108,6 +158,10 @@ private:
     void* vkFrame_ = nullptr;
     int vkDisplayW_ = 0;
     int vkDisplayH_ = 0;
+
+    // Identity of the decoder's hw-frames pool the cached views/sets were built against
+    // (VulkanFrameInfo::framesContextId); a change invalidates frameTextures_.
+    uint64_t framesContextId_ = 0;
 
     // Conversion is rebuilt only when the format/colorspace/range changes.
     int ycbcrFormat_ = 0;
@@ -122,9 +176,4 @@ private:
     // view + descriptor set per pooled decode image (bounded; the decoder reuses a small
     // set of images). Cleared on format change / shutdown — never re-pointed in flight.
     std::unordered_map<uint64_t, FrameTex> frameTextures_;
-
-    // Standalone transition command buffers (one per frame-in-flight), submitted before
-    // the main render submit to move the decode image into a sampleable layout.
-    VkCommandPool transitionPool_ = VK_NULL_HANDLE;
-    std::array<VkCommandBuffer, VulkanGraphicsBackend::kMaxFramesInFlight> transitionCmds_{};
 };

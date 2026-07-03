@@ -56,11 +56,6 @@ public:
     // and calls IVideoRenderer::Init(this) on it.
     [[nodiscard]] virtual std::unique_ptr<IVideoRenderer> CreateVideoRenderer() = 0;
 
-    // Upload a tightly packed RGBA8 image and return a backend-native texture handle (a
-    // GL texture name for the GL backend, a VkDescriptorSet for Vulkan). The backend owns
-    // the resource and frees it on shutdown. Returns 0 on failure.
-    [[nodiscard]] virtual uintptr_t CreateUITexture(const unsigned char* rgba, int w, int h) = 0;
-
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
     // Fill `out` with the live Vulkan instance/device/queues so the FFmpeg Vulkan
     // hwaccel can WRAP this device for zero-copy decode (Phase 3, #18). Returns false
