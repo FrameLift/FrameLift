@@ -24,7 +24,8 @@ runs:
   steps:
     # Prebuilt Qt is not a distro package, so its runtime/link dependencies must
     # be installed explicitly. Needed for linking and for the build-linux xvfb
-    # launch tests (Qt's xcb platform plugin). python3-pip backs aqt below; the
+    # launch tests (Qt's xcb platform plugin). sudo: install-qt-action shells out
+    # to it, but the root container ships none. python3-pip backs aqt below; the
     # ubuntu container already ships python3.
     - name: Install Qt runtime dependencies (linux)
       if: inputs.host == 'linux'
@@ -32,6 +33,7 @@ runs:
       run: |
         apt-get update
         apt-get install -y --no-install-recommends \
+          sudo \
           python3-pip \
           libgl1 libglx-mesa0 libegl1 \
           libxkbcommon0 libxkbcommon-x11-0 \
