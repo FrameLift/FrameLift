@@ -12,7 +12,7 @@ inputs:
     description: aqt arch, e.g. win64_msvc2022_64 or linux_gcc_64.
     required: true
   version:
-    description: Qt version to install (pass ${{ env.QT_VERSION }}).
+    description: Qt version to install (pass the QT_VERSION env var).
     required: true
   modules:
     description: Extra Qt modules to install (space-separated), e.g. qtmultimedia.
