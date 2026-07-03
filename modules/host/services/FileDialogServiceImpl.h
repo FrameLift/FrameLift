@@ -1,7 +1,8 @@
 #pragma once
+#include "AppStateStore.h"
+#include <cstdint>
 #include <framelift/AppEvent.h>
 #include <framelift/platform/IFileDialog.h>
-#include <cstdint>
 
 class IAppWindow;
 class IEventPump;
@@ -34,6 +35,7 @@ public:
 
 private:
     const Settings* settings_;
+    AppStateStore state_;
     IAppWindow* appWindow_ = nullptr;
     IEventPump* events_ = nullptr;
     uint32_t eventType_ = 0;

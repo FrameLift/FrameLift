@@ -46,5 +46,19 @@ ScrollView {
                 }
             }
         }
+
+        FLSettingsGroup {
+            title: "Open dialog"
+
+            FLSettingRow {
+                title: "Remember open folder"
+                description: "Start the open-file dialog in the last folder used."
+                keyName: "files.rememberOpenDialogDirectory"
+                FLSwitch {
+                    checked: (root.rev, root.vm.fieldValue("files.rememberOpenDialogDirectory"))
+                    onToggled: root.vm.setFieldValue("files.rememberOpenDialogDirectory", checked)
+                }
+            }
+        }
     }
 }

@@ -44,6 +44,8 @@ set(_FRAMELIFT_HOST_SETTINGS_SOURCES
 )
 
 set(_FRAMELIFT_HOST_SERVICES_SOURCES
+        "${CMAKE_SOURCE_DIR}/modules/host/services/AppStateStore.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/services/AppStateStore.h"
         "${CMAKE_SOURCE_DIR}/modules/host/services/FileDialogServiceImpl.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/services/FileDialogServiceImpl.h"
         "${CMAKE_SOURCE_DIR}/modules/host/services/HotkeysImpl.cpp"

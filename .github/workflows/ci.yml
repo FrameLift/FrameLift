@@ -27,7 +27,7 @@ jobs:
   # the build jobs depend on it via `needs:`.
   test:
     runs-on: ubuntu-latest
-    container: ubuntu:24.04
+    container: ubuntu:26.04
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -186,11 +186,11 @@ jobs:
   # Windows-only plugins are disabled by module platform metadata.
   # Produces FrameLift-linux-x64.tar.gz.
   #
-  # ubuntu:25.04 carries the Qt 6 development stack used by the native build.
+  # ubuntu:26.04 carries the Qt 6 development stack used by the native build.
   build-linux:
     needs: test
     runs-on: ubuntu-latest
-    container: ubuntu:25.04
+    container: ubuntu:26.04
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-linux-setup
@@ -245,7 +245,7 @@ jobs:
   build-sdk:
     needs: test
     runs-on: ubuntu-latest
-    container: ubuntu:25.04
+    container: ubuntu:26.04
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-linux-setup

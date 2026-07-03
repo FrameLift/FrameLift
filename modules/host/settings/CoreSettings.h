@@ -11,6 +11,7 @@ struct FilesSettings
 {
     std::string videoExtensions = "mp4;mkv;avi;mov;wmv;flv;webm;m4v;mpg;mpeg";
     std::string imageExtensions = "png;jpg;jpeg;gif;bmp;webp";
+    bool rememberOpenDialogDirectory = true;
 };
 
 struct KeybindSettings
@@ -34,6 +35,10 @@ inline void RegisterFilesSettings(SettingsRegistry& reg, FilesSettings& s)
 {
     reg.AddString("files.videoExtensions", s.videoExtensions, "Semicolon-separated list of video file extensions.");
     reg.AddString("files.imageExtensions", s.imageExtensions, "Semicolon-separated list of image file extensions.");
+    reg.AddBool(
+        "files.rememberOpenDialogDirectory", s.rememberOpenDialogDirectory,
+        "Remember the last open-file dialog directory."
+    );
 }
 
 inline void RegisterKeybindSettings(SettingsRegistry& reg, KeybindSettings& s)

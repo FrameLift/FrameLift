@@ -64,6 +64,7 @@ endfunction()
 add_executable(framelift_tests
         unit/misc/CliTests.cpp
         unit/host/SettingsTests.cpp
+        unit/host/AppStateStoreTests.cpp
         unit/host/ModuleContextTests.cpp
         unit/host/PluginConfigTests.cpp
         unit/host/CommandRegistryTests.cpp
@@ -107,6 +108,7 @@ add_executable(framelift_tests
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/SettingsService.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginMetadata.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginResolver.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/AppStateStore.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/HotkeysImpl.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"

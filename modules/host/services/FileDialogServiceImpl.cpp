@@ -58,9 +58,11 @@ void FileDialogServiceImpl::OpenFile(void (*cb)(const char* path, bool ok, void*
     }
 
     QStringList filters;
+    bool rememberDirectory = false;
     if (settings_)
     {
         const FilesSettings& files = settings_->Get<FilesSettings>();
+        rememberDirectory = files.rememberOpenDialogDirectory;
         if (const QString f = MakeFilter("Video files", files.videoExtensions); !f.isEmpty())
         {
             filters << f;
@@ -74,8 +76,12 @@ void FileDialogServiceImpl::OpenFile(void (*cb)(const char* path, bool ok, void*
 
     // Modal native picker — blocks on a nested event loop until the user chooses
     // or cancels. Cancel returns an empty string ⇒ ok=false downstream.
-    const QString chosen = QFileDialog::getOpenFileName(
-        nullptr, "Open File", QString(), filters.join(";;"));
+    const QString initialDirectory = rememberDirectory ? state_.FileDialogLastDirectory() : QString();
+    const QString chosen = QFileDialog::getOpenFileName(nullptr, "Open File", initialDirectory, filters.join(";;"));
+    if (rememberDirectory && !chosen.isEmpty())
+    {
+        state_.SaveFileDialogLastDirectoryForFile(chosen);
+    }
 
     // Defer delivery through the event loop so the callback never fires reentrantly.
     auto* p = new Payload{cb, ud, chosen.toStdString()};
