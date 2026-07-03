@@ -2,6 +2,7 @@
 
 #include "FFmpegLetterbox.h"
 #include "FFmpegVulkanDevice.h" // neutral bridge (no libav types) — reads AVVkFrame
+#include "VulkanUtil.h"
 
 #include <vk_mem_alloc.h>
 
@@ -97,6 +98,7 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
         Log::Error("VulkanVideoRenderer: sampler creation failed");
         return false;
     }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_SAMPLER, sampler_, "FrameLift video sampler");
 
     // Descriptor set layout: binding 0 = combined image sampler (fragment stage).
     VkDescriptorSetLayoutBinding binding{};
@@ -141,7 +143,12 @@ VkShaderModule VulkanVideoRenderer::CreateShaderModule(const uint32_t* code, siz
 
 bool VulkanVideoRenderer::BuildPipeline()
 {
-    return CreateBlitPipeline(setLayout_, pipelineLayout_, pipeline_);
+    if (!CreateBlitPipeline(setLayout_, pipelineLayout_, pipeline_))
+    {
+        return false;
+    }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_PIPELINE, pipeline_, "FrameLift RGBA blit pipeline");
+    return true;
 }
 
 bool VulkanVideoRenderer::CreateBlitPipeline(
@@ -326,6 +333,9 @@ bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h)
     t.h = h;
     t.layout = VK_IMAGE_LAYOUT_UNDEFINED;
     t.valid = true;
+    VulkanUtil::SetObjectName(
+        device_, VK_OBJECT_TYPE_IMAGE, t.image, &t == &video_ ? "FrameLift video image" : "FrameLift overlay image"
+    );
     return true;
 }
 
@@ -356,6 +366,7 @@ bool VulkanVideoRenderer::EnsureStaging(VkDeviceSize bytes)
     }
     stagingMapped_ = info.pMappedData;
     stagingSize_ = bytes;
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_BUFFER, staging_, "FrameLift upload staging buffer");
     return true;
 }
 
@@ -625,6 +636,8 @@ bool VulkanVideoRenderer::EnsureYcbcr(int vkFormat, int colorSpace, int colorRan
     {
         return false;
     }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_PIPELINE, ycbcrPipeline_, "FrameLift YCbCr blit pipeline");
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_SAMPLER, ycbcrSampler_, "FrameLift YCbCr sampler");
 
     ycbcrFormat_ = vkFormat;
     ycbcrColorSpace_ = colorSpace;

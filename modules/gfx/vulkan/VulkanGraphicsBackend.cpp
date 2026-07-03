@@ -1,5 +1,6 @@
 #include "VulkanGraphicsBackend.h"
 
+#include "VulkanUtil.h"
 #include "VulkanVideoRenderer.h"
 
 #define VMA_IMPLEMENTATION
@@ -21,6 +22,7 @@
 #include <framelift/Log.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_set>
@@ -55,6 +57,44 @@ std::string VersionString(uint32_t version)
 void ThrowVk(const char* message, VkResult result)
 {
     throw std::runtime_error(std::string(message) + " (VkResult " + std::to_string(result) + ")");
+}
+
+// Validation is on by default in debug builds; FRAMELIFT_VULKAN_VALIDATION=1/0 overrides
+// either way (e.g. to debug a release build, or to silence a debug build). Synchronization
+// validation is enabled externally through the layer's own settings
+// (VK_LAYER_KHRONOS_validation with khronos_validation.validate_sync, or vkconfig).
+bool ValidationRequested()
+{
+    if (const char* env = std::getenv("FRAMELIFT_VULKAN_VALIDATION"); env && *env != '\0')
+    {
+        return *env == '1';
+    }
+#ifndef NDEBUG
+    return true;
+#else
+    return false;
+#endif
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT /*types*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* /*userData*/
+)
+{
+    const char* message = data && data->pMessage ? data->pMessage : "(no message)";
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    {
+        Log::Error("Vulkan validation: {}", message);
+    }
+    else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+    {
+        Log::Warn("Vulkan validation: {}", message);
+    }
+    else
+    {
+        Log::Debug("Vulkan validation: {}", message);
+    }
+    return VK_FALSE;
 }
 } // namespace
 
@@ -121,6 +161,26 @@ void VulkanGraphicsBackend::CreateInstance()
     }
 
     qtInstance_ = std::make_unique<QVulkanInstance>();
+
+    bool debugUtils = false;
+    if (ValidationRequested())
+    {
+        if (qtInstance_->supportedLayers().contains(QByteArrayLiteral("VK_LAYER_KHRONOS_validation")))
+        {
+            qtInstance_->setLayers({QByteArrayLiteral("VK_LAYER_KHRONOS_validation")});
+            validationActive_ = true;
+        }
+        else
+        {
+            Log::Warn("Vulkan: validation requested but VK_LAYER_KHRONOS_validation is not installed");
+        }
+        if (qtInstance_->supportedExtensions().contains(QByteArrayLiteral(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)))
+        {
+            AddUniqueExtension(instanceExtNames_, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            debugUtils = true;
+        }
+    }
+
     QByteArrayList qtExtensions;
     qtExtensions.reserve(static_cast<qsizetype>(instanceExtNames_.size()));
     for (const std::string& extension : instanceExtNames_)
@@ -136,7 +196,37 @@ void VulkanGraphicsBackend::CreateInstance()
         ThrowVk("Qt Vulkan instance creation failed", qtInstance_->errorCode());
     }
     instance_ = qtInstance_->vkInstance();
-    Log::Debug("Vulkan: loader {}, instance API {}", VersionString(loaderVersion), VersionString(instanceApiVersion_));
+
+    if (debugUtils)
+    {
+        SetupDebugUtils();
+    }
+    Log::Debug(
+        "Vulkan: loader {}, instance API {}{}", VersionString(loaderVersion), VersionString(instanceApiVersion_),
+        validationActive_ ? ", validation on" : ""
+    );
+}
+
+void VulkanGraphicsBackend::SetupDebugUtils()
+{
+    VulkanUtil::g_setObjectNameFn =
+        reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(vkGetInstanceProcAddr(instance_, "vkSetDebugUtilsObjectNameEXT"));
+    destroyDebugMessengerFn_ = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT")
+    );
+    const auto createMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT")
+    );
+    if (!createMessenger || !destroyDebugMessengerFn_)
+    {
+        return;
+    }
+    VkDebugUtilsMessengerCreateInfoEXT ci{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    ci.messageSeverity =
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    ci.pfnUserCallback = DebugUtilsCallback;
+    VK_CHECK_LOG(createMessenger(instance_, &ci, nullptr, &debugMessenger_), "Vulkan: debug messenger creation failed");
 }
 
 void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
@@ -384,6 +474,7 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
     qtGraphicsQueueIndex_ = chosenQueues[graphicsQueueFamily_].queueCount >= 2 ? 1u : 0u;
     vkGetDeviceQueue(device_, graphicsQueueFamily_, qtGraphicsQueueIndex_, &graphicsQueue_);
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, graphicsQueue_, "FrameLift graphics queue (Qt)");
 
     DetectVideoDecodeQueue(chosenQueues);
     if (qtGraphicsQueueIndex_ == 0)
@@ -424,6 +515,9 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     {
         throw std::runtime_error("Vulkan upload fence creation failed");
     }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_POOL, immediatePool_, "FrameLift immediate-upload pool");
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, immediateCmd_, "FrameLift immediate-upload cmd");
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_FENCE, immediateFence_, "FrameLift immediate-upload fence");
 
     Log::Debug(
         "Vulkan: {} (device API {}, negotiated {}; zero-copy prerequisites {}, video decode queue {})",
@@ -469,6 +563,7 @@ void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFami
         videoDecodeQueueFlags_ = queueProperties[i].queueFlags;
         videoDecodeCaps_ = videoProperties[i].videoCodecOperations;
         vkGetDeviceQueue(device_, i, 0, &videoDecodeQueue_);
+        VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, videoDecodeQueue_, "FrameLift video decode queue");
         supportsVulkanVideo_ = videoDecodeQueue_ != VK_NULL_HANDLE && videoDecodeCaps_ != 0 &&
                                enabledF11_.samplerYcbcrConversion && enabledF12_.timelineSemaphore &&
                                enabledF13_.synchronization2;
@@ -679,6 +774,12 @@ void VulkanGraphicsBackend::Shutdown()
     renderPass_ = VK_NULL_HANDLE;
     pendingFrameSignals_.clear();
     DestroyDevice();
+    if (debugMessenger_ != VK_NULL_HANDLE && destroyDebugMessengerFn_)
+    {
+        destroyDebugMessengerFn_(instance_, debugMessenger_, nullptr);
+        debugMessenger_ = VK_NULL_HANDLE;
+    }
+    VulkanUtil::g_setObjectNameFn = nullptr;
     qtInstance_.reset();
     instance_ = VK_NULL_HANDLE;
 }

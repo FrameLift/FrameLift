@@ -136,6 +136,7 @@ public:
 
 private:
     void CreateInstance();
+    void SetupDebugUtils();
     void CreateDevice(QWindow* presentProbe);
     void DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties);
     void RefreshQtResources(QQuickWindow* window);
@@ -160,6 +161,10 @@ private:
     bool supportsVulkanVideo_ = false;
     bool configured_ = false;
     bool shutdown_ = false;
+    bool validationActive_ = false;
+
+    VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
+    PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessengerFn_ = nullptr;
 
     std::unique_ptr<QVulkanInstance> qtInstance_;
     VmaAllocator allocator_ = nullptr;
