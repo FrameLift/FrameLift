@@ -81,6 +81,7 @@ private Q_SLOTS:
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);
         QVERIFY((s.Get<AudioSettings>().dynaudnormFrameLen) == (100));
         QVERIFY((s.Get<FilesSettings>().videoExtensions.rfind("mp4", 0)) == (0u)); // starts with "mp4"
+        QVERIFY(s.Get<FilesSettings>().rememberOpenDialogDirectory);
     }
 
     void ThemeDefaults()
@@ -120,6 +121,7 @@ hwdec=0
 panelWidth=500
 [files]
 videoExtensions="avi;mov"
+rememberOpenDialogDirectory=0
 [audio]
 dynaudnormFrameLen=250
 )";
@@ -132,6 +134,7 @@ dynaudnormFrameLen=250
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
         QCOMPARE(s.Get<UISettings>().panelWidth, 500.f);
         QVERIFY((s.Get<FilesSettings>().videoExtensions) == ("avi;mov"));
+        QVERIFY(!(s.Get<FilesSettings>().rememberOpenDialogDirectory));
         QVERIFY((s.Get<AudioSettings>().dynaudnormFrameLen) == (250));
     }
 
@@ -430,6 +433,7 @@ dynaudnormFrameLen=250
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.Get<UISettings>().panelWidth = 444.f;
         s.Get<FilesSettings>().videoExtensions = "mkv;webm";
+        s.Get<FilesSettings>().rememberOpenDialogDirectory = false;
         s.Get<AudioSettings>().dynaudnormFrameLen = 321;
         s.Get<KeybindSettings>().togglePause = "P";
         s.Save(f.str());
@@ -441,6 +445,7 @@ dynaudnormFrameLen=250
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
         QCOMPARE(loaded.Get<UISettings>().panelWidth, 444.f);
         QVERIFY((loaded.Get<FilesSettings>().videoExtensions) == ("mkv;webm"));
+        QVERIFY(!(loaded.Get<FilesSettings>().rememberOpenDialogDirectory));
         QVERIFY((loaded.Get<AudioSettings>().dynaudnormFrameLen) == (321));
         QVERIFY((loaded.Get<KeybindSettings>().togglePause) == ("P"));
     }
