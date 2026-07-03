@@ -63,6 +63,7 @@ endfunction()
 # ── framelift_tests: pure-logic + platform-builder suites (no plugin entry symbols) ─
 add_executable(framelift_tests
         unit/misc/CliTests.cpp
+        unit/misc/TestMediaSpecTests.cpp
         unit/host/SettingsTests.cpp
         unit/host/AppStateStoreTests.cpp
         unit/host/ModuleContextTests.cpp
@@ -112,6 +113,7 @@ add_executable(framelift_tests
         "${FRAMELIFT_ROOT}/modules/host/services/HotkeysImpl.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
+        "${FRAMELIFT_ROOT}/src/TestMediaGenerator.cpp"
 )
 set_target_properties(framelift_tests PROPERTIES
         CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
