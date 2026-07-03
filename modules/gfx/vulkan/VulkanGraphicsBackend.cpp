@@ -644,21 +644,25 @@ bool VulkanGraphicsBackend::SubmitFrameTransition(VkCommandBuffer cmd, VkSemapho
         return false;
     }
 
-    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timeline.waitSemaphoreValueCount = 1;
-    timeline.pWaitSemaphoreValues = &waitValue;
+    // Wait at FRAGMENT_SHADER, not TOP_OF_PIPE: the transition barrier chains off that
+    // stage, and later submits' earlier pipeline stages stay free to run while the
+    // decode semaphore is still pending.
+    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    wait.semaphore = waitSemaphore;
+    wait.value = waitValue;
+    wait.stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.pNext = &timeline;
-    submit.waitSemaphoreCount = 1;
-    submit.pWaitSemaphores = &waitSemaphore;
-    submit.pWaitDstStageMask = &waitStage;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &cmd;
+    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = cmd;
+
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = &wait;
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
 
     VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    return vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS;
+    return vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS;
 }
 
 void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t value)
@@ -695,27 +699,23 @@ void VulkanGraphicsBackend::FlushFrameSignals()
         return;
     }
 
-    std::vector<VkSemaphore> semaphores;
-    std::vector<uint64_t> values;
-    semaphores.reserve(pendingFrameSignals_.size());
-    values.reserve(pendingFrameSignals_.size());
+    frameSignalScratch_.clear();
+    frameSignalScratch_.reserve(pendingFrameSignals_.size());
     for (const TimelineSignal& signal : pendingFrameSignals_)
     {
-        semaphores.push_back(signal.semaphore);
-        values.push_back(signal.value);
+        VkSemaphoreSubmitInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        si.semaphore = signal.semaphore;
+        si.value = signal.value;
+        si.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        frameSignalScratch_.push_back(si);
     }
 
-    VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timeline.signalSemaphoreValueCount = static_cast<uint32_t>(values.size());
-    timeline.pSignalSemaphoreValues = values.data();
-
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.pNext = &timeline;
-    submit.signalSemaphoreCount = static_cast<uint32_t>(semaphores.size());
-    submit.pSignalSemaphores = semaphores.data();
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.signalSemaphoreInfoCount = static_cast<uint32_t>(frameSignalScratch_.size());
+    submit.pSignalSemaphoreInfos = frameSignalScratch_.data();
 
     VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    const VkResult result = vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    const VkResult result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
     if (result != VK_SUCCESS)
     {
         Log::Error("Vulkan: zero-copy completion signal submit failed ({})", static_cast<int>(result));
@@ -742,11 +742,13 @@ bool VulkanGraphicsBackend::ImmediateSubmit(void (*record)(VkCommandBuffer, void
     {
         return false;
     }
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &immediateCmd_;
+    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmdInfo.commandBuffer = immediateCmd_;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmdInfo;
     VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    if (vkQueueSubmit(graphicsQueue_, 1, &submit, immediateFence_) != VK_SUCCESS)
+    if (vkQueueSubmit2(graphicsQueue_, 1, &submit, immediateFence_) != VK_SUCCESS)
     {
         return false;
     }

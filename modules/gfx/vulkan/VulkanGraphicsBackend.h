@@ -196,6 +196,7 @@ private:
     };
 
     std::vector<TimelineSignal> pendingFrameSignals_;
+    std::vector<VkSemaphoreSubmitInfo> frameSignalScratch_; // reused per flush, avoids per-frame allocation
 
     std::vector<std::string> instanceExtNames_;
     std::vector<std::string> enabledDeviceExtNames_;

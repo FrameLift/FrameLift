@@ -403,38 +403,42 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
     // being sampled. (submission order on the queue makes that dependency reach back to
     // earlier-submitted render work.) Fresh images start UNDEFINED — nothing to wait on.
     const bool reuse = j.oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    VkImageMemoryBarrier2 toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    toDst.srcStageMask = reuse ? VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE;
+    toDst.srcAccessMask = reuse ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE;
+    toDst.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    toDst.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     toDst.oldLayout = j.oldLayout;
     toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toDst.image = j.image;
     toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toDst.srcAccessMask = reuse ? VK_ACCESS_SHADER_READ_BIT : 0;
-    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(
-        cmd, reuse ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst
-    );
+    VkDependencyInfo depToDst{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    depToDst.imageMemoryBarrierCount = 1;
+    depToDst.pImageMemoryBarriers = &toDst;
+    vkCmdPipelineBarrier2(cmd, &depToDst);
 
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {j.w, j.h, 1};
     vkCmdCopyBufferToImage(cmd, j.staging, j.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    VkImageMemoryBarrier2 toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    toRead.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    toRead.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toRead.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    toRead.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toRead.image = j.image;
     toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(
-        cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-        &toRead
-    );
+    VkDependencyInfo depToRead{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    depToRead.imageMemoryBarrierCount = 1;
+    depToRead.pImageMemoryBarriers = &toRead;
+    vkCmdPipelineBarrier2(cmd, &depToRead);
 }
 } // namespace
 
@@ -756,18 +760,25 @@ VkCommandBuffer VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int o
     const uint32_t gfxFamily = backend_->GraphicsQueueFamily();
     const bool ownershipXfer = srcQueueFamily != VK_QUEUE_FAMILY_IGNORED && srcQueueFamily != gfxFamily;
 
-    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    // Acquire half of the decode→graphics hand-off. The timeline-semaphore wait on the
+    // submit (stage: FRAGMENT_SHADER) already orders this against the decode write and
+    // makes it visible, so the barrier's src scope chains off that same stage rather
+    // than blocking the whole pipe.
+    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.srcAccessMask = VK_ACCESS_2_NONE;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     b.oldLayout = static_cast<VkImageLayout>(oldLayout);
     b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     b.srcQueueFamilyIndex = ownershipXfer ? srcQueueFamily : VK_QUEUE_FAMILY_IGNORED;
     b.dstQueueFamilyIndex = ownershipXfer ? gfxFamily : VK_QUEUE_FAMILY_IGNORED;
     b.image = reinterpret_cast<VkImage>(static_cast<uintptr_t>(image));
     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    b.srcAccessMask = 0;
-    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(
-        cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b
-    );
+    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &dep);
     vkEndCommandBuffer(cmd);
     return cmd;
 }
