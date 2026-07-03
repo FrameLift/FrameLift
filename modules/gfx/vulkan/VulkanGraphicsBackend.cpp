@@ -13,6 +13,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QLibraryInfo>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QVersionNumber>
 #include <QtGui/QGuiApplication>
@@ -141,7 +142,14 @@ void VulkanGraphicsBackend::CreateInstance()
     {
         throw std::runtime_error("Vulkan 1.3 loader support is required");
     }
-    instanceApiVersion_ = std::min(loaderVersion, VK_API_VERSION_1_4);
+    // Qt's RHI creates its own VMA allocator for the adopted device using this instance
+    // API version, and the VMA bundled before Qt 6.10 hard-asserts on anything newer
+    // than 1.3 (VMA accepted 1.4 upstream only in 3.2.1). Cap at 1.3 on older Qt — the
+    // device negotiation below then routes 1.4-preferred capabilities through their 1.3
+    // extension fallbacks (VK_EXT_host_image_copy, VK_KHR_push_descriptor).
+    const uint32_t qtApiCap =
+        QLibraryInfo::version() >= QVersionNumber(6, 10, 0) ? VK_API_VERSION_1_4 : VK_API_VERSION_1_3;
+    instanceApiVersion_ = std::min(loaderVersion, qtApiCap);
 
     const QByteArrayList preferredExtensions = QQuickGraphicsConfiguration::preferredInstanceExtensions();
     instanceExtNames_.reserve(static_cast<std::size_t>(preferredExtensions.size()) + 2);
