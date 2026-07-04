@@ -112,6 +112,95 @@ private Q_SLOTS:
         QVERIFY((order[1]) == (VideoDecodeMode::CudaZeroCopy));
         QVERIFY((order[2]) == (VideoDecodeMode::Cuda));
     }
+
+    // ── CandidateVideoDecodeModes (menu list before availability probing) ─────────
+
+    void CandidateModesLeadWithOffThenAuto()
+    {
+        const auto modes = CandidateVideoDecodeModes();
+        QVERIFY((modes.size()) >= (2u));
+        QVERIFY((modes[0]) == (VideoDecodeMode::Off));
+        QVERIFY((modes[1]) == (VideoDecodeMode::Auto));
+    }
+
+    void CandidateModesOmitForeignPlatformBackends()
+    {
+        const auto modes = CandidateVideoDecodeModes();
+        const auto has = [&](VideoDecodeMode m) { return std::ranges::find(modes, m) != modes.end(); };
+        // Cross-vendor readback backends are platform-specific — the list must never
+        // offer the other platform's native backend (the reported "d3d11va on Linux").
+#if defined(_WIN32)
+        QVERIFY(has(VideoDecodeMode::D3D11VA));
+        QVERIFY(has(VideoDecodeMode::DXVA2));
+        QVERIFY(!has(VideoDecodeMode::VAAPI));
+#else
+        QVERIFY(has(VideoDecodeMode::VAAPI));
+        QVERIFY(!has(VideoDecodeMode::D3D11VA));
+        QVERIFY(!has(VideoDecodeMode::DXVA2));
+#endif
+        // Cuda is a candidate everywhere (availability is decided later by the probe).
+        QVERIFY(has(VideoDecodeMode::Cuda));
+    }
+
+    void CandidateModesHonourVulkanBuildFlag()
+    {
+        const auto modes = CandidateVideoDecodeModes();
+        const auto has = [&](VideoDecodeMode m) { return std::ranges::find(modes, m) != modes.end(); };
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        QVERIFY(has(VideoDecodeMode::VulkanZeroCopy));
+        QVERIFY(has(VideoDecodeMode::Vulkan));
+#else
+        QVERIFY(!has(VideoDecodeMode::VulkanZeroCopy));
+        QVERIFY(!has(VideoDecodeMode::Vulkan));
+#endif
+    }
+
+    // ── HwBackendForProbe (which device gates a mode) ─────────────────────────────
+
+    void ProbeMappingSendsZeroCopyVariantsToTheirBaseDevice()
+    {
+        // Unlike HwBackendFromVideoDecodeMode, the zero-copy variants map to a real
+        // backend so one av_hwdevice probe decides whether to offer them.
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::CudaZeroCopy)) == (HwBackend::Cuda));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::Cuda)) == (HwBackend::Cuda));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::D3D11VA)) == (HwBackend::D3D11VA));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::DXVA2)) == (HwBackend::DXVA2));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::VAAPI)) == (HwBackend::VAAPI));
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::VulkanZeroCopy)) == (HwBackend::Vulkan));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::Vulkan)) == (HwBackend::Vulkan));
+#endif
+    }
+
+    void ProbeMappingHasNoDeviceForOffAndAuto()
+    {
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::Off)) == (HwBackend::None));
+        QVERIFY((HwBackendForProbe(VideoDecodeMode::Auto)) == (HwBackend::None));
+    }
+
+    // ── IsKnownDecodeModeToken (reject a bogus FL_ACCEL_MODE) ─────────────────────
+
+    void KnownTokensAreAccepted()
+    {
+        for (const char* token :
+             {"off", "none", "software", "auto", "cuda", "nvdec", "cuvid", "cuda-zero-copy", "d3d11va", "dxva2",
+              "vaapi", "CUDA", "Auto"})
+        {
+            QVERIFY(IsKnownDecodeModeToken(token));
+        }
+#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
+        QVERIFY(IsKnownDecodeModeToken("vulkan"));
+        QVERIFY(IsKnownDecodeModeToken("vk"));
+        QVERIFY(IsKnownDecodeModeToken("vulkan-zero-copy"));
+#endif
+    }
+
+    void GarbageTokensAreRejected()
+    {
+        QVERIFY(!IsKnownDecodeModeToken("bogus"));
+        QVERIFY(!IsKnownDecodeModeToken(""));
+        QVERIFY(!IsKnownDecodeModeToken("nvidia"));
+    }
 };
 
 namespace

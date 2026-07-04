@@ -6,8 +6,10 @@
 #include "GraphicsApi.h"
 #include "IGraphicsBackend.h"
 #include "LogBuffer.h"
+#include "PlaybackSettings.h"
 #include "QtAppWindow.h"
 #include "TestMediaGenerator.h"
+#include "VideoDecodeMode.h"
 #if FRAMELIFT_MODULE_WIN_SHELL
 #include "WinShell.h"
 #endif
@@ -26,9 +28,11 @@
 #endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ranges>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace
@@ -199,6 +203,10 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<IVideoOutput>(player_.get());
     moduleCtx_->RegisterService<IAudioControl>(player_.get());
     moduleCtx_->RegisterService<ISubtitleControl>(player_.get());
+    // Machine-level decode-mode availability (probes the GPU/driver), so the
+    // Settings menu never offers a mode that would silently fall back to software.
+    videoDecodeCaps_ = std::make_unique<VideoDecodeCaps>();
+    moduleCtx_->RegisterService<IVideoDecodeCaps>(videoDecodeCaps_.get());
     // The one QtAppWindow is registered under each plugin-visible window facet it implements.
     moduleCtx_->RegisterService<IAppWindow>(appWindow_.get());
     moduleCtx_->RegisterService<IEventPump>(appWindow_.get());
@@ -346,7 +354,61 @@ void App::LoadPlugins()
     moduleCtx_->Settings().SaveSettings();
 
     settings_.ApplyLaunchEnvironmentOverrides();
+    ValidateDecodeModeSelection();
     ffmpeg_->ApplySettings(settings_);
+}
+
+void App::ValidateDecodeModeSelection()
+{
+    if (!videoDecodeCaps_)
+    {
+        return;
+    }
+
+    const char* env = std::getenv("FL_ACCEL_MODE");
+    const bool haveEnv = env && env[0];
+
+    // An explicit env override with a token we don't recognize fails loud, before we
+    // even bother probing — the user asked for a backend that doesn't exist.
+    if (haveEnv && !IsKnownDecodeModeToken(env))
+    {
+        Log::Error("FL_ACCEL_MODE=\"{}\" is not a recognized acceleration mode", env);
+        throw std::runtime_error("FL_ACCEL_MODE: unrecognized acceleration mode");
+    }
+
+    PlaybackSettings& playback = settings_.Get<PlaybackSettings>();
+    // The env override already rewrote hwdecMode; either way it holds the effective value.
+    const std::string& token = playback.hwdecMode;
+    const VideoDecodeMode mode = VideoDecodeModeFromString(token);
+    if (mode == VideoDecodeMode::Off || mode == VideoDecodeMode::Auto)
+    {
+        return; // never needs a hardware device — skip the (costly) GPU probe entirely
+    }
+
+    // A specific hardware mode is selected — now probe what the machine can honor.
+    std::unordered_set<std::string> available;
+    videoDecodeCaps_->EnumerateAvailableModes(
+        [](const char* t, void* ud)
+        {
+            static_cast<std::unordered_set<std::string>*>(ud)->emplace(t);
+        },
+        &available
+    );
+    if (available.contains(VideoDecodeModeName(mode)))
+    {
+        return; // available — honor it
+    }
+
+    if (haveEnv)
+    {
+        // Explicit override the machine can't satisfy: fail loud, don't silently degrade.
+        Log::Error("FL_ACCEL_MODE=\"{}\" is not available on this machine (no compatible GPU/driver)", token);
+        throw std::runtime_error("FL_ACCEL_MODE: acceleration mode unavailable on this machine");
+    }
+    // Persisted value (settings.ini): self-heal to auto so the app still starts —
+    // hard-failing here would leave it unfixable via the in-app Settings menu.
+    Log::Error("playback.hwdecMode=\"{}\" is not available on this machine; falling back to auto", token);
+    playback.hwdecMode = VideoDecodeModeName(VideoDecodeMode::Auto);
 }
 
 // ── Renderables ───────────────────────────────────────────────────────────────

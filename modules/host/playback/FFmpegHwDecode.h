@@ -43,6 +43,14 @@ inline std::vector<HwBackend> PreferredHwBackends()
 #endif
 }
 
+// True if a hardware device for `backend` can actually be created on this machine
+// (driver present + GPU supports it). Creates and immediately discards the device
+// via av_hwdevice_ctx_create — the same test TryEnableBackend relies on — so it
+// reflects real availability, not just what FFmpeg was compiled with. Costs tens of
+// ms on success; callers should cache. HwBackend::None returns false. Defined in the
+// .cpp (touches libav); declared here (not inline) so the header stays libav-free.
+bool ProbeHwBackendAvailable(HwBackend backend);
+
 // Human-readable backend name (the conventional FFmpeg hwaccel strings the
 // DebugOverlay/Benchmark plugins display); "" for None.
 inline const char* HwBackendName(HwBackend backend)

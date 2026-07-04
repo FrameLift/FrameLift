@@ -1,9 +1,11 @@
 #pragma once
 
 #include <framelift/core.h>
+#include <framelift/platform.h>
 #include <framelift/services.h>
 
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 #include <QtCore/QVariant>
 #include <QtCore/QVariantList>
 #include <memory>
@@ -48,6 +50,10 @@ public:
     // bind individual fields instead of iterating the generic `fields` list.
     Q_INVOKABLE QVariant fieldValue(const QString& key) const;
     Q_INVOKABLE void setFieldValue(const QString& key, const QVariant& value);
+    // Acceleration modes the machine can actually use (for the Playback page's mode
+    // combobox), so it never offers e.g. cuda on an Intel GPU. Delegates to the host
+    // IVideoDecodeCaps probe via the owning module.
+    Q_INVOKABLE QStringList availableHwdecModes() const;
     Q_INVOKABLE void save();
     Q_INVOKABLE void reset();
 
@@ -215,6 +221,13 @@ public:
     // Draft value for a key as a typed QVariant (type resolved from the registered
     // field). Returns an invalid QVariant for unknown keys.
     [[nodiscard]] QVariant FieldValue(const QString& key);
+
+    // Available acceleration-mode tokens for the Playback page, from the host
+    // IVideoDecodeCaps probe (off/auto plus GPU-creatable backends). The currently
+    // persisted playback.hwdecMode is always included so a stale-but-configured value
+    // stays visible rather than snapping to off. Falls back to the full static list
+    // when the service is unavailable.
+    [[nodiscard]] QStringList AvailableHwdecModes();
 
     // ── Keybinds page support ────────────────────────────────────────────────
     // All keybind edits are drafts (core in model_, plugin in pluginKeybinds_) and
