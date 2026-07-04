@@ -13,8 +13,8 @@ void VideoDecodeCaps::EnsureProbed() const
     }
     probed_ = true;
 
-    // Probe each distinct hardware backend at most once — several modes (e.g. cuda
-    // and cuda-zero-copy) share one device, so cache the per-backend result. Indexed
+    // Probe each distinct hardware backend at most once — several modes (e.g. vulkan
+    // and vulkan-zero-copy) share one device, so cache the per-backend result. Indexed
     // by HwBackend enum value (None..VAAPI ⇒ 0..5).
     bool probedResult[8] = {};
     bool haveResult[8] = {};

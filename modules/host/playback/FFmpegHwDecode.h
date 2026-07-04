@@ -106,8 +106,7 @@ public:
     // used by explicit user-selected modes such as "Vulkan" or "CUDA". When `cache`
     // is given, a matching cached device is reused instead of created, and a newly
     // created one is stored back for the next file.
-    bool TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend,
-                          HwDeviceCache* cache = nullptr);
+    bool TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend, HwDeviceCache* cache = nullptr);
 
     // Zero-copy variant (#18): arm `dec` for AV_HWDEVICE_TYPE_VULKAN, WRAPPING the
     // renderer's already-created device (`vkDevice`, owned by the caller) so decoded
@@ -116,10 +115,6 @@ public:
     // backends or software. Decoded frames keep ->format == AV_PIX_FMT_VULKAN and must
     // NOT go through MapToSoftware.
     bool TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, AVBufferRef* vkDevice);
-
-    // CUDA no-readback is a renderer interop path, not just a decoder flag. It is
-    // deliberately separate from TryEnableBackend(Cuda), which downloads to CPU.
-    bool TryEnableCudaZeroCopy(const AVCodec* codec, AVCodecContext* dec, bool warn);
 
     [[nodiscard]] bool Active() const
     {

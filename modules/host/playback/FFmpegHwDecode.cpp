@@ -50,8 +50,7 @@ enum AVPixelFormat GetFormatCb(AVCodecContext* ctx, const enum AVPixelFormat* fm
                 return *p;
             }
         }
-        Log::Warn("FFmpegHwDecode: decoder did not offer the {} surface format; using software",
-                  self->DeviceName());
+        Log::Warn("FFmpegHwDecode: decoder did not offer the {} surface format; using software", self->DeviceName());
     }
     return avcodec_default_get_format(ctx, fmts);
 }
@@ -106,8 +105,9 @@ bool FFmpegHwDecode::TryEnable(const AVCodec* codec, AVCodecContext* dec)
     return false; // no backend available — caller decodes in software
 }
 
-bool FFmpegHwDecode::TryEnableBackend(const AVCodec* codec, AVCodecContext* dec, HwBackend backend,
-                                      HwDeviceCache* cache)
+bool FFmpegHwDecode::TryEnableBackend(
+    const AVCodec* codec, AVCodecContext* dec, HwBackend backend, HwDeviceCache* cache
+)
 {
     if (!codec || !dec)
     {
@@ -214,17 +214,6 @@ bool FFmpegHwDecode::TryEnableVulkan(const AVCodec* codec, AVCodecContext* dec, 
     dec->get_format = GetFormatCb;
     Log::Debug("FFmpegHwDecode: zero-copy Vulkan video decode");
     return true;
-}
-
-bool FFmpegHwDecode::TryEnableCudaZeroCopy(const AVCodec* codec, AVCodecContext* dec, bool warn)
-{
-    (void)codec;
-    (void)dec;
-    if (warn)
-    {
-        Log::Warn("FFmpegHwDecode: CUDA zero-copy/no-readback renderer interop is not available in this build");
-    }
-    return false;
 }
 
 AVFrame* FFmpegHwDecode::MapToSoftware(AVFrame* src, AVFrame* dst)

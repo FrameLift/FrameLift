@@ -19,7 +19,6 @@ enum class VideoDecodeMode : int
     Auto,
     VulkanZeroCopy,
     Vulkan,
-    CudaZeroCopy,
     Cuda,
     D3D11VA,
     DXVA2,
@@ -29,7 +28,13 @@ enum class VideoDecodeMode : int
 inline std::string NormalizeDecodeModeToken(std::string_view value)
 {
     std::string out(value);
-    std::ranges::transform(out, out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::ranges::transform(
+        out, out.begin(),
+        [](unsigned char c)
+        {
+            return static_cast<char>(std::tolower(c));
+        }
+    );
     return out;
 }
 
@@ -50,10 +55,6 @@ inline VideoDecodeMode VideoDecodeModeFromString(std::string_view value)
         return VideoDecodeMode::Vulkan;
     }
 #endif
-    if (mode == "cuda-zero-copy" || mode == "cuda_zero_copy" || mode == "cudazerocopy")
-    {
-        return VideoDecodeMode::CudaZeroCopy;
-    }
     if (mode == "cuda" || mode == "nvdec" || mode == "cuvid")
     {
         return VideoDecodeMode::Cuda;
@@ -91,8 +92,6 @@ inline const char* VideoDecodeModeName(VideoDecodeMode mode)
 #else
         break;
 #endif
-    case VideoDecodeMode::CudaZeroCopy:
-        return "cuda-zero-copy";
     case VideoDecodeMode::Cuda:
         return "cuda";
     case VideoDecodeMode::D3D11VA:
@@ -133,29 +132,35 @@ inline HwBackend HwBackendFromVideoDecodeMode(VideoDecodeMode mode)
     case VideoDecodeMode::Off:
     case VideoDecodeMode::Auto:
     case VideoDecodeMode::VulkanZeroCopy:
-    case VideoDecodeMode::CudaZeroCopy:
         break;
     }
     return HwBackend::None;
 }
 
-inline std::array<VideoDecodeMode, 6> AutoVideoDecodePreference()
+inline std::array<VideoDecodeMode, 5> AutoVideoDecodePreference()
 {
 #if defined(_WIN32)
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    return {VideoDecodeMode::VulkanZeroCopy, VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda,
-            VideoDecodeMode::D3D11VA,        VideoDecodeMode::DXVA2,        VideoDecodeMode::Off};
+    return {
+        VideoDecodeMode::VulkanZeroCopy, VideoDecodeMode::Cuda, VideoDecodeMode::D3D11VA, VideoDecodeMode::DXVA2,
+        VideoDecodeMode::Off
+    };
 #else
-    return {VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda,  VideoDecodeMode::D3D11VA,
-            VideoDecodeMode::DXVA2,        VideoDecodeMode::Off,   VideoDecodeMode::Off};
+    return {
+        VideoDecodeMode::Cuda, VideoDecodeMode::D3D11VA, VideoDecodeMode::DXVA2, VideoDecodeMode::Off,
+        VideoDecodeMode::Off
+    };
 #endif
 #else
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    return {VideoDecodeMode::VulkanZeroCopy, VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda,
-            VideoDecodeMode::VAAPI,          VideoDecodeMode::Off,          VideoDecodeMode::Off};
+    return {
+        VideoDecodeMode::VulkanZeroCopy, VideoDecodeMode::Cuda, VideoDecodeMode::VAAPI, VideoDecodeMode::Off,
+        VideoDecodeMode::Off
+    };
 #else
-    return {VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda, VideoDecodeMode::VAAPI,
-            VideoDecodeMode::Off,          VideoDecodeMode::Off,  VideoDecodeMode::Off};
+    return {
+        VideoDecodeMode::Cuda, VideoDecodeMode::VAAPI, VideoDecodeMode::Off, VideoDecodeMode::Off, VideoDecodeMode::Off
+    };
 #endif
 #endif
 }
@@ -174,7 +179,6 @@ inline std::vector<VideoDecodeMode> CandidateVideoDecodeModes()
     modes.push_back(VideoDecodeMode::VulkanZeroCopy);
     modes.push_back(VideoDecodeMode::Vulkan);
 #endif
-    modes.push_back(VideoDecodeMode::CudaZeroCopy);
     modes.push_back(VideoDecodeMode::Cuda);
 #if defined(_WIN32)
     modes.push_back(VideoDecodeMode::D3D11VA);
@@ -202,7 +206,6 @@ inline HwBackend HwBackendForProbe(VideoDecodeMode mode)
 #else
         break;
 #endif
-    case VideoDecodeMode::CudaZeroCopy:
     case VideoDecodeMode::Cuda:
         return HwBackend::Cuda;
     case VideoDecodeMode::D3D11VA:
@@ -230,14 +233,13 @@ inline bool IsKnownDecodeModeToken(std::string_view value)
         return true;
     }
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-    if (mode == "vulkan-zero-copy" || mode == "vulkan_zero_copy" || mode == "vulkanzerocopy" ||
-        mode == "vulkan" || mode == "vk")
+    if (mode == "vulkan-zero-copy" || mode == "vulkan_zero_copy" || mode == "vulkanzerocopy" || mode == "vulkan" ||
+        mode == "vk")
     {
         return true;
     }
 #endif
-    if (mode == "cuda-zero-copy" || mode == "cuda_zero_copy" || mode == "cudazerocopy" || mode == "cuda" ||
-        mode == "nvdec" || mode == "cuvid")
+    if (mode == "cuda" || mode == "nvdec" || mode == "cuvid")
     {
         return true;
     }
