@@ -18,6 +18,7 @@ namespace
 {
 using GLenum = unsigned int;
 using GLbitfield = unsigned int;
+using GLboolean = unsigned char;
 using GLuint = unsigned int;
 using GLint = int;
 using GLsizei = int;
@@ -45,10 +46,12 @@ constexpr GLenum GL_UNPACK_ALIGNMENT = 0x0CF5;
 constexpr GLenum GL_BLEND = 0x0BE2;
 constexpr GLenum GL_SRC_ALPHA = 0x0302;
 constexpr GLenum GL_ONE_MINUS_SRC_ALPHA = 0x0303;
+constexpr GLenum GL_FRAMEBUFFER_SRGB = 0x8DB9;
 
 using PFNViewport = void (*)(GLint, GLint, GLsizei, GLsizei);
 using PFNEnable = void (*)(GLenum);
 using PFNDisable = void (*)(GLenum);
+using PFNIsEnabled = GLboolean (*)(GLenum);
 using PFNBlendFunc = void (*)(GLenum, GLenum);
 using PFNClearColor = void (*)(GLfloat, GLfloat, GLfloat, GLfloat);
 using PFNClear = void (*)(GLbitfield);
@@ -121,6 +124,7 @@ struct GlVideoRenderer::Impl
     PFNViewport Viewport = nullptr;
     PFNEnable Enable = nullptr;
     PFNDisable Disable = nullptr;
+    PFNIsEnabled IsEnabled = nullptr;
     PFNBlendFunc BlendFunc = nullptr;
     PFNClearColor ClearColor = nullptr;
     PFNClear Clear = nullptr;
@@ -178,6 +182,7 @@ bool GlVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void*), 
     ok &= Resolve(Viewport, getProc, ud, "glViewport");
     ok &= Resolve(Enable, getProc, ud, "glEnable");
     ok &= Resolve(Disable, getProc, ud, "glDisable");
+    ok &= Resolve(IsEnabled, getProc, ud, "glIsEnabled");
     ok &= Resolve(BlendFunc, getProc, ud, "glBlendFunc");
     ok &= Resolve(ClearColor, getProc, ud, "glClearColor");
     ok &= Resolve(Clear, getProc, ud, "glClear");
@@ -310,7 +315,8 @@ bool GlVideoRenderer::Init(IGraphicsBackend* backend)
 
     // Adapter so the internal loader keeps its (name, ud) shape: resolve every GL
     // entry point through the backend's proc loader.
-    const auto getProcAddr = [](const char* name, void* ud) -> void* {
+    const auto getProcAddr = [](const char* name, void* ud) -> void*
+    {
         return static_cast<IGraphicsBackend*>(ud)->GetProcAddr(name);
     };
 
@@ -326,7 +332,8 @@ bool GlVideoRenderer::Init(IGraphicsBackend* backend)
 
     impl->GenVertexArrays(1, &impl->vao);
 
-    const auto allocTexture = [&](GLuint tex) {
+    const auto allocTexture = [&](GLuint tex)
+    {
         impl->BindTexture(GL_TEXTURE_2D, tex);
         impl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         impl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -397,6 +404,18 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
         return;
     }
 
+    // Qt's RHI GL backend can leave GL_FRAMEBUFFER_SRGB enabled after rendering
+    // blended scene-graph content (e.g. once a translucent overlay panel is shown).
+    // With the single-threaded "basic" render loop the context is reused, so that
+    // enable leaks into this raw-GL blit and re-encodes our already-gamma-encoded
+    // pixels through the sRGB OETF — the video visibly brightens. Our RGBA is written
+    // verbatim to a non-sRGB target, so force the state we depend on and restore it
+    // afterwards (changedStates() can't cover framebuffer-sRGB). Disable blend too so
+    // the opaque video quad can't inherit a leaked blend-enable.
+    const bool wasSrgb = impl_->IsEnabled(GL_FRAMEBUFFER_SRGB) != 0;
+    impl_->Disable(GL_FRAMEBUFFER_SRGB);
+    impl_->Disable(GL_BLEND);
+
     // Clear the whole framebuffer to black first (covers the letterbox bars).
     impl_->Viewport(0, 0, fbW, fbH);
     impl_->ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -404,6 +423,10 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
 
     if (!impl_->hasFrame || impl_->texW <= 0 || impl_->texH <= 0)
     {
+        if (wasSrgb)
+        {
+            impl_->Enable(GL_FRAMEBUFFER_SRGB);
+        }
         return;
     }
 
@@ -435,4 +458,8 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
     impl_->BindTexture(GL_TEXTURE_2D, 0);
     impl_->UseProgram(0);
     impl_->Viewport(0, 0, fbW, fbH);
+    if (wasSrgb)
+    {
+        impl_->Enable(GL_FRAMEBUFFER_SRGB);
+    }
 }
