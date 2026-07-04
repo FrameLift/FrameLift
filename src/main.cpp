@@ -18,17 +18,14 @@ int main(int argc, char* argv[])
     // Backend is chosen via FL_BACKEND before the Qt platform exists (see GraphicsApi.h).
     const GraphicsApi graphicsApi = GraphicsApiFromEnv();
 
-    // Qt does not draw client-side window decorations for Vulkan-RHI windows on Wayland,
-    // so a Vulkan window comes up with no title bar under GNOME/Mutter and other CSD
-    // compositors. Run the Vulkan path through XWayland (xcb), where the compositor draws
-    // server-side decorations. Only when the user hasn't pinned a platform themselves.
-#if defined(__linux__)
-    if (graphicsApi != GraphicsApi::OpenGL && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM") &&
-        !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
-    {
-        qputenv("QT_QPA_PLATFORM", "xcb");
-    }
-#endif
+    // Vulkan runs on the session's native platform (Wayland or X11), like the GL backend.
+    // We used to force the Vulkan path through XWayland (xcb) for server-side window
+    // decorations, but that made Qt request a DPR-scaled swapchain the XWayland surface
+    // caps rejected — vkCreateSwapchainKHR failed on fractional-scaled HiDPI displays.
+    // On native Wayland the swapchain is valid and rendering is crisp; Qt draws no
+    // decorations for Vulkan-RHI Wayland windows, so QtAppWindow supplies its own title
+    // bar in that one case (see needsCustomChrome there). A user-set QT_QPA_PLATFORM is
+    // still honored — this was the only override.
 
     QApplication::setOrganizationName("FrameLift");
     QApplication::setApplicationName("FrameLift");
