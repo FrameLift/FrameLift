@@ -70,6 +70,14 @@ private Q_SLOTS:
         QVERIFY((MostRecent(h)) == ("/movies/b.mkv"));
     }
 
+    void AddEntryIgnoresNullPath()
+    {
+        History h;
+        h.AddEntry("/a.mp4");
+        h.AddEntry(nullptr); // FileOpenedEvent::path defaults to null — a no-op, not UB
+        QVERIFY((MostRecent(h)) == ("/a.mp4"));
+    }
+
     void ReAddingDeduplicatesAndMovesToFront()
     {
         History h;
