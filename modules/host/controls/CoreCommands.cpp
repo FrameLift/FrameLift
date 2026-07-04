@@ -43,7 +43,10 @@ bool ParseInt(const char* text, int& value)
         return false;
     }
     const char* end = text + std::char_traits<char>::length(text);
-    const auto [ptr, ec] = std::from_chars(text, end, value);
+    // std::from_chars rejects a leading '+' (it accepts only '-'), which would
+    // silently break the documented "volume +N" relative-adjust syntax. Skip it.
+    const char* begin = text[0] == '+' ? text + 1 : text;
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
     return ec == std::errc{} && ptr == end;
 }
 
