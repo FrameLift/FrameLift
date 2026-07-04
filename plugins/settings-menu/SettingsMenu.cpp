@@ -1282,7 +1282,6 @@ void SettingsMenu::SetCapturing(const bool v)
     isCapturing_ = v;
     if (!v)
     {
-        capturingDraft_ = nullptr;
         capturingName_.clear();
     }
 }
@@ -1335,12 +1334,14 @@ std::string* SettingsMenu::DraftForAction(const std::string& action)
 void SettingsMenu::BeginCapture(const QString& action, const int slot)
 {
     const std::string name = action.toStdString();
-    std::string* draft = DraftForAction(name);
-    if (!draft)
+    // Validate the action resolves to a draft slot now, but do NOT cache the
+    // pointer: the keybind model can be reseeded (its backing containers
+    // reallocated) between here and the key press. ApplyCanonicalKey re-resolves
+    // by name so it never writes through a stale pointer.
+    if (!DraftForAction(name))
     {
         return;
     }
-    capturingDraft_ = draft;
     capturingName_ = name;
     capturingSlot_ = slot;
     keybindConflict_.clear();
@@ -1384,7 +1385,7 @@ void SettingsMenu::CaptureKey(const int qtKey, const int qtMods)
 
 void SettingsMenu::ApplyCanonicalKey(const std::string& keyStr)
 {
-    if (!isCapturing_ || !capturingDraft_)
+    if (!isCapturing_)
     {
         return;
     }
@@ -1392,6 +1393,15 @@ void SettingsMenu::ApplyCanonicalKey(const std::string& keyStr)
     // stay in capture so the user can press a real key.
     if (keyStr.empty() || keyStr.find('?') != std::string::npos)
     {
+        return;
+    }
+    // Re-resolve the draft slot fresh (see BeginCapture): the model may have been
+    // reseeded since capture began, so a cached pointer could dangle.
+    std::string* draft = DraftForAction(capturingName_);
+    if (!draft)
+    {
+        SetCapturing(false);
+        Q_EMIT qmlChanged();
         return;
     }
 
@@ -1403,9 +1413,9 @@ void SettingsMenu::ApplyCanonicalKey(const std::string& keyStr)
         Q_EMIT qmlChanged();
         return;
     }
-    if (!keybinds::Contains(*capturingDraft_, keyStr))
+    if (!keybinds::Contains(*draft, keyStr))
     {
-        *capturingDraft_ = keybinds::SetSlot(*capturingDraft_, capturingSlot_, keyStr);
+        *draft = keybinds::SetSlot(*draft, capturingSlot_, keyStr);
         dirty_ = true;
     }
     keybindConflict_.clear();

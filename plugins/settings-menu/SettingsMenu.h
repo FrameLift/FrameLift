@@ -331,7 +331,6 @@ private:
 
     std::string capturingName_;
     int capturingSlot_ = 0;
-    std::string* capturingDraft_ = nullptr; // &model_.Str(coreKey) or &PluginKeybindDraft::draft
     std::string keybindConflict_;
 
     // ── QML pages cache ────────────────────────────────────────────────────────

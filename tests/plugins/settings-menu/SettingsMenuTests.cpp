@@ -256,6 +256,28 @@ private Q_SLOTS:
         QVERIFY((sm.SettingString("keybinds.togglePause")) == ("Ctrl+P"));
     }
 
+    void ReseedDuringCaptureResolvesFreshSlot()
+    {
+        Settings settings;
+        const TempFile ini;
+        ModuleContext ctx("pref/", &settings, ini.str());
+        SettingsMenu sm;
+        sm.Install(ctx);
+
+        // Begin capturing, then force the keybind model to be reseeded mid-capture:
+        // any read of the keybind list re-runs SeedFromContext while the page is not
+        // dirty, reallocating the container the capture target lives in. The key
+        // press must re-resolve the target slot by name rather than writing through
+        // a pointer cached at BeginCapture time (which would be a use-after-free).
+        sm.BeginCapture(QStringLiteral("togglePause"), 0);
+        QVERIFY(sm.Capturing());
+        (void)sm.CoreKeybindEntries(); // triggers RefreshFields -> SeedFromContext
+
+        sm.CaptureKey(static_cast<int>(Keys::P), static_cast<int>(Qt::ControlModifier));
+        QVERIFY(!(sm.Capturing()));
+        QVERIFY((sm.SettingString("keybinds.togglePause")) == ("Ctrl+P"));
+    }
+
     void RejectsKeyAlreadyBoundElsewhere()
     {
         Settings settings;
