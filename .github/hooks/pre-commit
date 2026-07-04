@@ -7,10 +7,13 @@
 # Requires clang-format on PATH (ships with LLVM / Visual Studio).
 # If not found the hook warns and lets the commit through unchanged.
 
-# ── Collect staged .cpp / .h files under src/, plugins/, sdk/ ─────────────────
+# ── Collect staged .cpp / .h files under src/, modules/, plugins/, sdk/, tests/ ─
 FILES=$(git diff --cached --name-only --diff-filter=ACMR \
-    -- 'src/*.cpp' 'src/*.h' 'plugins/*.cpp' 'plugins/*.h' \
-       'sdk/*.cpp' 'sdk/*.h' 'sdk/*.hpp')
+    -- 'src/*.cpp' 'src/*.h' 'src/*.hpp' \
+       'modules/*.cpp' 'modules/*.h' 'modules/*.hpp' \
+       'plugins/*.cpp' 'plugins/*.h' 'plugins/*.hpp' \
+       'sdk/*.cpp' 'sdk/*.h' 'sdk/*.hpp' \
+       'tests/*.cpp' 'tests/*.h' 'tests/*.hpp')
 [ -z "$FILES" ] && exit 0
 
 # ── Soft-fail when clang-format is unavailable ────────────────────────────────
