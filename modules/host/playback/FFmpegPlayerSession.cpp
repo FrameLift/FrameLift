@@ -245,8 +245,9 @@ void FFmpegPlayer::OpenVideoDecoder(SessionContext& ctx)
     }
 }
 
-bool FFmpegPlayer::BindSelectedTracks(const std::string& path, SessionContext& ctx,
-                                      std::future<std::vector<ExternalSource>>& sidecarScan)
+bool FFmpegPlayer::BindSelectedTracks(
+    const std::string& path, SessionContext& ctx, std::future<std::vector<ExternalSource>>& sidecarScan
+)
 {
     // Collect the sidecar scan launched at the top of PlayFile (usually finished
     // long ago, hidden behind the container open/probe) and build the track list.
@@ -708,7 +709,7 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         return false;
     }
 
-    const auto tryMode = [&](VideoDecodeMode mode, bool warnUnavailable) -> bool
+    const auto tryMode = [&](VideoDecodeMode mode) -> bool
     {
         switch (mode)
         {
@@ -727,8 +728,6 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         case VideoDecodeMode::DXVA2:
         case VideoDecodeMode::VAAPI:
             return hw.TryEnableBackend(codec, dec, HwBackendFromVideoDecodeMode(mode), &hwDeviceCache_);
-        case VideoDecodeMode::CudaZeroCopy:
-            return hw.TryEnableCudaZeroCopy(codec, dec, warnUnavailable);
         case VideoDecodeMode::Off:
         case VideoDecodeMode::Auto:
             break;
@@ -743,7 +742,7 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
     }
     if (mode != VideoDecodeMode::Auto)
     {
-        return tryMode(mode, true);
+        return tryMode(mode);
     }
 
     for (const VideoDecodeMode candidate : AutoVideoDecodePreference())
@@ -752,14 +751,7 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         {
             break;
         }
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-        // Vulkan video decode faults on the NVIDIA driver; let Auto fall through to NVDEC.
-        if (candidate == VideoDecodeMode::VulkanZeroCopy && vulkanAdapterIsNvidia_)
-        {
-            continue;
-        }
-#endif
-        if (tryMode(candidate, false))
+        if (tryMode(candidate))
         {
             return true;
         }

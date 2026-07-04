@@ -1230,7 +1230,7 @@ QStringList SettingsMenu::AvailableHwdecModes()
     if (modes.isEmpty())
     {
         // Service unavailable — fall back to the full static list so the combobox still works.
-        modes = {"off", "auto", "cuda-zero-copy", "cuda", "d3d11va", "dxva2", "vaapi"};
+        modes = {"off", "auto", "cuda", "d3d11va", "dxva2", "vaapi"};
     }
     // Keep a persisted-but-now-unavailable selection visible instead of snapping to off.
     const QString current = FieldValue("playback.hwdecMode").toString();

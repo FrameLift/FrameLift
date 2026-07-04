@@ -81,8 +81,7 @@ private Q_SLOTS:
     {
         for (const VideoDecodeMode mode :
              {VideoDecodeMode::Off, VideoDecodeMode::Auto, VideoDecodeMode::VulkanZeroCopy, VideoDecodeMode::Vulkan,
-              VideoDecodeMode::CudaZeroCopy, VideoDecodeMode::Cuda, VideoDecodeMode::D3D11VA, VideoDecodeMode::DXVA2,
-              VideoDecodeMode::VAAPI})
+              VideoDecodeMode::Cuda, VideoDecodeMode::D3D11VA, VideoDecodeMode::DXVA2, VideoDecodeMode::VAAPI})
         {
             QVERIFY((VideoDecodeModeFromString(VideoDecodeModeName(mode))) == (mode));
         }
@@ -101,16 +100,14 @@ private Q_SLOTS:
         QVERIFY((HwBackendFromVideoDecodeMode(VideoDecodeMode::DXVA2)) == (HwBackend::DXVA2));
         QVERIFY((HwBackendFromVideoDecodeMode(VideoDecodeMode::VAAPI)) == (HwBackend::VAAPI));
         QVERIFY((HwBackendFromVideoDecodeMode(VideoDecodeMode::VulkanZeroCopy)) == (HwBackend::None));
-        QVERIFY((HwBackendFromVideoDecodeMode(VideoDecodeMode::CudaZeroCopy)) == (HwBackend::None));
     }
 
     void AutoModePrefersGpuResidentModesBeforeReadback()
     {
         const auto order = AutoVideoDecodePreference();
-        QVERIFY((order.size()) >= (4u));
+        QVERIFY((order.size()) >= (3u));
         QVERIFY((order[0]) == (VideoDecodeMode::VulkanZeroCopy));
-        QVERIFY((order[1]) == (VideoDecodeMode::CudaZeroCopy));
-        QVERIFY((order[2]) == (VideoDecodeMode::Cuda));
+        QVERIFY((order[1]) == (VideoDecodeMode::Cuda));
     }
 
     // ── CandidateVideoDecodeModes (menu list before availability probing) ─────────
@@ -126,7 +123,10 @@ private Q_SLOTS:
     void CandidateModesOmitForeignPlatformBackends()
     {
         const auto modes = CandidateVideoDecodeModes();
-        const auto has = [&](VideoDecodeMode m) { return std::ranges::find(modes, m) != modes.end(); };
+        const auto has = [&](VideoDecodeMode m)
+        {
+            return std::ranges::find(modes, m) != modes.end();
+        };
         // Cross-vendor readback backends are platform-specific — the list must never
         // offer the other platform's native backend (the reported "d3d11va on Linux").
 #if defined(_WIN32)
@@ -145,7 +145,10 @@ private Q_SLOTS:
     void CandidateModesHonourVulkanBuildFlag()
     {
         const auto modes = CandidateVideoDecodeModes();
-        const auto has = [&](VideoDecodeMode m) { return std::ranges::find(modes, m) != modes.end(); };
+        const auto has = [&](VideoDecodeMode m)
+        {
+            return std::ranges::find(modes, m) != modes.end();
+        };
 #if FRAMELIFT_MODULE_GRAPHICS_VULKAN
         QVERIFY(has(VideoDecodeMode::VulkanZeroCopy));
         QVERIFY(has(VideoDecodeMode::Vulkan));
@@ -159,9 +162,8 @@ private Q_SLOTS:
 
     void ProbeMappingSendsZeroCopyVariantsToTheirBaseDevice()
     {
-        // Unlike HwBackendFromVideoDecodeMode, the zero-copy variants map to a real
-        // backend so one av_hwdevice probe decides whether to offer them.
-        QVERIFY((HwBackendForProbe(VideoDecodeMode::CudaZeroCopy)) == (HwBackend::Cuda));
+        // Unlike HwBackendFromVideoDecodeMode, the zero-copy variant maps to a real
+        // backend so one av_hwdevice probe decides whether to offer it.
         QVERIFY((HwBackendForProbe(VideoDecodeMode::Cuda)) == (HwBackend::Cuda));
         QVERIFY((HwBackendForProbe(VideoDecodeMode::D3D11VA)) == (HwBackend::D3D11VA));
         QVERIFY((HwBackendForProbe(VideoDecodeMode::DXVA2)) == (HwBackend::DXVA2));
@@ -183,8 +185,7 @@ private Q_SLOTS:
     void KnownTokensAreAccepted()
     {
         for (const char* token :
-             {"off", "none", "software", "auto", "cuda", "nvdec", "cuvid", "cuda-zero-copy", "d3d11va", "dxva2",
-              "vaapi", "CUDA", "Auto"})
+             {"off", "none", "software", "auto", "cuda", "nvdec", "cuvid", "d3d11va", "dxva2", "vaapi", "CUDA", "Auto"})
         {
             QVERIFY(IsKnownDecodeModeToken(token));
         }
