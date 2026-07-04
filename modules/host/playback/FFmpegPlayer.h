@@ -202,8 +202,9 @@ private:
     // Collect the sidecar scan (launched async at the top of PlayFile), build the
     // track list, bind the default audio/subtitle selections. False ⇒ nothing at
     // all plays (already emitted + cleaned up).
-    [[nodiscard]] bool BindSelectedTracks(const std::string& path, SessionContext& ctx,
-                                          std::future<std::vector<ExternalSource>>& sidecarScan);
+    [[nodiscard]] bool BindSelectedTracks(
+        const std::string& path, SessionContext& ctx, std::future<std::vector<ExternalSource>>& sidecarScan
+    );
     // Publish duration/title/FileLoaded (ends the "file-load-metadata" span).
     void PublishLoadedMetadata(const std::string& path, SessionContext& ctx);
     // Rebind audio/subtitle to a pending Select* request (workers are joined).
@@ -322,10 +323,6 @@ private:
     // CPU-RGBA8 path runs). vulkanZeroCopyAvailable_ gates per-file selection in PlayFile.
     AVBufferRef* vkHwDevice_ = nullptr;
     bool vulkanZeroCopyAvailable_ = false;
-    // FFmpeg's Vulkan video-decode backend faults (VK_ERROR_DEVICE_LOST) on the NVIDIA
-    // driver, so Auto mode must not auto-select it there — NVDEC/CUDA is NVIDIA's reliable
-    // path and comes next in AutoVideoDecodePreference(). Explicit VulkanZeroCopy still tries.
-    bool vulkanAdapterIsNvidia_ = false;
 #endif
 
     // Readback-path hardware decode device, kept alive across files so sequential

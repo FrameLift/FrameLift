@@ -45,14 +45,6 @@ void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
     {
         vkHwDevice_ = CreateVulkanHwDevice(vkInfo);
         vulkanZeroCopyAvailable_ = vkHwDevice_ != nullptr;
-        vulkanAdapterIsNvidia_ = backend->HasNvidiaAdapter();
-        if (vulkanZeroCopyAvailable_ && vulkanAdapterIsNvidia_)
-        {
-            Log::Debug(
-                "FFmpegPlayer: NVIDIA adapter — Auto decode prefers NVDEC over Vulkan zero-copy "
-                "(VK_ERROR_DEVICE_LOST on the NVIDIA Vulkan video backend)"
-            );
-        }
     }
 #endif
 }

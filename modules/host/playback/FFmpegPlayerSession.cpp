@@ -751,13 +751,6 @@ bool FFmpegPlayer::TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext*
         {
             break;
         }
-#if FRAMELIFT_MODULE_GRAPHICS_VULKAN
-        // Vulkan video decode faults on the NVIDIA driver; let Auto fall through to NVDEC.
-        if (candidate == VideoDecodeMode::VulkanZeroCopy && vulkanAdapterIsNvidia_)
-        {
-            continue;
-        }
-#endif
         if (tryMode(candidate))
         {
             return true;
