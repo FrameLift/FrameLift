@@ -143,6 +143,24 @@ jobs:
           # after windeployqt so FrameLift's FFmpeg wins any filename overlap
           # with Qt Multimedia's backend runtime.
           cp "$BUILD_DIR"/vcpkg_installed/$VCPKG_TRIPLET/bin/*.dll "$STAGE/"
+          # Bundle the MSVC C runtime next to framelift.exe so the app runs on a
+          # clean machine without a system-wide VC++ Redistributable. The build uses
+          # the dynamic CRT (/MD, matching the prebuilt Qt and vcpkg FFmpeg/libass),
+          # and windeployqt only drops the vc_redist *installer*, never the loose
+          # DLLs — so copy them from the VS redist folder here.
+          CRT_DIR="$(ls -d "$VCToolsRedistDir"/x64/Microsoft.VC*.CRT 2>/dev/null | head -1)"
+          if [ -z "$CRT_DIR" ]; then
+            VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            VS_ROOT="$("$VSWHERE" -latest -property installationPath)"
+            CRT_DIR="$(ls -d "$VS_ROOT"/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT 2>/dev/null | head -1)"
+          fi
+          echo "CRT redist: $CRT_DIR"
+          if [ -z "$CRT_DIR" ] || [ ! -d "$CRT_DIR" ]; then
+            echo "ERROR: could not locate the MSVC CRT redist folder" >&2
+            exit 1
+          fi
+          cp "$CRT_DIR"/vcruntime140*.dll "$STAGE/"   # vcruntime140.dll (+ _1 for C++ EH on x64)
+          cp "$CRT_DIR"/msvcp140*.dll "$STAGE/"       # msvcp140.dll (+ _1/_2 if present)
           (cd "$STAGE" && 7z a "$GITHUB_WORKSPACE/$BUILD_DIR/FrameLift-win64.zip" .)
           # The SDK is packaged by the dedicated `build-sdk` job.
       - name: Upload artifact
