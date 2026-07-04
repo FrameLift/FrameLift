@@ -98,6 +98,8 @@ set(_FRAMELIFT_HOST_WINDOW_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/QtAppWindow.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/QmlCompositor.cpp"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/QmlCompositor.h"
+        "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/WindowChrome.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/WindowChrome.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoItem.cpp"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoItem.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoRenderNode.cpp"

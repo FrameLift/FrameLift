@@ -1,5 +1,6 @@
 #include "QtAppWindow.h"
 #include "VideoItem.h"
+#include "WindowChrome.h"
 #include "util.h"
 
 #include <framelift/Log.h>
@@ -8,11 +9,15 @@
 #include <QtCore/QEvent>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QString>
+#include <QtCore/QUrl>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QScreen>
+#include <QtQml/QQmlComponent>
+#include <QtQml/QQmlContext>
+#include <QtQml/QQmlEngine>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
 
@@ -153,7 +158,13 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
     // QML surface at 0x0 for the first frame.
     const auto applyWindowProps = [&](QQuickWindow* w)
     {
-        w->setFlags(Qt::Window);
+        // Qt draws no client-side decorations for a Vulkan-RHI window on Wayland (GL and
+        // every other platform are fine). In exactly that case go frameless and supply our
+        // own title bar below; recomputed here so the GL-fallback path (which re-runs this
+        // with backend_ == GL) correctly keeps native decorations.
+        needsCustomChrome_ = std::strcmp(backend_->Name(), "Vulkan") == 0 &&
+                             QGuiApplication::platformName().contains(QStringLiteral("wayland"), Qt::CaseInsensitive);
+        w->setFlags(needsCustomChrome_ ? (Qt::Window | Qt::FramelessWindowHint) : Qt::Window);
         w->setTitle(QString::fromUtf8(title_.c_str()));
         w->resize(width, height);
         w->setColor(Qt::black);
@@ -188,6 +199,10 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
     videoItem_ = new VideoItem(window_->contentItem());
     videoItem_->setZ(0);
     qmlCompositor_ = std::make_unique<QmlCompositor>(window_->contentItem());
+    if (needsCustomChrome_)
+    {
+        SetupCustomChrome();
+    }
     SyncVideoItemSize();
     connect(
         window_, &QQuickWindow::widthChanged, this,
@@ -258,9 +273,62 @@ void QtAppWindow::SyncVideoItemSize()
 {
     if (videoItem_ && window_)
     {
-        videoItem_->setPosition(QPointF(0, 0));
-        videoItem_->setSize(QSizeF(window_->width(), window_->height()));
+        // chromeInset_ is 0 unless the fallback title bar reserves a top strip.
+        videoItem_->setPosition(QPointF(0, chromeInset_));
+        videoItem_->setSize(QSizeF(window_->width(), window_->height() - chromeInset_));
     }
+    if (chromeItem_ && window_)
+    {
+        // The chrome item spans the whole window (title strip + edge resize grips).
+        chromeItem_->setSize(QSizeF(window_->width(), window_->height()));
+    }
+}
+
+void QtAppWindow::SetupCustomChrome()
+{
+    chrome_ = std::make_unique<WindowChrome>(window_);
+    chrome_->SetTitle(QString::fromUtf8(title_.c_str()));
+
+    chromeEngine_ = std::make_unique<QQmlEngine>();
+    chromeContext_ = std::make_unique<QQmlContext>(chromeEngine_->rootContext());
+    chromeContext_->setContextProperty(QStringLiteral("chrome"), chrome_.get());
+
+    QQmlComponent component(chromeEngine_.get(), QUrl(QStringLiteral("qrc:/qt/qml/FrameLift/Controls/FLTitleBar.qml")));
+    QObject* object = component.create(chromeContext_.get());
+    chromeItem_ = qobject_cast<QQuickItem*>(object);
+    if (!chromeItem_)
+    {
+        // Non-fatal: fall back to an undecorated window rather than crashing.
+        Log::Error("QtAppWindow: title bar load failed: {}", component.errorString().toStdString());
+        delete object;
+        chrome_.reset();
+        needsCustomChrome_ = false;
+        return;
+    }
+
+    QQuickItem* content = window_->contentItem();
+    chromeItem_->setParentItem(content);
+    chromeItem_->setParent(content);
+    chromeItem_->setPosition(QPointF(0, 0));
+    chromeItem_->setSize(content->size());
+    chromeItem_->setZ(10000.0); // above every plugin surface (plugins use 1.0 + order)
+
+    // Reserve the strip below the bar for the video (plugin overlays stay full-window and
+    // draw under the opaque bar, which sits above them). Single source of truth for the
+    // height: the QML bar's own property.
+    barHeight_ = chromeItem_->property("barHeight").toReal();
+    chromeInset_ = barHeight_;
+
+    // FLTitleBar hides itself in fullscreen (visible: !chrome.fullscreen); drop the video
+    // inset to match so no black strip is left where the bar was.
+    connect(
+        window_, &QWindow::visibilityChanged, this,
+        [this]
+        {
+            chromeInset_ = IsFullscreen() ? 0.0 : barHeight_;
+            SyncVideoItemSize();
+        }
+    );
 }
 
 // ── Host wiring ───────────────────────────────────────────────────────────────
@@ -378,6 +446,10 @@ void QtAppWindow::SetTitle(const char* title) noexcept
     if (window_)
     {
         window_->setTitle(QString::fromUtf8(title_.c_str()));
+    }
+    if (chrome_)
+    {
+        chrome_->SetTitle(QString::fromUtf8(title_.c_str()));
     }
 }
 

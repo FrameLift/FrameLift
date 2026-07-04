@@ -11,8 +11,12 @@
 #include "QmlCompositor.h"
 
 class QQuickWindow;
+class QQuickItem;
+class QQmlEngine;
+class QQmlContext;
 class QEvent;
 class VideoItem;
+class WindowChrome;
 
 // Concrete window backed by Qt6 (Qt Quick). Implements the plugin-visible window/event
 // interfaces (IAppWindow / IEventPump) and, host-only, pref/base path resolution plus
@@ -99,6 +103,18 @@ private:
     std::unique_ptr<IGraphicsBackend> backend_;
     std::string title_;
 
+    // Fallback client-side window chrome, active only when Qt draws no native decorations
+    // (Vulkan-RHI on Wayland). When active the window is frameless, FLTitleBar.qml is
+    // composited on top, and the video + plugin surfaces are inset below it by
+    // chromeInset_ logical pixels. All zero/false on every other platform+backend.
+    bool needsCustomChrome_ = false;
+    qreal barHeight_ = 0.0;   // title-bar strip height (from FLTitleBar.qml), 0 when inactive
+    qreal chromeInset_ = 0.0; // video top inset: barHeight_ windowed, 0 in fullscreen
+    std::unique_ptr<WindowChrome> chrome_;
+    std::unique_ptr<QQmlEngine> chromeEngine_;
+    std::unique_ptr<QQmlContext> chromeContext_;
+    QQuickItem* chromeItem_ = nullptr; // child of window_->contentItem()
+
     std::function<void(const AppEvent&)> eventSink_;
     std::function<void()> playerWakeupHandler_;
     std::function<void()> graphicsInvalidatedHandler_;
@@ -108,4 +124,7 @@ private:
     uint32_t nextCustomType_ = 1;
 
     void SyncVideoItemSize();
+    // Instantiate the fallback title bar (FLTitleBar.qml + WindowChrome) and set the
+    // content inset. Called from the constructor only when needsCustomChrome_.
+    void SetupCustomChrome();
 };
