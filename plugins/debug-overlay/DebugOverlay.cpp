@@ -20,14 +20,20 @@ std::vector<framelift::Keybind> DebugOverlay::Keybinds()
 
 void DebugOverlay::OnInstall(IModuleContext& ctx)
 {
-    // Push-observe EOF so it arrives via OnMediaEvent (no synchronous getter).
-    // Pause/idle are already observed by the host. Seeking/paused-for-cache are
-    // deliberately NOT shown: they are transient and, for sparse streams, can stick
-    // (e.g. an empty subtitle queue keeps a worker "stalled"), which would wedge the
-    // status line at "Buffering" during normal playback.
+    // Push-observe the properties HandleMediaEvent consumes so they arrive via
+    // OnMediaEvent (no synchronous getter). Property emission is gated on a global
+    // observed-set, so we must observe these ourselves rather than rely on the
+    // Overlay plugin (which may be disabled) to do it — otherwise State/Time would
+    // freeze. IdleActive is always observed by the host. Seeking/paused-for-cache
+    // are deliberately NOT shown: they are transient and, for sparse streams, can
+    // stick (e.g. an empty subtitle queue keeps a worker "stalled"), which would
+    // wedge the status line at "Buffering" during normal playback.
     if (auto* props = ctx.GetService<IMediaProperties>())
     {
         props->ObserveProperty(PlayerProperty::EofReached);
+        props->ObserveProperty(PlayerProperty::Pause);
+        props->ObserveProperty(PlayerProperty::TimePos);
+        props->ObserveProperty(PlayerProperty::Duration);
     }
 
     refreshTimer_ = new QTimer(this);
