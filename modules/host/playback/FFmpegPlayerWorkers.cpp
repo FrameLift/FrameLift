@@ -8,6 +8,7 @@
 #include "FFmpegFilters.h"
 #include "FFmpegHwDecode.h"
 #include "FFmpegPacketQueue.h"
+#include "SwsColorspace.h"
 
 #include <algorithm>
 #include <chrono>
@@ -146,8 +147,7 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
                 lock, slice,
                 [this]
                 {
-                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_ ||
-                           paused_.load();
+                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_ || paused_.load();
                 }
             );
         }
@@ -241,6 +241,12 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     AVFrame* frame = av_frame_alloc();
     AVFrame* swFrame = av_frame_alloc(); // reused readback target for hardware frames
     SwsContext* sws = nullptr;
+    // Track what sws_setColorspaceDetails() was last applied to so we only reconfigure
+    // the YUV→RGB matrix / input range when the context is (re)created or the source
+    // frame's colorspace/range actually changes (both are stable across a stream).
+    SwsContext* swsConfigured = nullptr;
+    int swsCoeff = -1;
+    int swsSrcRange = -1;
     std::vector<uint8_t> rgba(static_cast<size_t>(dstW) * dstH * 4);
     bool sentReconfig = false;
     bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
@@ -403,17 +409,18 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             // the demuxer via queue backpressure — video consumption is what
             // un-parks the pipeline and restores audio delivery — so present it
             // and let the clock re-anchor when audio recovers.
-            const double heldSec =
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
+            const double heldSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
             if (!paused_.load() && ShouldBreakFrameHold(heldSec, master - masterAtHold, kFrameHoldLimit))
             {
                 mistimedFrames_.fetch_add(1);
                 if (!clockStallWarned)
                 {
                     clockStallWarned = true;
-                    Log::Warn("FFmpegPlayer: master clock stalled (held frame {}s at clock {}); presenting to "
-                              "keep the pipeline alive",
-                              heldSec, master);
+                    Log::Warn(
+                        "FFmpegPlayer: master clock stalled (held frame {}s at clock {}); presenting to "
+                        "keep the pipeline alive",
+                        heldSec, master
+                    );
                 }
                 heldByWatchdog = true;
                 break;
@@ -489,6 +496,24 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             if (!sws)
             {
                 return false;
+            }
+
+            // Honour the frame's colorspace/range so the YUV→RGB matrix matches the
+            // stream (swscale otherwise defaults to BT.601 + limited-range input for
+            // everything, which darkens/cools HD and full-range clips). The Vulkan path
+            // already does this via VulkanColorMapping; this brings the software/GL path
+            // in line. No-op for RGB inputs. Reapply only on a real change.
+            const int coeff = SwsColorspace::ResolveCoefficients(f->colorspace, f->height);
+            const int srcRange = SwsColorspace::FullRange(f->color_range);
+            if (sws != swsConfigured || coeff != swsCoeff || srcRange != swsSrcRange)
+            {
+                sws_setColorspaceDetails(
+                    sws, sws_getCoefficients(coeff), srcRange, sws_getCoefficients(SWS_CS_DEFAULT),
+                    /*dstRange=*/1, /*brightness=*/0, /*contrast=*/1 << 16, /*saturation=*/1 << 16
+                );
+                swsConfigured = sws;
+                swsCoeff = coeff;
+                swsSrcRange = srcRange;
             }
             if (rgba.size() != static_cast<size_t>(dstW) * dstH * 4)
             {
