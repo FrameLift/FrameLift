@@ -32,6 +32,10 @@ public:
     void SetShowError(bool value);
     void SetPerfOnly(bool value);
 
+    // Re-seed the draft from the console's live state when the page becomes visible,
+    // so runtime changes (the console's Performance toggle, "logs perf on", filter
+    // checkboxes) aren't overwritten by a stale draft on the next Save.
+    Q_INVOKABLE void load();
     Q_INVOKABLE void save();
     Q_INVOKABLE void reset();
 

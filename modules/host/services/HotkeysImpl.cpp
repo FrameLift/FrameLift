@@ -291,6 +291,12 @@ void HotkeysImpl::BindNamedRaw(
     const auto binds = ParseKeyBindList(bindList ? bindList : "");
     if (binds.empty())
     {
+        // We take ownership of ud (freed via cleanup on rebind/Clear). With nothing
+        // to bind it, free it now rather than leak — mirrors RebindList's empty path.
+        if (cleanup)
+        {
+            cleanup(ud);
+        }
         return;
     }
     // Re-binding a name replaces its whole key group. Drop the old group first

@@ -385,6 +385,10 @@ int History::GetMostRecent(char* buf, int cap) const noexcept
 
 void History::AddEntry(const char* path) noexcept
 {
+    if (!path)
+    {
+        return; // FileOpenedEvent::path defaults to null; guard like UpdateResumePos/GetResumePos.
+    }
     // Preserve any existing resume position before removing the duplicate.
     double existingPos = 0.0;
     for (const auto& e : entries_)

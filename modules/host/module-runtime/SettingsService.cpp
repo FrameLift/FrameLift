@@ -248,7 +248,8 @@ void SettingsService::RegisterKeybindEntry(
 ) noexcept
 {
     keybindEntries_.push_back(
-        {label, actionName, getStr, setStr, ud, group ? group : "", defaultBind ? defaultBind : ""}
+        {label ? label : "", actionName ? actionName : "", getStr, setStr, ud, group ? group : "",
+         defaultBind ? defaultBind : ""}
     );
 }
 
@@ -260,6 +261,10 @@ void SettingsService::EnumerateKeybindEntries(
     void* visitUd
 ) const noexcept
 {
+    if (!visit)
+    {
+        return;
+    }
     for (const auto& e : keybindEntries_)
     {
         visit(

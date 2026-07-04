@@ -331,6 +331,38 @@ private Q_SLOTS:
         QVERIFY(pages.empty());
     }
 
+    void KeybindEntryRegistrationToleratesNullArgs()
+    {
+        Ctx c;
+        auto& s = c.ctx.Settings();
+
+        // ABI-facing: a plugin may pass null for any pointer arg. None must be used
+        // to construct a std::string (label/actionName were previously unguarded).
+        s.RegisterKeybindEntry(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+        // A null visitor must be tolerated, like every sibling enumerator.
+        s.EnumerateKeybindEntries(nullptr, nullptr);
+
+        struct Seen
+        {
+            int count = 0;
+            bool anyNull = false;
+        };
+
+        Seen seen;
+        s.EnumerateKeybindEntries(
+            [](const char* label, const char* action, const char* (*)(void*), void (*)(void*, const char*), void*,
+               const char* group, const char* def, void* ud)
+            {
+                auto* r = static_cast<Seen*>(ud);
+                r->count++;
+                r->anyNull = !label || !action || !group || !def;
+            },
+            &seen
+        );
+        QVERIFY((seen.count) == (1));
+        QVERIFY(!(seen.anyNull)); // stored as empty strings, never null
+    }
+
     // ── Plugin catalogue ──────────────────────────────────────────────────────────
 
     void EnumeratePluginsReportsLoadedAndDisabledEntries()
