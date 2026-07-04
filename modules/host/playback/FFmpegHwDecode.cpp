@@ -6,6 +6,7 @@ extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/log.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -55,6 +56,32 @@ enum AVPixelFormat GetFormatCb(AVCodecContext* ctx, const enum AVPixelFormat* fm
     return avcodec_default_get_format(ctx, fmts);
 }
 } // namespace
+
+bool ProbeHwBackendAvailable(HwBackend backend)
+{
+    const AVHWDeviceType type = ToDeviceType(backend);
+    if (type == AV_HWDEVICE_TYPE_NONE)
+    {
+        return false;
+    }
+    AVBufferRef* device = nullptr;
+    // Silence libav's own error spam for an *expected* probe miss (e.g. "Failed to
+    // initialise VAAPI connection" on a machine without that driver) — a failed
+    // create here is a normal answer, not an error worth surfacing to the user.
+    // FFmpegLogCallback gates on av_log_get_level(), so lowering it drops the message.
+    // The level is global libav state but the probe runs on the caller thread and is
+    // restored immediately; a few ms of quiet is harmless to any concurrent decoder.
+    const int prevLevel = av_log_get_level();
+    av_log_set_level(AV_LOG_QUIET);
+    const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
+    av_log_set_level(prevLevel);
+    if (err < 0 || !device)
+    {
+        return false; // device unavailable (no driver / no GPU / wrong vendor)
+    }
+    av_buffer_unref(&device);
+    return true;
+}
 
 FFmpegHwDecode::~FFmpegHwDecode()
 {

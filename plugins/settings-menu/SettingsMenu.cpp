@@ -174,6 +174,11 @@ void SettingsSectionPageModel::setFieldValue(const QString& key, const QVariant&
     Q_EMIT changed();
 }
 
+QStringList SettingsSectionPageModel::availableHwdecModes() const
+{
+    return owner_.AvailableHwdecModes();
+}
+
 void SettingsSectionPageModel::save()
 {
     owner_.saveActivePage();
@@ -1207,6 +1212,33 @@ QVariant SettingsMenu::FieldValue(const QString& key)
     default:
         return {};
     }
+}
+
+QStringList SettingsMenu::AvailableHwdecModes()
+{
+    QStringList modes;
+    if (auto* caps = ctx_ ? ctx_->GetService<IVideoDecodeCaps>() : nullptr)
+    {
+        caps->EnumerateAvailableModes(
+            [](const char* token, void* ud)
+            {
+                static_cast<QStringList*>(ud)->append(QString::fromUtf8(token));
+            },
+            &modes
+        );
+    }
+    if (modes.isEmpty())
+    {
+        // Service unavailable — fall back to the full static list so the combobox still works.
+        modes = {"off", "auto", "cuda-zero-copy", "cuda", "d3d11va", "dxva2", "vaapi"};
+    }
+    // Keep a persisted-but-now-unavailable selection visible instead of snapping to off.
+    const QString current = FieldValue("playback.hwdecMode").toString();
+    if (!current.isEmpty() && !modes.contains(current))
+    {
+        modes.append(current);
+    }
+    return modes;
 }
 
 void SettingsMenu::Open() noexcept

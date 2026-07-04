@@ -31,7 +31,9 @@ ScrollView {
                 keyName: "playback.hwdecMode"
                 FLComboBox {
                     implicitWidth: 180
-                    model: ["off", "auto", "cuda-zero-copy", "cuda", "d3d11va", "dxva2", "vaapi"]
+                    // Only the acceleration modes this machine can actually use
+                    // (host-probed), so incompatible backends aren't offered.
+                    model: root.vm.availableHwdecModes()
                     currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("playback.hwdecMode"))))
                     onActivated: root.vm.setFieldValue("playback.hwdecMode", currentText)
                 }

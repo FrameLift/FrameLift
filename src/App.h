@@ -11,6 +11,7 @@
 #include "PluginConfig.h"
 #include "PluginLoader.h"
 #include "Settings.h"
+#include "VideoDecodeCaps.h"
 #include <chrono>
 #include <framelift/platform/IAppWindow.h>
 #include <framelift/platform/IMediaPlayer.h>
@@ -49,6 +50,10 @@ private:
         const std::string& settingsPath
     );
     void InitServices(const std::string& prefDir, const std::string& settingsPath);
+    // Reject a decode mode the machine can't honor. FL_ACCEL_MODE (explicit env
+    // override) is fatal; a stale persisted playback.hwdecMode logs and falls back
+    // to auto so the app still starts. Runs after InitServices (videoDecodeCaps_ up).
+    void ValidateDecodeModeSelection();
     void LoadPlugins();
     void BuildPluginViews();
 
@@ -114,6 +119,7 @@ private:
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
     std::unique_ptr<GraphicsInfoService> graphicsInfo_;
+    std::unique_ptr<VideoDecodeCaps> videoDecodeCaps_;
 
     std::unique_ptr<ModuleContext> moduleCtx_;
     std::unique_ptr<PlaybackControls> playbackControls_;

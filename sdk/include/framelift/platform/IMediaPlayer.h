@@ -381,3 +381,23 @@ public:
     // on the next rendered frame; the behavior fields apply on the next LoadFile().
     virtual void SetSubtitleStyle(const SubtitleStyle& style) noexcept = 0;
 };
+
+// Hardware-decode capability discovery: which acceleration modes this machine can
+// actually use. The host probes the platform/build candidates against the real GPU
+// driver (create-and-discard the hw device) so a UI never offers a mode that would
+// silently fall back to software — e.g. "cuda" on an Intel GPU. A separate small
+// host provider implements this (not the player), and a consumer discovers it with
+// ctx.GetService<IVideoDecodeCaps>() and null-checks.
+class IVideoDecodeCaps
+{
+public:
+    static constexpr const char* InterfaceId = "framelift.IVideoDecodeCaps";
+    virtual ~IVideoDecodeCaps() = default;
+
+    // Visit each decode-mode token available on THIS machine, in preference order.
+    // "off" and "auto" are always emitted first; hardware tokens ("cuda", "vaapi",
+    // ...) only when the backing device can actually be created. Tokens are the
+    // same NUL-terminated strings the acceleration-mode setting stores; the value is
+    // valid only for the callback duration.
+    virtual void EnumerateAvailableModes(void (*visit)(const char* token, void* ud), void* ud) const noexcept = 0;
+};

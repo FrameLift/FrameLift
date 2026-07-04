@@ -138,6 +138,8 @@ set(_FRAMELIFT_HOST_PLAYBACK_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/PlaybackSettings.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/PlayerEventSink.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/SubtitleSettings.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeCaps.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeCaps.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoDecodeMode.h"
         "${CMAKE_SOURCE_DIR}/modules/host/playback/VideoFrameGate.h"
 )
