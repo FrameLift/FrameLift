@@ -102,6 +102,18 @@ private Q_SLOTS:
         QVERIFY((t.freed) == (1)); // exactly once — only the primary owns the cleanup
     }
 
+    void BindNamedRawFreesCallbackWhenNothingToBind()
+    {
+        HotkeysImpl hk;
+        Tracked t;
+        // An empty (or all-invalid) bind list binds no keys; the callback whose
+        // ownership we handed to BindNamedRaw must be freed here, not leaked.
+        hk.BindNamedRaw("act", "", &Fire, &t, &Free);
+        QVERIFY((t.freed) == (1));
+        QVERIFY(!(hk.Handle(KeyEvent(Keys::A, Mod::None))));
+        QVERIFY((t.fired) == (0));
+    }
+
     void RebindListOnUnknownNameIsNoOp()
     {
         HotkeysImpl hk;
