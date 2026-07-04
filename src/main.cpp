@@ -4,6 +4,7 @@
 
 #include <QtGui/QSurfaceFormat>
 #include <QtQuick/QQuickWindow>
+#include <QtQuickControls2/QQuickStyle>
 #include <QtWidgets/QApplication>
 #include <exception>
 
@@ -46,6 +47,13 @@ int main(int argc, char* argv[])
     // We drive shutdown explicitly (window close → App quit flow), so don't let Qt quit
     // out from under the host when the last window closes.
     QApplication::setQuitOnLastWindowClosed(false);
+
+    // Pin the Qt Quick Controls style so every platform gets the same one. Left
+    // unset, the style resolves to the native "Windows" style on Windows and "Basic"
+    // on Linux; the native style's larger default menu margins/paddings inflate the
+    // custom-drawn context menu. Our controls draw their own backgrounds/content, so
+    // Basic (already the Linux default) is the tightest match across platforms.
+    QQuickStyle::setStyle("Basic");
 
     Log::Init();
     try

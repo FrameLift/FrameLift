@@ -42,7 +42,13 @@ Item {
         // A hidden MenuItem still occupies its row in the Menu's ListView, so
         // collapse the height too — otherwise hidden rows leave empty gaps.
         implicitHeight: visible ? 32 : 0
-        horizontalPadding: 10
+        // Match the separator's left inset (Sep_.leftPadding) so action text and
+        // separators share one left margin.
+        horizontalPadding: 8
+        // Row height is pinned above; keep the vertical padding style-independent so
+        // the layout never picks up a control style's larger default insets.
+        topPadding: 0
+        bottomPadding: 0
         font.pixelSize: 13
 
         indicator: null
@@ -58,7 +64,11 @@ Item {
 
         contentItem: RowLayout {
             spacing: 10
+            // Only reserve the check-mark gutter for checkable rows; a hidden layout
+            // child is skipped entirely (no width, no spacing), so plain action rows
+            // start their text at the item's left padding instead of being indented.
             Item {
+                visible: item.checkable
                 Layout.preferredWidth: 16
                 Layout.preferredHeight: 16
                 Rectangle {
