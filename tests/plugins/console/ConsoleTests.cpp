@@ -350,6 +350,22 @@ private Q_SLOTS:
         QVERIFY(v.historyNext().isEmpty());
     }
 
+    void SettingsPageLoadReseedsFromLiveState()
+    {
+        Console v;
+        ConsoleSettings page(v);
+        QVERIFY(!(page.PerfOnly()));
+
+        // A runtime change to the console (its Performance toggle / "logs perf on")
+        // after the page was constructed leaves the page's draft stale.
+        v.SetPerfOnly(true);
+
+        // load() must re-seed from the live console state, so a later Save doesn't
+        // write the stale draft back and silently disable the perf filter.
+        page.load();
+        QVERIFY(page.PerfOnly());
+    }
+
     void MigratesOldLogViewerSettings()
     {
         FakeSettingsStore store;

@@ -87,6 +87,17 @@ void ConsoleSettings::SetPerfOnly(bool value)
     }
 }
 
+void ConsoleSettings::load()
+{
+    showDebug_ = console_.showDebug_;
+    showInfo_ = console_.showInfo_;
+    showWarn_ = console_.showWarn_;
+    showError_ = console_.showError_;
+    perfOnly_ = console_.perfOnly_;
+    dirty_ = false;
+    Q_EMIT changed();
+}
+
 void ConsoleSettings::save()
 {
     console_.ApplySettings(showDebug_, showInfo_, showWarn_, showError_, perfOnly_);
