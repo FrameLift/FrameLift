@@ -295,8 +295,14 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
 
     VkSamplerYcbcrConversionInfo convInfo{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO};
     convInfo.conversion = ycbcrConversion_;
+    // FFmpeg allocates the decode images with usage flags (e.g. STORAGE) the multi-plane
+    // format may not support for optimal tiling; restrict the view to sampling only so it
+    // doesn't inherit them (VUID-VkImageViewCreateInfo-usage-02275).
+    VkImageViewUsageCreateInfo usageInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};
+    usageInfo.pNext = &convInfo;
+    usageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vci.pNext = &convInfo;
+    vci.pNext = &usageInfo;
     vci.image = reinterpret_cast<VkImage>(static_cast<uintptr_t>(image));
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = static_cast<VkFormat>(ycbcrFormat_);

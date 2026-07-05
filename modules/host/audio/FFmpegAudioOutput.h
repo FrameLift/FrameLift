@@ -62,6 +62,7 @@ public:
     [[nodiscard]] int64_t QueuedBytes() const;
 
     [[nodiscard]] bool HasDevice() const;
+
     [[nodiscard]] int BytesPerSec() const
     {
         return bytesPerSec_;
@@ -83,10 +84,10 @@ private:
     void CloseLocked();     // tear down sink + resampler (mutex_ held)
     void ApplyGainLocked(); // push volume_/muted_ to the device (mutex_ held)
     [[nodiscard]] int DesiredChannelsLocked() const;
-    [[nodiscard]] float CurrentGainLocked() const;     // effective gain from volume/mute/duck
-    [[nodiscard]] int64_t QueuedBytesLocked() const;   // unheard bytes (ring + sink buffer)
+    [[nodiscard]] float CurrentGainLocked() const;   // effective gain from volume/mute/duck
+    [[nodiscard]] int64_t QueuedBytesLocked() const; // unheard bytes (ring + sink buffer)
 
-    mutable std::mutex mutex_; // serialises swr + clock + sink lifecycle access
+    mutable std::mutex mutex_;        // serialises swr + clock + sink lifecycle access
     std::unique_ptr<AudioSink> sink_; // Qt QAudioSink PCM backend (own thread + ring buffer)
     SwrContext* swr_ = nullptr;
     std::vector<uint8_t> buffer_; // scratch for one resampled chunk (Feed only)
@@ -98,6 +99,7 @@ private:
 
     int volume_ = 100; // 0–100, mirrors the player's canonical value
     bool muted_ = false;
+    bool paused_ = false; // last SetPaused value; applied to sinks created while paused
     std::string preferredDevice_;
     std::string sinkDevice_; // device the live sink_ was opened with (for reuse checks)
     AudioChannelMode channelMode_ = AudioChannelMode::Auto;

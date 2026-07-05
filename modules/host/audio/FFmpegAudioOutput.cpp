@@ -91,9 +91,15 @@ private:
 class AudioRingDevice final : public QIODevice
 {
 public:
-    explicit AudioRingDevice(AudioRing* ring) : ring_(ring) {}
+    explicit AudioRingDevice(AudioRing* ring) : ring_(ring)
+    {
+    }
 
-    [[nodiscard]] bool isSequential() const override { return true; }
+    [[nodiscard]] bool isSequential() const override
+    {
+        return true;
+    }
+
     [[nodiscard]] qint64 bytesAvailable() const override
     {
         return static_cast<qint64>(ring_->Available()) + QIODevice::bytesAvailable();
@@ -108,7 +114,11 @@ protected:
         }
         return static_cast<qint64>(ring_->Read(reinterpret_cast<uint8_t*>(data), static_cast<size_t>(maxlen)));
     }
-    qint64 writeData(const char*, qint64) override { return -1; }
+
+    qint64 writeData(const char*, qint64) override
+    {
+        return -1;
+    }
 
 private:
     AudioRing* ring_;
@@ -137,20 +147,23 @@ struct AudioSink
 {
     AudioRing ring;
     QThread thread;
-    QObject* ctx = nullptr;        // invoke target with thread_ affinity
-    QAudioSink* sink = nullptr;    // created/used on thread_
+    QObject* ctx = nullptr;     // invoke target with thread_ affinity
+    QAudioSink* sink = nullptr; // created/used on thread_
     AudioRingDevice* device = nullptr;
     std::atomic<bool> active{false};
-    int bufferBytes = 0; // sink internal buffer size (for the clock latency term)
+    std::atomic<bool> suspended{false}; // last SetSuspended value; reapplied after ResetSink restarts the sink
+    int bufferBytes = 0;                // sink internal buffer size (for the clock latency term)
 
-    template <class Fn> void RunOnThread(Fn&& fn, bool blocking)
+    template <class Fn>
+    void RunOnThread(Fn&& fn, bool blocking)
     {
         if (!ctx)
         {
             return;
         }
-        QMetaObject::invokeMethod(ctx, std::forward<Fn>(fn),
-                                  blocking ? Qt::BlockingQueuedConnection : Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            ctx, std::forward<Fn>(fn), blocking ? Qt::BlockingQueuedConnection : Qt::QueuedConnection
+        );
     }
 
     // Bring up the sink for (rate, channels). Returns false if the format is unsupported
@@ -204,7 +217,8 @@ struct AudioSink
                     device = nullptr;
                 }
             },
-            /*blocking=*/true);
+            /*blocking=*/true
+        );
 
         active = ok;
         return ok;
@@ -230,7 +244,8 @@ struct AudioSink
                         device = nullptr;
                     }
                 },
-                /*blocking=*/true);
+                /*blocking=*/true
+            );
         }
         active = false;
         if (thread.isRunning())
@@ -244,11 +259,21 @@ struct AudioSink
 
     void SetGain(float g)
     {
-        RunOnThread([this, g] { if (sink) sink->setVolume(g); }, /*blocking=*/false);
+        RunOnThread(
+            [this, g]
+            {
+                if (sink)
+                {
+                    sink->setVolume(g);
+                }
+            },
+            /*blocking=*/false
+        );
     }
 
     void SetSuspended(bool s)
     {
+        suspended.store(s);
         RunOnThread(
             [this, s]
             {
@@ -265,7 +290,8 @@ struct AudioSink
                     sink->resume();
                 }
             },
-            /*blocking=*/false);
+            /*blocking=*/false
+        );
     }
 
     // Drop the sink's internal buffer (seek) and restart pulling from the (cleared) ring.
@@ -277,13 +303,23 @@ struct AudioSink
                 if (sink && device)
                 {
                     sink->reset();
+                    // start() re-enters ActiveState regardless of a prior suspend(); a seek
+                    // while paused must not un-pause the device, so reapply the suspension.
                     sink->start(device);
+                    if (suspended.load())
+                    {
+                        sink->suspend();
+                    }
                 }
             },
-            /*blocking=*/true);
+            /*blocking=*/true
+        );
     }
 
-    ~AudioSink() { Stop(); }
+    ~AudioSink()
+    {
+        Stop();
+    }
 };
 
 // ── FFmpegAudioOutput ─────────────────────────────────────────────────────────
@@ -383,6 +419,11 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
 
     sinkDevice_ = preferredDevice_;
     lastQueuedPts_ = 0.0;
+    if (paused_)
+    {
+        // Start() leaves the fresh sink active; a file opened while paused must not play.
+        sink_->SetSuspended(true);
+    }
     Log::Debug("FFmpegAudioOutput: opened {} Hz {}ch F32 (QAudioSink)", dstRate_, dstChannels_);
     return true;
 }
@@ -418,8 +459,9 @@ void FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec)
     }
 
     uint8_t* outPtr = buffer_.data();
-    const int converted = swr_convert(swr_, &outPtr, static_cast<int>(maxOut),
-                                      const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples);
+    const int converted = swr_convert(
+        swr_, &outPtr, static_cast<int>(maxOut), const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples
+    );
     if (converted <= 0)
     {
         return;
@@ -462,6 +504,7 @@ bool FFmpegAudioOutput::HasDevice() const
 void FFmpegAudioOutput::SetPaused(bool paused)
 {
     std::lock_guard lock(mutex_);
+    paused_ = paused; // remembered so a sink opened while paused starts suspended
     if (sink_)
     {
         sink_->SetSuspended(paused);
