@@ -167,13 +167,26 @@ void FFmpegPlayer::SetImageDisplayDuration(double seconds) noexcept
 
 void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& params) noexcept
 {
+    bool changed = false;
     {
         std::lock_guard lock(mutex_);
+        // ApplySettings() calls this on every settings commit; detect a no-op so unrelated
+        // toggles don't force the seek-to-current below (which flushes the queues and,
+        // while paused, audibly restarted the audio sink).
+        const AudioNormalizeParams& cur = normalizeParams_;
+        const bool paramsEqual = cur.frameLen == params.frameLen && cur.gaussSize == params.gaussSize &&
+                                 cur.peak == params.peak && cur.maxGain == params.maxGain &&
+                                 cur.volume == params.volume;
+        changed = enabled != normalizeEnabled_.load() || (enabled && !paramsEqual);
         normalizeParams_ = params;
     }
     normalizeEnabled_ = enabled;
-    normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
     EmitFlag(PlayerProperty::Normalize, enabled);
+    if (!changed)
+    {
+        return; // config unchanged — nothing to rebuild, don't disturb playback
+    }
+    normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
 
     if (idle_.load())
     {
