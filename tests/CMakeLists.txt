@@ -92,6 +92,7 @@ add_executable(framelift_tests
         unit/media/PlayerEventSinkTests.cpp
         unit/media/VideoFrameGateTests.cpp
         unit/media/FFmpegSidecarScanTests.cpp
+        unit/media/FFmpegSeekPlanTests.cpp
         unit/media/FFmpegTrackSelectTests.cpp
         unit/gfx/VulkanCapabilityPlanTests.cpp
         unit/gfx/VulkanColorMappingTests.cpp

@@ -122,14 +122,15 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     }
     PublishLoadedMetadata(path, ctx);
 
-    // Absolute target for the next session iteration; NaN ⇒ play from here.
-    double seekTo = resumePos > 0.0 ? resumePos : std::numeric_limits<double>::quiet_NaN();
+    // Absolute target for the next session iteration; NaN ⇒ play from here. The
+    // resume-position seek is always exact — resume must land where playback left off.
+    PendingSeek seek{resumePos > 0.0 ? resumePos : std::numeric_limits<double>::quiet_NaN(), SeekKind::Exact};
     AVPacket* pkt = av_packet_alloc();
 
     for (;;)
     {
         ApplyPendingTrackSwitches(path, ctx);
-        ApplySeekAndPrepareQueues(seekTo, ctx);
+        ApplySeekAndPrepareQueues(seek, ctx);
 
         const SessionEndReason reason = RunDemuxSession(ctx, pkt);
         if (reason == SessionEndReason::Stop)
@@ -141,7 +142,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
             break;
         }
         // A seek resumes the session — either directly or out of the EOF hold.
-        seekTo = TakePendingSeek();
+        seek = TakePendingSeek();
         QueueEvent(MakeLifecycle(MediaEventType::Seek));
         EmitFlag(PlayerProperty::Seeking, true);
     }
@@ -369,9 +370,9 @@ void FFmpegPlayer::ApplyPendingTrackSwitches(const std::string& path, SessionCon
 // Apply a pending seek (single-threaded here: workers are joined), then flush the
 // queues + read-ahead accounting for the next demux run. The "seek-apply" span
 // deliberately covers both: the queue reset is part of what a seek costs.
-void FFmpegPlayer::ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx)
+void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& ctx)
 {
-    const bool timingSeekApply = !std::isnan(seekTo);
+    const bool timingSeekApply = !std::isnan(seek.target);
     if (timingSeekApply)
     {
         FRAMELIFT_PERF_START("seek-apply");
@@ -383,22 +384,34 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx
         std::lock_guard lock(mutex_);
         seekKicked_ = false;
     }
-    if (!std::isnan(seekTo))
+    if (!std::isnan(seek.target))
     {
-        const auto ts = static_cast<int64_t>(seekTo * AV_TIME_BASE);
+        const SeekPlan plan = BuildSeekPlan(seek.kind, seek.target);
+        const auto ts = static_cast<int64_t>(seek.target * AV_TIME_BASE);
         // A failed seek leaves the demuxer position untouched. Flushing the
         // decoders / clock anyway would blank the picture for a seek that never
         // happened, so only tear down and refresh when the seek actually landed.
-        const int ret = av_seek_frame(ctx.fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+        int ret = av_seek_frame(ctx.fmt, -1, ts, plan.backwardFlag ? AVSEEK_FLAG_BACKWARD : 0);
+        if (ret < 0 && !plan.backwardFlag)
+        {
+            // Forward keyframe seeks (no BACKWARD flag) land on the first keyframe at
+            // or after the target so a +N step always advances — but near EOF there
+            // may be none, and some demuxers can't seek forward at all. Retry landing
+            // at/before instead of failing the seek outright.
+            ret = av_seek_frame(ctx.fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
+        }
         if (ret < 0)
         {
-            Log::Warn("FFmpegPlayer: seek to {}s failed ({})", seekTo, ret);
+            Log::Warn("FFmpegPlayer: seek to {}s failed ({})", seek.target, ret);
         }
         else
         {
+            // The external-audio side seek always lands at/before: every audio packet
+            // is a sync point, so backward is exact there and guarantees the audio
+            // stream covers whatever keyframe the video seek landed on.
             if (ctx.aud.external && ctx.aud.fmt && av_seek_frame(ctx.aud.fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
             {
-                Log::Warn("FFmpegPlayer: external audio seek to {}s failed", seekTo);
+                Log::Warn("FFmpegPlayer: external audio seek to {}s failed", seek.target);
             }
             if (ctx.vDec)
             {
@@ -429,12 +442,12 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx
                 // instead of reading GetMasterClock()==0 and re-targeting from 0.
                 seekSettled_ = false;
                 seekClockValid_ = false;
-                subtitleSeekClockOverride_ = seekTo;
+                subtitleSeekClockOverride_ = seek.target;
                 subtitleSeekClockOverrideActive_ = true;
             }
-            // Exact (hr-seek): drop decoded frames before the target. Keyframe seek
-            // (-inf) presents straight from the keyframe the demuxer landed on.
-            seekSkipPts_ = hrSeek_.load() ? seekTo : -1e18;
+            // Exact: drop decoded frames before the target. Keyframe kinds
+            // (kSeekNoSkipPts) present straight from the keyframe the demuxer landed on.
+            seekSkipPts_ = plan.skipPts;
             seekRefresh_ = true;
             eofReached_ = false;
             EmitFlag(PlayerProperty::EofReached, false);
@@ -444,7 +457,7 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx
         }
         // Clear the pending seek and the UI "seeking" state regardless of outcome,
         // so a failed seek doesn't leave the player stuck mid-seek.
-        seekTo = std::numeric_limits<double>::quiet_NaN();
+        seek.target = std::numeric_limits<double>::quiet_NaN();
         EmitFlag(PlayerProperty::Seeking, false);
         UpdateCoreIdle();
     }

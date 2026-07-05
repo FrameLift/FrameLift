@@ -116,7 +116,10 @@ void FFmpegPlayer::Seek(double seconds) noexcept
         anchor = seekTarget_;
     }
     const double base = useAnchor ? anchor : GetMasterClock();
-    RequestSeek(ClampSeekTarget(base + seconds, duration_.load()));
+    RequestSeek(
+        ClampSeekTarget(base + seconds, duration_.load()),
+        DecideSeekKind(seekMode_.load(), /*relative=*/true, seconds, hasVideo_)
+    );
 }
 
 void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
@@ -125,10 +128,12 @@ void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
     {
         return;
     }
-    RequestSeek(ClampSeekTarget(seconds, duration_.load()));
+    RequestSeek(
+        ClampSeekTarget(seconds, duration_.load()), DecideSeekKind(seekMode_.load(), /*relative=*/false, 0.0, hasVideo_)
+    );
 }
 
-void FFmpegPlayer::RequestSeek(double target) noexcept
+void FFmpegPlayer::RequestSeek(double target, SeekKind kind) noexcept
 {
     // Only disturb the running pipeline when the previous seek has already painted a
     // frame (or none is in flight). While a seek is mid-decode, a new request — e.g. a
@@ -140,6 +145,7 @@ void FFmpegPlayer::RequestSeek(double target) noexcept
     {
         std::lock_guard lock(mutex_);
         seekTarget_ = target; // latest-wins: coalesces rapid seeks (seek-bar drags)
+        seekKind_ = kind;
         hasPendingSeek_ = true;
         kick = seekSettled_; // pipeline idle / already painted ⇒ safe to restart
         if (kick)
@@ -186,6 +192,7 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     {
         std::lock_guard lock(mutex_);
         seekTarget_ = target;
+        seekKind_ = SeekKind::Exact; // must resume at the current position, not a keyframe
         hasPendingSeek_ = true;
     }
     audioQ_->Abort();
@@ -196,8 +203,8 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
 
 void FFmpegPlayer::SetPlaybackOptions(const PlaybackOptions& opts) noexcept
 {
-    hrSeek_ = opts.hrSeek; // exact vs keyframe seeking
-    hwdec_ = opts.hwdec;   // try hardware decode on the next load
+    // opts.hrSeek is superseded by SetSeekMode (playback.seekMode) and no longer read.
+    hwdec_ = opts.hwdec; // try hardware decode on the next load
     subAutoLoad_ = opts.subAutoLoad;
     audioFileAutoLoad_ = opts.audioFileAutoLoad;
 }
@@ -205,6 +212,11 @@ void FFmpegPlayer::SetPlaybackOptions(const PlaybackOptions& opts) noexcept
 void FFmpegPlayer::SetVideoDecodeMode(VideoDecodeMode mode) noexcept
 {
     videoDecodeMode_ = mode;
+}
+
+void FFmpegPlayer::SetSeekMode(SeekPrecisionMode mode) noexcept
+{
+    seekMode_ = mode; // decided per request; a pending seek keeps its already-decided kind
 }
 
 void FFmpegPlayer::SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept
@@ -232,6 +244,7 @@ void FFmpegPlayer::ApplySettings(const Settings& s)
 {
     SetPlaybackOptions(ToPlaybackOptions(s.Get<PlaybackSettings>()));
     SetVideoDecodeMode(ToVideoDecodeMode(s.Get<PlaybackSettings>()));
+    SetSeekMode(ToSeekPrecisionMode(s.Get<PlaybackSettings>()));
     // Module-internal knob (not part of the SDK PlaybackOptions POD): applies to
     // the next avformat_open_input.
     fastProbe_ = s.Get<PlaybackSettings>().fastProbe;

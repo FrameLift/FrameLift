@@ -39,12 +39,14 @@ ScrollView {
                 }
             }
             FLSettingRow {
-                title: "Precise seeking"
-                description: "Use precise (high-resolution) seeking."
-                keyName: "playback.hrSeek"
-                FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("playback.hrSeek"))
-                    onToggled: root.vm.setFieldValue("playback.hrSeek", checked)
+                title: "Seek precision"
+                description: "Smart: arrow-key seeks snap to keyframes for speed, seek-bar seeks are exact. Exact: all seeks precise (slower on long-GOP files). Keyframe: all seeks snap."
+                keyName: "playback.seekMode"
+                FLComboBox {
+                    implicitWidth: 180
+                    model: ["smart", "exact", "keyframe"]
+                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("playback.seekMode"))))
+                    onActivated: root.vm.setFieldValue("playback.seekMode", currentText)
                 }
             }
             FLSettingRow {

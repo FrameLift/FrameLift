@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FFmpegSeekPlan.h"
 #include "SettingsRegistry.h"
 #include "VideoDecodeMode.h"
 
@@ -21,7 +22,7 @@
 struct PlaybackSettings
 {
     std::string hwdecMode = "auto";
-    bool hrSeek = true;
+    std::string seekMode = "smart";
     bool subAutoLoad = true;
     bool audioFileAutoLoad = true;
     bool fastProbe = false;
@@ -37,7 +38,15 @@ inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
             return std::string(VideoDecodeModeName(mode));
         }
     );
-    reg.AddBool("playback.hrSeek", s.hrSeek, "Use precise (high-resolution) seeking.");
+    reg.AddString(
+        "playback.seekMode", s.seekMode,
+        "Seek precision: smart (arrow-key seeks snap to keyframes for speed, seek-bar seeks are exact), "
+        "exact (all seeks precise), or keyframe (all seeks snap).",
+        [&s]
+        {
+            return std::string(SeekPrecisionModeName(SeekPrecisionModeFromString(s.seekMode.c_str())));
+        }
+    );
     reg.AddBool(
         "playback.fastProbe", s.fastProbe,
         "Speed up file opening by limiting stream probing. Clean MP4/MKV files open faster; "
@@ -56,6 +65,10 @@ inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
             if (seen.count("playback.hwdecMode"))
             {
                 s.hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(s.hwdecMode));
+            }
+            if (seen.count("playback.seekMode"))
+            {
+                s.seekMode = SeekPrecisionModeName(SeekPrecisionModeFromString(s.seekMode.c_str()));
             }
         }
     );

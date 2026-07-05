@@ -150,6 +150,28 @@ inline bool ShouldBreakFrameHold(double heldSec, double clockAdvanceSec, double 
     return heldSec >= holdLimitSec && clockAdvanceSec < 1e-3;
 }
 
+// Post-seek audio hold. With video present, the audio worker holds its first
+// post-seek feeds until the video worker paints the target frame — otherwise an
+// exact seek plays audible audio (advancing the master clock) over a frozen
+// picture while video is still decode-discarding toward the target, and video
+// then has to drop frames to re-sync. Release when:
+//   • videoSettled  — the post-seek frame painted (normal path; the hold is done),
+//   • seekSuperseded — a newer kicked seek made this audio stale (caller drops it),
+//   • tearingDown   — load/stop/shutdown (caller drops it),
+//   • timeout       — video can't paint (decode errors, video stream ends before
+//     audio at the seek point): bounded silence, then audio resumes anyway — the
+//     same self-healing philosophy as ShouldBreakFrameHold.
+// Deadlock-free by construction: the video worker's post-seek refresh frame
+// presents UNPACED (it never waits on the audio clock this hold freezes), and the
+// demuxer park this hold can cause is bounded by the audio queue's packet cap
+// plus this timeout.
+inline bool ShouldReleaseAudioSeekHold(
+    bool videoSettled, bool seekSuperseded, bool tearingDown, double heldSec, double holdLimitSec
+)
+{
+    return videoSettled || seekSuperseded || tearingDown || heldSec >= holdLimitSec;
+}
+
 // Exact (hr) seeks decode forward from the landed keyframe and discard every frame
 // before the target — pure overhead. Non-reference frames in that window can be
 // skipped by the decoder entirely (AVDISCARD_NONREF) without affecting the target:

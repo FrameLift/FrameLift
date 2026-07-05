@@ -244,6 +244,34 @@ private Q_SLOTS:
         const double nan = std::numeric_limits<double>::quiet_NaN();
         QVERIFY(DecideSeekDiscard(nan, 10.0, 2.0 / 24.0) == SeekDiscardMode::DecodeAll);
     }
+
+    // ── ShouldReleaseAudioSeekHold ─────────────────────────────────────────────
+
+    void AudioSeekHoldWaitsWhileVideoGrinds()
+    {
+        // Video not settled, nothing superseded/tearing down, within the limit: hold.
+        QVERIFY(!ShouldReleaseAudioSeekHold(false, false, false, /*held*/ 0.5, /*limit*/ 2.0));
+    }
+
+    void AudioSeekHoldReleasesOnVideoSettle()
+    {
+        QVERIFY(ShouldReleaseAudioSeekHold(true, false, false, 0.0, 2.0));
+    }
+
+    void AudioSeekHoldReleasesOnSupersedeAndTeardown()
+    {
+        // The caller then drops the stale audio rather than feeding it.
+        QVERIFY(ShouldReleaseAudioSeekHold(false, true, false, 0.0, 2.0));
+        QVERIFY(ShouldReleaseAudioSeekHold(false, false, true, 0.0, 2.0));
+    }
+
+    void AudioSeekHoldTimesOutWhenVideoCannotPaint()
+    {
+        // Bounded silence: decode errors / video ending before audio must not mute
+        // playback forever.
+        QVERIFY(ShouldReleaseAudioSeekHold(false, false, false, /*held*/ 2.0, /*limit*/ 2.0));
+        QVERIFY(!ShouldReleaseAudioSeekHold(false, false, false, /*held*/ 1.99, /*limit*/ 2.0));
+    }
 };
 
 namespace
