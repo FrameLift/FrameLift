@@ -1,6 +1,7 @@
 #include "GlVideoRenderer.h"
 
 #include "IGraphicsBackend.h"
+#include "YuvToRgbMatrix.h"
 
 #include <framelift/Log.h>
 
@@ -28,8 +29,14 @@ using GLchar = char;
 constexpr GLenum GL_TRIANGLES = 0x0004;
 constexpr GLenum GL_TEXTURE_2D = 0x0DE1;
 constexpr GLenum GL_TEXTURE0 = 0x84C0;
+constexpr GLenum GL_TEXTURE1 = 0x84C1;
+constexpr GLenum GL_TEXTURE2 = 0x84C2;
 constexpr GLenum GL_RGBA = 0x1908;
 constexpr GLint GL_RGBA8 = 0x8058;
+constexpr GLenum GL_RED = 0x1903;
+constexpr GLenum GL_RG = 0x8227;
+constexpr GLint GL_R8 = 0x8229;
+constexpr GLint GL_RG8 = 0x822B;
 constexpr GLenum GL_UNSIGNED_BYTE = 0x1401;
 constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x00004000;
 constexpr GLenum GL_TEXTURE_MIN_FILTER = 0x2801;
@@ -81,6 +88,8 @@ using PFNUseProgram = void (*)(GLuint);
 using PFNDeleteProgram = void (*)(GLuint);
 using PFNGetUniformLocation = GLint (*)(GLuint, const GLchar*);
 using PFNUniform1i = void (*)(GLint, GLint);
+using PFNUniform3fv = void (*)(GLint, GLsizei, const GLfloat*);
+using PFNUniformMatrix3fv = void (*)(GLint, GLsizei, GLboolean, const GLfloat*);
 using PFNDrawArrays = void (*)(GLenum, GLint, GLsizei);
 
 // Fullscreen-triangle blit. Vertex positions/UVs are generated from gl_VertexID,
@@ -102,6 +111,28 @@ out vec4 FragColor;
 uniform sampler2D uTex;
 void main() {
     FragColor = texture(uTex, vec2(vUV.x, 1.0 - vUV.y));
+}
+)";
+
+// Planar YUV sampling: Y from an R8 texture, chroma either interleaved in an RG8
+// texture (NV12) or split across two R8 textures (I420). The YUV→RGB matrix/bias
+// come from YuvToRgbMatrix.h with range expansion and chroma offset folded in, so
+// the conversion is a single multiply-add.
+constexpr const char* kFragmentYuvSrc = R"(#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+uniform sampler2D uTexY;
+uniform sampler2D uTexU;
+uniform sampler2D uTexV;
+uniform mat3 uYuvMat;
+uniform vec3 uYuvBias;
+uniform int uNv12;
+void main() {
+    vec2 uv = vec2(vUV.x, 1.0 - vUV.y);
+    float y = texture(uTexY, uv).r;
+    vec2 c = (uNv12 == 1) ? texture(uTexU, uv).rg
+                          : vec2(texture(uTexU, uv).r, texture(uTexV, uv).r);
+    FragColor = vec4(clamp(uYuvMat * vec3(y, c) + uYuvBias, 0.0, 1.0), 1.0);
 }
 )";
 
@@ -154,15 +185,29 @@ struct GlVideoRenderer::Impl
     PFNDeleteProgram DeleteProgram = nullptr;
     PFNGetUniformLocation GetUniformLocation = nullptr;
     PFNUniform1i Uniform1i = nullptr;
+    PFNUniform3fv Uniform3fv = nullptr;
+    PFNUniformMatrix3fv UniformMatrix3fv = nullptr;
     PFNDrawArrays DrawArrays = nullptr;
 
     // GL objects.
-    GLuint program = 0;
+    GLuint program = 0; // RGBA blit (video RGBA path + subtitle overlay)
+    GLuint programYuv = 0;
     GLuint vao = 0;
-    GLuint texture = 0;
+    GLuint texture = 0;             // RGBA video frame
+    GLuint planeTex[3] = {0, 0, 0}; // Y / U-or-UV / V planes
     GLint uTexLoc = -1;
+    GLint uTexYLoc = -1;
+    GLint uTexULoc = -1;
+    GLint uTexVLoc = -1;
+    GLint uYuvMatLoc = -1;
+    GLint uYuvBiasLoc = -1;
+    GLint uNv12Loc = -1;
     int texW = 0;
     int texH = 0;
+    VideoPixelFormat texFormat = VideoPixelFormat::RGBA;
+    int matColorspace = -1; // last colorspace/range/height baked into the YUV uniforms
+    int matFullRange = -1;
+    int matHeight = -1;
     bool hasFrame = false;
 
     // Subtitle overlay texture (sized to the on-screen video rectangle).
@@ -173,7 +218,8 @@ struct GlVideoRenderer::Impl
 
     bool LoadFunctions(void* (*getProc)(const char*, void*), void* ud);
     GLuint CompileStage(GLenum type, const char* src);
-    bool BuildProgram();
+    GLuint LinkStages(const char* fragSrc);
+    bool BuildPrograms();
 };
 
 bool GlVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void*), void* ud)
@@ -212,6 +258,8 @@ bool GlVideoRenderer::Impl::LoadFunctions(void* (*getProc)(const char*, void*), 
     ok &= Resolve(DeleteProgram, getProc, ud, "glDeleteProgram");
     ok &= Resolve(GetUniformLocation, getProc, ud, "glGetUniformLocation");
     ok &= Resolve(Uniform1i, getProc, ud, "glUniform1i");
+    ok &= Resolve(Uniform3fv, getProc, ud, "glUniform3fv");
+    ok &= Resolve(UniformMatrix3fv, getProc, ud, "glUniformMatrix3fv");
     ok &= Resolve(DrawArrays, getProc, ud, "glDrawArrays");
     return ok;
 }
@@ -235,10 +283,10 @@ GLuint GlVideoRenderer::Impl::CompileStage(GLenum type, const char* src)
     return shader;
 }
 
-bool GlVideoRenderer::Impl::BuildProgram()
+GLuint GlVideoRenderer::Impl::LinkStages(const char* fragSrc)
 {
     const GLuint vs = CompileStage(GL_VERTEX_SHADER, kVertexSrc);
-    const GLuint fs = CompileStage(GL_FRAGMENT_SHADER, kFragmentSrc);
+    const GLuint fs = CompileStage(GL_FRAGMENT_SHADER, fragSrc);
     if (!vs || !fs)
     {
         if (vs)
@@ -249,29 +297,45 @@ bool GlVideoRenderer::Impl::BuildProgram()
         {
             DeleteShader(fs);
         }
-        return false;
+        return 0;
     }
 
-    program = CreateProgram();
-    AttachShader(program, vs);
-    AttachShader(program, fs);
-    LinkProgram(program);
+    const GLuint prog = CreateProgram();
+    AttachShader(prog, vs);
+    AttachShader(prog, fs);
+    LinkProgram(prog);
     DeleteShader(vs);
     DeleteShader(fs);
 
     GLint status = 0;
-    GetProgramiv(program, GL_LINK_STATUS, &status);
+    GetProgramiv(prog, GL_LINK_STATUS, &status);
     if (!status)
     {
         GLchar log[1024] = {};
-        GetProgramInfoLog(program, sizeof(log), nullptr, log);
+        GetProgramInfoLog(prog, sizeof(log), nullptr, log);
         Log::Error("GlVideoRenderer: program link failed: {}", log);
-        DeleteProgram(program);
-        program = 0;
+        DeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+
+bool GlVideoRenderer::Impl::BuildPrograms()
+{
+    program = LinkStages(kFragmentSrc);
+    programYuv = LinkStages(kFragmentYuvSrc);
+    if (!program || !programYuv)
+    {
         return false;
     }
 
     uTexLoc = GetUniformLocation(program, "uTex");
+    uTexYLoc = GetUniformLocation(programYuv, "uTexY");
+    uTexULoc = GetUniformLocation(programYuv, "uTexU");
+    uTexVLoc = GetUniformLocation(programYuv, "uTexV");
+    uYuvMatLoc = GetUniformLocation(programYuv, "uYuvMat");
+    uYuvBiasLoc = GetUniformLocation(programYuv, "uYuvBias");
+    uNv12Loc = GetUniformLocation(programYuv, "uNv12");
     return true;
 }
 
@@ -292,6 +356,13 @@ GlVideoRenderer::~GlVideoRenderer()
     {
         impl_->DeleteTextures(1, &impl_->texture);
     }
+    for (GLuint tex : impl_->planeTex)
+    {
+        if (tex && impl_->DeleteTextures)
+        {
+            impl_->DeleteTextures(1, &tex);
+        }
+    }
     if (impl_->overlayTexture && impl_->DeleteTextures)
     {
         impl_->DeleteTextures(1, &impl_->overlayTexture);
@@ -303,6 +374,10 @@ GlVideoRenderer::~GlVideoRenderer()
     if (impl_->program && impl_->DeleteProgram)
     {
         impl_->DeleteProgram(impl_->program);
+    }
+    if (impl_->programYuv && impl_->DeleteProgram)
+    {
+        impl_->DeleteProgram(impl_->programYuv);
     }
 }
 
@@ -325,7 +400,7 @@ bool GlVideoRenderer::Init(IGraphicsBackend* backend)
     {
         return false;
     }
-    if (!impl->BuildProgram())
+    if (!impl->BuildPrograms())
     {
         return false;
     }
@@ -342,6 +417,11 @@ bool GlVideoRenderer::Init(IGraphicsBackend* backend)
     };
     impl->GenTextures(1, &impl->texture);
     allocTexture(impl->texture);
+    for (GLuint& tex : impl->planeTex)
+    {
+        impl->GenTextures(1, &tex);
+        allocTexture(tex);
+    }
     impl->GenTextures(1, &impl->overlayTexture);
     allocTexture(impl->overlayTexture);
     impl->BindTexture(GL_TEXTURE_2D, 0);
@@ -350,27 +430,69 @@ bool GlVideoRenderer::Init(IGraphicsBackend* backend)
     return true;
 }
 
-void GlVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
+void GlVideoRenderer::UploadFrame(const uint8_t* data, const VideoFrameDesc& desc)
 {
-    if (!impl_ || !rgba || w <= 0 || h <= 0)
+    if (!impl_ || !data || desc.w <= 0 || desc.h <= 0)
     {
         return;
     }
 
-    impl_->BindTexture(GL_TEXTURE_2D, impl_->texture);
     impl_->PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (w != impl_->texW || h != impl_->texH)
+    const bool reconfig = desc.w != impl_->texW || desc.h != impl_->texH || desc.format != impl_->texFormat;
+
+    const auto uploadPlane = [&](GLuint tex, GLint internalFmt, GLenum fmt, int w, int h, const uint8_t* pixels)
     {
-        // (Re)allocate the texture storage when the frame size changes.
-        impl_->TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-        impl_->texW = w;
-        impl_->texH = h;
-    }
-    else
+        impl_->BindTexture(GL_TEXTURE_2D, tex);
+        if (reconfig)
+        {
+            impl_->TexImage2D(GL_TEXTURE_2D, 0, internalFmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, pixels);
+        }
+        else
+        {
+            impl_->TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, GL_UNSIGNED_BYTE, pixels);
+        }
+    };
+
+    const int cw = (desc.w + 1) / 2; // chroma texels per row
+    const int ch = (desc.h + 1) / 2;
+    switch (desc.format)
     {
-        impl_->TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    case VideoPixelFormat::RGBA:
+        uploadPlane(impl_->texture, GL_RGBA8, GL_RGBA, desc.w, desc.h, data + desc.planeOffset[0]);
+        break;
+    case VideoPixelFormat::NV12:
+        uploadPlane(impl_->planeTex[0], GL_R8, GL_RED, desc.w, desc.h, data + desc.planeOffset[0]);
+        uploadPlane(impl_->planeTex[1], GL_RG8, GL_RG, cw, ch, data + desc.planeOffset[1]);
+        break;
+    case VideoPixelFormat::YUV420P:
+        uploadPlane(impl_->planeTex[0], GL_R8, GL_RED, desc.w, desc.h, data + desc.planeOffset[0]);
+        uploadPlane(impl_->planeTex[1], GL_R8, GL_RED, cw, ch, data + desc.planeOffset[1]);
+        uploadPlane(impl_->planeTex[2], GL_R8, GL_RED, cw, ch, data + desc.planeOffset[2]);
+        break;
     }
     impl_->BindTexture(GL_TEXTURE_2D, 0);
+
+    // Bake the conversion uniforms only when the colourimetry (or format) changes;
+    // they are stable across a stream.
+    if (desc.format != VideoPixelFormat::RGBA && (reconfig || desc.colorspace != impl_->matColorspace ||
+                                                  desc.fullRange != impl_->matFullRange || desc.h != impl_->matHeight))
+    {
+        float mat[9];
+        float bias[3];
+        YuvToRgb::BuildYuvToRgbMatrix(desc.colorspace, desc.fullRange, desc.h, mat, bias);
+        impl_->UseProgram(impl_->programYuv);
+        impl_->UniformMatrix3fv(impl_->uYuvMatLoc, 1, 0 /*GL_FALSE: column-major*/, mat);
+        impl_->Uniform3fv(impl_->uYuvBiasLoc, 1, bias);
+        impl_->Uniform1i(impl_->uNv12Loc, desc.format == VideoPixelFormat::NV12 ? 1 : 0);
+        impl_->UseProgram(0);
+        impl_->matColorspace = desc.colorspace;
+        impl_->matFullRange = desc.fullRange;
+        impl_->matHeight = desc.h;
+    }
+
+    impl_->texW = desc.w;
+    impl_->texH = desc.h;
+    impl_->texFormat = desc.format;
     impl_->hasFrame = true;
 }
 
@@ -435,20 +557,50 @@ void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
     const LetterboxRect vp = ComputeLetterbox(fbW, fbH, impl_->texW, impl_->texH);
 
     impl_->Viewport(vp.x, vp.y, vp.w, vp.h);
-    impl_->UseProgram(impl_->program);
-    impl_->ActiveTexture(GL_TEXTURE0);
-    impl_->BindTexture(GL_TEXTURE_2D, impl_->texture);
-    impl_->Uniform1i(impl_->uTexLoc, 0);
     impl_->BindVertexArray(impl_->vao);
-    impl_->DrawArrays(GL_TRIANGLES, 0, 3);
+
+    if (impl_->texFormat == VideoPixelFormat::RGBA)
+    {
+        impl_->UseProgram(impl_->program);
+        impl_->ActiveTexture(GL_TEXTURE0);
+        impl_->BindTexture(GL_TEXTURE_2D, impl_->texture);
+        impl_->Uniform1i(impl_->uTexLoc, 0);
+        impl_->DrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    else
+    {
+        // Planar YUV: shader-side conversion. For NV12 the V sampler is never taken
+        // (uNv12 branch), but bind the UV texture there too so every sampler unit
+        // holds a valid texture.
+        const GLuint vTex = impl_->texFormat == VideoPixelFormat::NV12 ? impl_->planeTex[1] : impl_->planeTex[2];
+        impl_->UseProgram(impl_->programYuv);
+        impl_->ActiveTexture(GL_TEXTURE0);
+        impl_->BindTexture(GL_TEXTURE_2D, impl_->planeTex[0]);
+        impl_->ActiveTexture(GL_TEXTURE1);
+        impl_->BindTexture(GL_TEXTURE_2D, impl_->planeTex[1]);
+        impl_->ActiveTexture(GL_TEXTURE2);
+        impl_->BindTexture(GL_TEXTURE_2D, vTex);
+        impl_->Uniform1i(impl_->uTexYLoc, 0);
+        impl_->Uniform1i(impl_->uTexULoc, 1);
+        impl_->Uniform1i(impl_->uTexVLoc, 2);
+        impl_->DrawArrays(GL_TRIANGLES, 0, 3);
+        // Leave units 1/2 unbound again so Qt Quick sees the state it expects.
+        impl_->BindTexture(GL_TEXTURE_2D, 0);
+        impl_->ActiveTexture(GL_TEXTURE1);
+        impl_->BindTexture(GL_TEXTURE_2D, 0);
+        impl_->ActiveTexture(GL_TEXTURE0);
+    }
 
     // Composite the subtitle overlay over the video within the same rectangle,
-    // using straight-alpha blending.
+    // using straight-alpha blending (always through the RGBA program).
     if (drawOverlay && impl_->hasOverlay)
     {
+        impl_->UseProgram(impl_->program);
+        impl_->ActiveTexture(GL_TEXTURE0);
+        impl_->BindTexture(GL_TEXTURE_2D, impl_->overlayTexture);
+        impl_->Uniform1i(impl_->uTexLoc, 0);
         impl_->Enable(GL_BLEND);
         impl_->BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        impl_->BindTexture(GL_TEXTURE_2D, impl_->overlayTexture);
         impl_->DrawArrays(GL_TRIANGLES, 0, 3);
         impl_->Disable(GL_BLEND);
     }

@@ -32,22 +32,25 @@ public:
     VulkanVideoRenderer& operator=(const VulkanVideoRenderer&) = delete;
 
     bool Init(IGraphicsBackend* backend) override;
-    void Upload(const uint8_t* rgba, int w, int h) override;
+    void UploadFrame(const uint8_t* data, const VideoFrameDesc& desc) override;
     void UploadVulkanFrame(void* avFrame, int displayW, int displayH) override;
     void UploadOverlay(const uint8_t* rgba, int w, int h) override;
     void Draw(int fbW, int fbH, bool drawOverlay = false) override;
 
 private:
-    // One sampled RGBA image with its view and descriptor set.
+    // One sampled frame: 1 (RGBA), 2 (NV12) or 3 (I420) plane images sharing a single
+    // descriptor set. All planes move through layout transitions together, so one
+    // `layout` covers the group.
     struct Texture
     {
-        VkImage image = VK_NULL_HANDLE;
-        VmaAllocation alloc = nullptr;
-        VkImageView view = VK_NULL_HANDLE;
+        VkImage image[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        VmaAllocation alloc[3] = {nullptr, nullptr, nullptr};
+        VkImageView view[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         int w = 0;
         int h = 0;
+        VideoPixelFormat format = VideoPixelFormat::RGBA;
         bool valid = false;
     };
 
@@ -76,15 +79,20 @@ private:
     };
 
     bool BuildPipeline();
-    // Shared blit-pipeline builder (fullscreen triangle, video.vert/.frag) against a
-    // given descriptor-set layout; used for both the RGBA and YCbCr paths.
-    bool CreateBlitPipeline(VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline);
+    // Shared blit-pipeline builder (fullscreen triangle, video.vert + the given
+    // fragment SPIR-V — video.frag when null) against a given descriptor-set layout;
+    // used by the RGBA, planar-YUV and YCbCr paths. pushConstantBytes > 0 adds a
+    // fragment-stage push-constant range to the layout.
+    bool CreateBlitPipeline(
+        VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline,
+        const uint32_t* fragCode = nullptr, size_t fragSizeBytes = 0, uint32_t pushConstantBytes = 0
+    );
     VkShaderModule CreateShaderModule(const uint32_t* code, size_t sizeBytes) const;
     // hostCopy selects HOST_TRANSFER usage + host-copy sampling layout instead of the
     // staging path's TRANSFER_DST + SHADER_READ_ONLY.
-    bool EnsureTexture(Texture& t, int w, int h, bool hostCopy);
-    void UploadTo(Texture& t, const uint8_t* rgba, int w, int h);
-    void UploadHostCopy(HostRing& ring, const uint8_t* rgba, int w, int h);
+    bool EnsureTexture(Texture& t, const VideoFrameDesc& desc, bool hostCopy);
+    void UploadTo(Texture& t, const uint8_t* data, const VideoFrameDesc& desc);
+    void UploadHostCopy(HostRing& ring, const uint8_t* data, const VideoFrameDesc& desc);
     // Currently displayable texture for a stream: the ring's displayed slot on the
     // host-copy path, the single texture otherwise; null when nothing was uploaded yet.
     const Texture* CurrentTexture(HostRing& ring, const Texture& single) const;
@@ -135,10 +143,20 @@ private:
     VmaAllocator allocator_ = nullptr;
 
     VkSampler sampler_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;    // 1 binding (RGBA video + overlay)
+    VkDescriptorSetLayout yuvSetLayout_ = VK_NULL_HANDLE; // 3 bindings (Y / U-or-UV / V)
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout yuvPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline yuvPipeline_ = VK_NULL_HANDLE;
+
+    // Push-constant block for video_yuv.frag (4 vec4: matrix columns + bias/nv12),
+    // rebaked in UploadFrame only when the colourimetry changes.
+    float yuvPush_[16] = {};
+    int yuvPushColorspace_ = -1;
+    int yuvPushFullRange_ = -1;
+    int yuvPushHeight_ = -1;
 
     // Staging-path textures (one per stream)…
     Texture video_{};

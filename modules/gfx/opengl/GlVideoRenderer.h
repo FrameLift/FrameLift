@@ -5,9 +5,9 @@
 
 #include "IVideoRenderer.h"
 
-// GL 3.3-core blitter: uploads software-decoded RGBA frames to a texture and draws
-// them, letterboxed, to the current framebuffer (the default FBO the host renders
-// the UI over).
+// GL 3.3-core blitter: uploads CPU-side frames (NV12/I420 planes converted to RGB
+// in the fragment shader, or RGBA verbatim) and draws them, letterboxed, to the
+// current framebuffer (the default FBO the host renders the UI over).
 //
 // It resolves its own GL entry points through the backend's GetProcAddr, so it needs
 // no system GL headers and no link dependency beyond the live GL context. Every
@@ -23,7 +23,7 @@ public:
     GlVideoRenderer& operator=(const GlVideoRenderer&) = delete;
 
     bool Init(IGraphicsBackend* backend) override;
-    void Upload(const uint8_t* rgba, int w, int h) override;
+    void UploadFrame(const uint8_t* data, const VideoFrameDesc& desc) override;
     void UploadOverlay(const uint8_t* rgba, int w, int h) override;
     void Draw(int fbW, int fbH, bool drawOverlay = false) override;
 

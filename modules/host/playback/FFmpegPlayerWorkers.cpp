@@ -9,6 +9,12 @@
 #include "FFmpegHwDecode.h"
 #include "FFmpegPacketQueue.h"
 #include "SwsColorspace.h"
+#include "VideoFrameDesc.h" // shared CPU-frame layout (graphics-core)
+
+extern "C"
+{
+#include <libavutil/pixdesc.h> // av_pix_fmt_desc_get: RGB- vs YUV-family fallback split
+}
 
 #include <algorithm>
 #include <chrono>
@@ -247,7 +253,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     SwsContext* swsConfigured = nullptr;
     int swsCoeff = -1;
     int swsSrcRange = -1;
-    std::vector<uint8_t> rgba(static_cast<size_t>(dstW) * dstH * 4);
+    std::vector<uint8_t> pixelBuf; // reused CPU frame buffer (planar YUV or RGBA; sized at publish)
     bool sentReconfig = false;
     bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
 
@@ -325,10 +331,6 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             dstH = f->height;
             displayWidth_ = dstW;
             displayHeight_ = dstH;
-            if (!vkFrame)
-            {
-                rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
-            }
             sentReconfig = true;
             QueueEvent(MakeLifecycle(MediaEventType::VideoReconfig));
         }
@@ -489,41 +491,99 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         else
 #endif
         {
-            sws = sws_getCachedContext(
-                sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), dstW, dstH, AV_PIX_FMT_RGBA,
-                SWS_BILINEAR, nullptr, nullptr, nullptr
-            );
-            if (!sws)
-            {
-                return false;
-            }
+            const auto srcPixFmt = static_cast<AVPixelFormat>(f->format);
+            VideoFrameDesc desc;
+            desc.w = dstW;
+            desc.h = dstH;
+            desc.colorspace = f->colorspace;
+            desc.fullRange = SwsColorspace::FullRange(f->color_range);
 
-            // Honour the frame's colorspace/range so the YUV→RGB matrix matches the
-            // stream (swscale otherwise defaults to BT.601 + limited-range input for
-            // everything, which darkens/cools HD and full-range clips). The Vulkan path
-            // already does this via VulkanColorMapping; this brings the software/GL path
-            // in line. No-op for RGB inputs. Reapply only on a real change.
-            const int coeff = SwsColorspace::ResolveCoefficients(f->colorspace, f->height);
-            const int srcRange = SwsColorspace::FullRange(f->color_range);
-            if (sws != swsConfigured || coeff != swsCoeff || srcRange != swsSrcRange)
+            if (srcPixFmt == AV_PIX_FMT_NV12 || srcPixFmt == AV_PIX_FMT_YUV420P)
             {
-                sws_setColorspaceDetails(
-                    sws, sws_getCoefficients(coeff), srcRange, sws_getCoefficients(SWS_CS_DEFAULT),
-                    /*dstRange=*/1, /*brightness=*/0, /*contrast=*/1 << 16, /*saturation=*/1 << 16
+                // Fast path — software 8-bit decode (I420) and every hw readback (NV12)
+                // land here: copy the planes tightly, no swscale at all. The renderer
+                // does the YUV→RGB matrix on the GPU (the shader gets desc's
+                // colorspace/range), which both removes the per-frame CPU conversion
+                // and shrinks the upload from 4 to 1.5 bytes per pixel.
+                desc.format = srcPixFmt == AV_PIX_FMT_NV12 ? VideoPixelFormat::NV12 : VideoPixelFormat::YUV420P;
+                const size_t bytes = FillTightLayout(desc);
+                if (pixelBuf.size() != bytes)
+                {
+                    pixelBuf.resize(bytes);
+                }
+                for (int p = 0; p < PlaneCount(desc.format); ++p)
+                {
+                    const int rowBytes = desc.stride[p];
+                    const int rows = PlaneRows(desc.format, p, desc.h);
+                    const uint8_t* src = f->data[p];
+                    uint8_t* dst = pixelBuf.data() + desc.planeOffset[p];
+                    if (f->linesize[p] == rowBytes)
+                    {
+                        std::memcpy(dst, src, static_cast<size_t>(rowBytes) * rows);
+                    }
+                    else
+                    {
+                        for (int r = 0; r < rows; ++r)
+                        {
+                            std::memcpy(
+                                dst + static_cast<size_t>(r) * rowBytes,
+                                src + static_cast<ptrdiff_t>(r) * f->linesize[p], rowBytes
+                            );
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Fallback for everything else (10-bit, 4:2:2/4:4:4, P010 readback, RGB
+                // sources): swscale once per frame. YUV-family sources resample to NV12 —
+                // depth/chroma only, no color matrix, so the tag rides through desc to
+                // the shader like the fast path. RGB-family sources convert to RGBA
+                // (there is no YUV matrix to apply; the shader samples them verbatim).
+                const AVPixFmtDescriptor* fmtDesc = av_pix_fmt_desc_get(srcPixFmt);
+                const bool rgbSource = fmtDesc && (fmtDesc->flags & AV_PIX_FMT_FLAG_RGB) != 0;
+                desc.format = rgbSource ? VideoPixelFormat::RGBA : VideoPixelFormat::NV12;
+                const size_t bytes = FillTightLayout(desc);
+
+                sws = sws_getCachedContext(
+                    sws, f->width, f->height, srcPixFmt, dstW, dstH, rgbSource ? AV_PIX_FMT_RGBA : AV_PIX_FMT_NV12,
+                    SWS_BILINEAR, nullptr, nullptr, nullptr
                 );
-                swsConfigured = sws;
-                swsCoeff = coeff;
-                swsSrcRange = srcRange;
+                if (!sws)
+                {
+                    return false;
+                }
+                if (rgbSource)
+                {
+                    // RGBA output is already display-referred; make sure a previously
+                    // configured YUV matrix doesn't linger on the cached context.
+                    const int coeff = SwsColorspace::ResolveCoefficients(f->colorspace, f->height);
+                    const int srcRange = SwsColorspace::FullRange(f->color_range);
+                    if (sws != swsConfigured || coeff != swsCoeff || srcRange != swsSrcRange)
+                    {
+                        sws_setColorspaceDetails(
+                            sws, sws_getCoefficients(coeff), srcRange, sws_getCoefficients(SWS_CS_DEFAULT),
+                            /*dstRange=*/1, /*brightness=*/0, /*contrast=*/1 << 16, /*saturation=*/1 << 16
+                        );
+                        swsConfigured = sws;
+                        swsCoeff = coeff;
+                        swsSrcRange = srcRange;
+                    }
+                }
+                if (pixelBuf.size() != bytes)
+                {
+                    pixelBuf.resize(bytes);
+                }
+                uint8_t* dst[4] = {
+                    pixelBuf.data() + desc.planeOffset[0],
+                    desc.format == VideoPixelFormat::NV12 ? pixelBuf.data() + desc.planeOffset[1] : nullptr, nullptr,
+                    nullptr
+                };
+                int dstStride[4] = {desc.stride[0], desc.stride[1], 0, 0};
+                sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
             }
-            if (rgba.size() != static_cast<size_t>(dstW) * dstH * 4)
-            {
-                rgba.assign(static_cast<size_t>(dstW) * dstH * 4, 0);
-            }
-            uint8_t* dst[4] = {rgba.data(), nullptr, nullptr, nullptr};
-            int dstStride[4] = {dstW * 4, 0, 0, 0};
-            sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
 
-            frameGate_.PublishPixels(rgba, dstW, dstH); // swap: worker reuses the returned buffer
+            frameGate_.PublishPixels(pixelBuf, desc); // swap: worker reuses the returned buffer
         }
         RequestRender();
 
