@@ -101,7 +101,7 @@ void FFmpegPlayer::PrepareRenderFrame(int w, int h) noexcept
         if (acq.newPixels)
 #endif
         {
-            renderer_->Upload(frameGate_.DisplayPixels().data(), acq.w, acq.h);
+            renderer_->UploadFrame(frameGate_.DisplayPixels().data(), acq.desc);
         }
 
         // Render the libass subtitle overlay at the on-screen video size so it stays

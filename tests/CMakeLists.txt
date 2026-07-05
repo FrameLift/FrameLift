@@ -95,6 +95,7 @@ add_executable(framelift_tests
         unit/media/FFmpegTrackSelectTests.cpp
         unit/gfx/VulkanCapabilityPlanTests.cpp
         unit/gfx/VulkanColorMappingTests.cpp
+        unit/gfx/YuvToRgbMatrixTests.cpp
         unit/gfx/VulkanDeviceSelectTests.cpp
         unit/gfx/VulkanQueueLockTests.cpp
         unit/gfx/VulkanRetireQueueTests.cpp

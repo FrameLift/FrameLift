@@ -5,6 +5,7 @@
 #include "VulkanColorMapping.h"
 #include "VulkanUploadPolicy.h"
 #include "VulkanUtil.h"
+#include "YuvToRgbMatrix.h"
 
 #include <vk_mem_alloc.h>
 
@@ -16,6 +17,44 @@
 // Embedded SPIR-V (generated at build time by cmake/FrameLiftShaders.cmake).
 #include "video.frag.spv.h"
 #include "video.vert.spv.h"
+#include "video_yuv.frag.spv.h"
+
+namespace
+{
+// Per-plane image layout of a VideoFrameDesc: Vulkan format, texel extent and the
+// plane's byte offset/size within the tightly packed CPU buffer.
+struct PlaneSpec
+{
+    VkFormat fmt;
+    uint32_t w, h;
+    size_t offset;
+    size_t bytes;
+};
+
+int GetPlaneSpecs(const VideoFrameDesc& d, PlaneSpec out[3])
+{
+    const auto w = static_cast<uint32_t>(d.w);
+    const auto h = static_cast<uint32_t>(d.h);
+    const uint32_t cw = (w + 1) / 2;
+    const uint32_t ch = (h + 1) / 2;
+    switch (d.format)
+    {
+    case VideoPixelFormat::RGBA:
+        out[0] = {VK_FORMAT_R8G8B8A8_UNORM, w, h, d.planeOffset[0], static_cast<size_t>(w) * h * 4};
+        return 1;
+    case VideoPixelFormat::NV12:
+        out[0] = {VK_FORMAT_R8_UNORM, w, h, d.planeOffset[0], static_cast<size_t>(w) * h};
+        out[1] = {VK_FORMAT_R8G8_UNORM, cw, ch, d.planeOffset[1], static_cast<size_t>(cw) * ch * 2};
+        return 2;
+    case VideoPixelFormat::YUV420P:
+        out[0] = {VK_FORMAT_R8_UNORM, w, h, d.planeOffset[0], static_cast<size_t>(w) * h};
+        out[1] = {VK_FORMAT_R8_UNORM, cw, ch, d.planeOffset[1], static_cast<size_t>(cw) * ch};
+        out[2] = {VK_FORMAT_R8_UNORM, cw, ch, d.planeOffset[2], static_cast<size_t>(cw) * ch};
+        return 3;
+    }
+    return 0;
+}
+} // namespace
 
 VulkanVideoRenderer::VulkanVideoRenderer(VulkanGraphicsBackend* backend) : backend_(backend)
 {
@@ -66,6 +105,14 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     {
         vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     }
+    if (yuvPipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, yuvPipeline_, nullptr);
+    }
+    if (yuvPipelineLayout_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(device_, yuvPipelineLayout_, nullptr);
+    }
     if (descPool_ != VK_NULL_HANDLE)
     {
         vkDestroyDescriptorPool(device_, descPool_, nullptr);
@@ -73,6 +120,10 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     if (setLayout_ != VK_NULL_HANDLE)
     {
         vkDestroyDescriptorSetLayout(device_, setLayout_, nullptr);
+    }
+    if (yuvSetLayout_ != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorSetLayout(device_, yuvSetLayout_, nullptr);
     }
     if (sampler_ != VK_NULL_HANDLE)
     {
@@ -109,18 +160,28 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
     }
     VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_SAMPLER, sampler_, "FrameLift video sampler");
 
-    // Descriptor set layout: binding 0 = combined image sampler (fragment stage).
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Descriptor set layouts: binding 0 = combined image sampler (RGBA video +
+    // overlay); the planar-YUV layout adds bindings 1/2 for the chroma planes.
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    for (uint32_t b = 0; b < 3; ++b)
+    {
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 1;
-    li.pBindings = &binding;
+    li.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &setLayout_) != VK_SUCCESS)
     {
         Log::Error("VulkanVideoRenderer: descriptor set layout creation failed");
+        return false;
+    }
+    li.bindingCount = 3;
+    if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &yuvSetLayout_) != VK_SUCCESS)
+    {
+        Log::Error("VulkanVideoRenderer: YUV descriptor set layout creation failed");
         return false;
     }
 
@@ -128,8 +189,9 @@ bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
     // for retired predecessors: a resize allocates a fresh set (the old one may be
     // bound in a frame still in flight, so it can be neither updated in place nor
     // freed until the retire queue proves it idle — hence FREE_DESCRIPTOR_SET_BIT).
+    // Descriptor budget is 3 samplers per set (the planar-YUV worst case).
     constexpr uint32_t kSets = 16;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 3};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets = kSets;
@@ -150,7 +212,10 @@ VkShaderModule VulkanVideoRenderer::CreateShaderModule(const uint32_t* code, siz
     ci.codeSize = sizeBytes;
     ci.pCode = code;
     VkShaderModule m = VK_NULL_HANDLE;
-    VK_CHECK_LOG_RETURN(vkCreateShaderModule(device_, &ci, nullptr, &m), "VulkanVideoRenderer: shader module creation failed", VK_NULL_HANDLE);
+    VK_CHECK_LOG_RETURN(
+        vkCreateShaderModule(device_, &ci, nullptr, &m), "VulkanVideoRenderer: shader module creation failed",
+        VK_NULL_HANDLE
+    );
     return m;
 }
 
@@ -161,16 +226,31 @@ bool VulkanVideoRenderer::BuildPipeline()
         return false;
     }
     VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_PIPELINE, pipeline_, "FrameLift RGBA blit pipeline");
+    if (!CreateBlitPipeline(
+            yuvSetLayout_, yuvPipelineLayout_, yuvPipeline_, kVideoYuvFragSpv, sizeof(kVideoYuvFragSpv),
+            sizeof(yuvPush_)
+        ))
+    {
+        return false;
+    }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_PIPELINE, yuvPipeline_, "FrameLift planar-YUV blit pipeline");
     return true;
 }
 
 bool VulkanVideoRenderer::CreateBlitPipeline(
-    VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline
+    VkDescriptorSetLayout setLayout, VkPipelineLayout& outLayout, VkPipeline& outPipeline, const uint32_t* fragCode,
+    size_t fragSizeBytes, uint32_t pushConstantBytes
 )
 {
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1;
     pl.pSetLayouts = &setLayout;
+    VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, pushConstantBytes};
+    if (pushConstantBytes > 0)
+    {
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &pcr;
+    }
     if (vkCreatePipelineLayout(device_, &pl, nullptr, &outLayout) != VK_SUCCESS)
     {
         Log::Error("VulkanVideoRenderer: pipeline layout creation failed");
@@ -178,7 +258,8 @@ bool VulkanVideoRenderer::CreateBlitPipeline(
     }
 
     VkShaderModule vs = CreateShaderModule(kVideoVertSpv, sizeof(kVideoVertSpv));
-    VkShaderModule fs = CreateShaderModule(kVideoFragSpv, sizeof(kVideoFragSpv));
+    VkShaderModule fs = fragCode ? CreateShaderModule(fragCode, fragSizeBytes)
+                                 : CreateShaderModule(kVideoFragSpv, sizeof(kVideoFragSpv));
     if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE)
     {
         Log::Error("VulkanVideoRenderer: shader module creation failed");
@@ -268,108 +349,139 @@ bool VulkanVideoRenderer::CreateBlitPipeline(
 
 void VulkanVideoRenderer::DestroyTexture(Texture& t)
 {
-    if (t.view != VK_NULL_HANDLE)
+    for (int p = 0; p < 3; ++p)
     {
-        vkDestroyImageView(device_, t.view, nullptr);
-    }
-    if (t.image != VK_NULL_HANDLE)
-    {
-        vmaDestroyImage(allocator_, t.image, t.alloc);
+        if (t.view[p] != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(device_, t.view[p], nullptr);
+        }
+        if (t.image[p] != VK_NULL_HANDLE)
+        {
+            vmaDestroyImage(allocator_, t.image[p], t.alloc[p]);
+        }
     }
     t = {};
 }
 
-bool VulkanVideoRenderer::EnsureTexture(Texture& t, int w, int h, bool hostCopy)
+bool VulkanVideoRenderer::EnsureTexture(Texture& t, const VideoFrameDesc& desc, bool hostCopy)
 {
-    if (t.valid && t.w == w && t.h == h)
+    if (t.valid && t.w == desc.w && t.h == desc.h && t.format == desc.format)
     {
         return true;
     }
 
-    // Reallocate at the new size. An in-flight frame may still sample the old image
-    // through the old (bound) descriptor set, so image, view and set are retired as a
-    // unit and a fresh set is written for the new view — no device stall.
+    // Reallocate at the new size/format. An in-flight frame may still sample the old
+    // images through the old (bound) descriptor set, so images, views and set are
+    // retired as a unit and a fresh set is written for the new views — no device stall.
     if (t.valid)
     {
         backend_->Retire(
-            [device = device_, allocator = allocator_, pool = descPool_, view = t.view, image = t.image,
-             alloc = t.alloc, set = t.set]
+            [device = device_, allocator = allocator_, pool = descPool_, old = t]
             {
-                vkDestroyImageView(device, view, nullptr);
-                vmaDestroyImage(allocator, image, alloc);
-                vkFreeDescriptorSets(device, pool, 1, &set);
+                for (int p = 0; p < 3; ++p)
+                {
+                    if (old.view[p] != VK_NULL_HANDLE)
+                    {
+                        vkDestroyImageView(device, old.view[p], nullptr);
+                    }
+                    if (old.image[p] != VK_NULL_HANDLE)
+                    {
+                        vmaDestroyImage(allocator, old.image[p], old.alloc[p]);
+                    }
+                }
+                vkFreeDescriptorSets(device, pool, 1, &old.set);
             }
         );
         t = {};
     }
 
-    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = VK_FORMAT_R8G8B8A8_UNORM;
-    ici.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
-    ici.mipLevels = 1;
-    ici.arrayLayers = 1;
-    ici.samples = VK_SAMPLE_COUNT_1_BIT;
-    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
-                (hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT : VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    VmaAllocationCreateInfo aci{};
-    aci.usage = VMA_MEMORY_USAGE_AUTO;
-    if (vmaCreateImage(allocator_, &ici, &aci, &t.image, &t.alloc, nullptr) != VK_SUCCESS)
+    PlaneSpec planes[3];
+    const int planeCount = GetPlaneSpecs(desc, planes);
+    for (int p = 0; p < planeCount; ++p)
     {
-        Log::Error("VulkanVideoRenderer: image allocation failed ({}x{})", w, h);
-        return false;
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = planes[p].fmt;
+        ici.extent = {planes[p].w, planes[p].h, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                    (hostCopy ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT : VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        if (vmaCreateImage(allocator_, &ici, &aci, &t.image[p], &t.alloc[p], nullptr) != VK_SUCCESS)
+        {
+            Log::Error("VulkanVideoRenderer: image allocation failed ({}x{})", planes[p].w, planes[p].h);
+            return false;
+        }
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image = t.image[p];
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = planes[p].fmt;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device_, &vci, nullptr, &t.view[p]) != VK_SUCCESS)
+        {
+            Log::Error("VulkanVideoRenderer: image view creation failed");
+            return false;
+        }
+        VulkanUtil::SetObjectName(
+            device_, VK_OBJECT_TYPE_IMAGE, t.image[p],
+            hostCopy ? "FrameLift host-copy image" : "FrameLift staging-path image"
+        );
     }
 
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vci.image = t.image;
-    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = VK_FORMAT_R8G8B8A8_UNORM;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (vkCreateImageView(device_, &vci, nullptr, &t.view) != VK_SUCCESS)
-    {
-        Log::Error("VulkanVideoRenderer: image view creation failed");
-        return false;
-    }
-
+    const bool yuv = desc.format != VideoPixelFormat::RGBA;
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dai.descriptorPool = descPool_;
     dai.descriptorSetCount = 1;
-    dai.pSetLayouts = &setLayout_;
+    dai.pSetLayouts = yuv ? &yuvSetLayout_ : &setLayout_;
     if (vkAllocateDescriptorSets(device_, &dai, &t.set) != VK_SUCCESS)
     {
         Log::Error("VulkanVideoRenderer: descriptor set allocation failed");
         return false;
     }
 
-    VkDescriptorImageInfo dii{
-        sampler_, t.view, hostCopy ? backend_->HostCopyDstLayout() : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    };
-    VkWriteDescriptorSet w0{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w0.dstSet = t.set;
-    w0.dstBinding = 0;
-    w0.descriptorCount = 1;
-    w0.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w0.pImageInfo = &dii;
-    vkUpdateDescriptorSets(device_, 1, &w0, 0, nullptr);
+    // Bindings: 0 = RGBA or Y, 1 = U-or-UV, 2 = V (NV12 re-binds the UV view so every
+    // sampler binding holds a valid image; the shader never takes the V branch there).
+    const VkImageLayout sampleLayout =
+        hostCopy ? backend_->HostCopyDstLayout() : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo dii[3];
+    VkWriteDescriptorSet writes[3];
+    const uint32_t bindingCount = yuv ? 3u : 1u;
+    for (uint32_t b = 0; b < bindingCount; ++b)
+    {
+        VkImageView view = t.view[std::min<uint32_t>(b, static_cast<uint32_t>(planeCount) - 1)];
+        dii[b] = {sampler_, view, sampleLayout};
+        writes[b] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[b].dstSet = t.set;
+        writes[b].dstBinding = b;
+        writes[b].descriptorCount = 1;
+        writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[b].pImageInfo = &dii[b];
+    }
+    vkUpdateDescriptorSets(device_, bindingCount, writes, 0, nullptr);
 
-    t.w = w;
-    t.h = h;
+    t.w = desc.w;
+    t.h = desc.h;
+    t.format = desc.format;
     t.layout = VK_IMAGE_LAYOUT_UNDEFINED;
     t.valid = true;
-    VulkanUtil::SetObjectName(
-        device_, VK_OBJECT_TYPE_IMAGE, t.image, hostCopy ? "FrameLift host-copy image" : "FrameLift staging-path image"
-    );
 
     if (hostCopy)
     {
-        // One-time host-side transition into the layout the image lives in from now on;
-        // every later upload copies into it in place.
-        if (!backend_->HostTransitionImage(t.image, VK_IMAGE_LAYOUT_UNDEFINED, backend_->HostCopyDstLayout()))
+        // One-time host-side transition into the layout the images live in from now on;
+        // every later upload copies into them in place.
+        for (int p = 0; p < planeCount; ++p)
         {
-            return false;
+            if (!backend_->HostTransitionImage(t.image[p], VK_IMAGE_LAYOUT_UNDEFINED, backend_->HostCopyDstLayout()))
+            {
+                return false;
+            }
         }
         t.layout = backend_->HostCopyDstLayout();
     }
@@ -478,9 +590,9 @@ void RecordCopy(VkCommandBuffer cmd, void* ud)
 }
 } // namespace
 
-void VulkanVideoRenderer::UploadHostCopy(HostRing& ring, const uint8_t* rgba, int w, int h)
+void VulkanVideoRenderer::UploadHostCopy(HostRing& ring, const uint8_t* data, const VideoFrameDesc& desc)
 {
-    if (!rgba || w <= 0 || h <= 0)
+    if (!data || desc.w <= 0 || desc.h <= 0)
     {
         return;
     }
@@ -488,8 +600,7 @@ void VulkanVideoRenderer::UploadHostCopy(HostRing& ring, const uint8_t* rgba, in
     {
         ring.policy.Reset(HostRing::kSlots);
     }
-    const int slot =
-        ring.policy.AcquireWritable(backend_->FrameCounter(), VulkanGraphicsBackend::kMaxFramesInFlight);
+    const int slot = ring.policy.AcquireWritable(backend_->FrameCounter(), VulkanGraphicsBackend::kMaxFramesInFlight);
     if (slot < 0)
     {
         // Ring sized for the worst case, so this indicates a policy bug; keep showing
@@ -503,13 +614,18 @@ void VulkanVideoRenderer::UploadHostCopy(HostRing& ring, const uint8_t* rgba, in
         return;
     }
     Texture& t = ring.tex[slot];
-    if (!EnsureTexture(t, w, h, true))
+    if (!EnsureTexture(t, desc, true))
     {
         return;
     }
-    if (!backend_->HostCopyToImage(t.image, t.layout, rgba, static_cast<uint32_t>(w), static_cast<uint32_t>(h)))
+    PlaneSpec planes[3];
+    const int planeCount = GetPlaneSpecs(desc, planes);
+    for (int p = 0; p < planeCount; ++p)
     {
-        return;
+        if (!backend_->HostCopyToImage(t.image[p], t.layout, data + planes[p].offset, planes[p].w, planes[p].h))
+        {
+            return;
+        }
     }
     ring.policy.MarkWritten(slot);
 }
@@ -528,13 +644,13 @@ const VulkanVideoRenderer::Texture* VulkanVideoRenderer::CurrentTexture(HostRing
     return single.valid ? &single : nullptr;
 }
 
-void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h)
+void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* data, const VideoFrameDesc& desc)
 {
-    if (!rgba || w <= 0 || h <= 0)
+    if (!data || desc.w <= 0 || desc.h <= 0)
     {
         return;
     }
-    if (!EnsureTexture(t, w, h, false))
+    if (!EnsureTexture(t, desc, false))
     {
         return;
     }
@@ -545,8 +661,7 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h
         slot.frame = backend_->FrameCounter();
         slot.used = 0; // new frame: the slot's previous contents are provably consumed
     }
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
-    if (!EnsureStagingSpace(slot, bytes) || !slot.mapped)
+    if (!EnsureStagingSpace(slot, RequiredBytes(desc) + 16) || !slot.mapped)
     {
         return;
     }
@@ -557,29 +672,63 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* rgba, int w, int h
         return;
     }
 
-    const VkDeviceSize offset = slot.used;
-    std::memcpy(static_cast<uint8_t*>(slot.mapped) + offset, rgba, static_cast<size_t>(bytes));
-    // VMA_MEMORY_USAGE_AUTO does not guarantee a HOST_COHERENT heap; flush so the GPU
-    // copy sees the bytes just written (no-op when the memory is coherent).
-    vmaFlushAllocation(allocator_, slot.alloc, offset, bytes);
-    // Keep bufferOffset texel-aligned for the next upload in this frame.
-    slot.used = VulkanUploadPolicy::AlignArenaOffset(offset + bytes);
+    // Per-plane bump allocation: each plane gets its own aligned bufferOffset (the copy
+    // requires a multiple of the plane's texel size; AlignArenaOffset over-satisfies).
+    PlaneSpec planes[3];
+    const int planeCount = GetPlaneSpecs(desc, planes);
+    const VkImageLayout groupOldLayout = t.layout;
+    for (int p = 0; p < planeCount; ++p)
+    {
+        const VkDeviceSize offset = VulkanUploadPolicy::AlignArenaOffset(slot.used);
+        const auto bytes = static_cast<VkDeviceSize>(planes[p].bytes);
+        std::memcpy(static_cast<uint8_t*>(slot.mapped) + offset, data + planes[p].offset, planes[p].bytes);
+        // VMA_MEMORY_USAGE_AUTO does not guarantee a HOST_COHERENT heap; flush so the GPU
+        // copy sees the bytes just written (no-op when the memory is coherent).
+        vmaFlushAllocation(allocator_, slot.alloc, offset, bytes);
+        slot.used = offset + bytes;
 
-    CopyJob job{slot.buffer, offset, t.image, t.layout, static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
-    RecordCopy(cmd, &job);
+        CopyJob job{slot.buffer, offset, t.image[p], groupOldLayout, planes[p].w, planes[p].h};
+        RecordCopy(cmd, &job);
+    }
+    slot.used = VulkanUploadPolicy::AlignArenaOffset(slot.used);
     t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-void VulkanVideoRenderer::Upload(const uint8_t* rgba, int w, int h)
+void VulkanVideoRenderer::UploadFrame(const uint8_t* data, const VideoFrameDesc& desc)
 {
-    vkFrame_ = nullptr; // switched (back) to the CPU-RGBA8 path
+    vkFrame_ = nullptr; // switched (back) to the CPU-pixels path
+
+    // Rebake the shader's push constants only when the colourimetry changes (stable
+    // across a stream).
+    if (desc.format != VideoPixelFormat::RGBA &&
+        (desc.colorspace != yuvPushColorspace_ || desc.fullRange != yuvPushFullRange_ || desc.h != yuvPushHeight_))
+    {
+        float mat[9];
+        float bias[3];
+        YuvToRgb::BuildYuvToRgbMatrix(desc.colorspace, desc.fullRange, desc.h, mat, bias);
+        for (int c = 0; c < 3; ++c) // three vec4 columns (xyz used)
+        {
+            yuvPush_[c * 4 + 0] = mat[c * 3 + 0];
+            yuvPush_[c * 4 + 1] = mat[c * 3 + 1];
+            yuvPush_[c * 4 + 2] = mat[c * 3 + 2];
+            yuvPush_[c * 4 + 3] = 0.0f;
+        }
+        yuvPush_[12] = bias[0];
+        yuvPush_[13] = bias[1];
+        yuvPush_[14] = bias[2];
+        yuvPushColorspace_ = desc.colorspace;
+        yuvPushFullRange_ = desc.fullRange;
+        yuvPushHeight_ = desc.h;
+    }
+    yuvPush_[15] = desc.format == VideoPixelFormat::NV12 ? 1.0f : 0.0f; // bias.w = NV12 flag
+
     if (useHostCopy_)
     {
-        UploadHostCopy(videoRing_, rgba, w, h);
+        UploadHostCopy(videoRing_, data, desc);
     }
     else
     {
-        UploadTo(video_, rgba, w, h);
+        UploadTo(video_, data, desc);
     }
 }
 
@@ -595,16 +744,20 @@ void VulkanVideoRenderer::UploadVulkanFrame(void* avFrame, int displayW, int dis
 
 void VulkanVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
 {
+    VideoFrameDesc desc;
+    desc.format = VideoPixelFormat::RGBA;
+    desc.w = w;
+    desc.h = h;
+    FillTightLayout(desc);
     if (useHostCopy_)
     {
-        UploadHostCopy(overlayRing_, rgba, w, h);
+        UploadHostCopy(overlayRing_, rgba, desc);
     }
     else
     {
-        UploadTo(overlay_, rgba, w, h);
+        UploadTo(overlay_, rgba, desc);
     }
 }
-
 
 void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
 {
@@ -644,8 +797,22 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &videoTex->set, 0, nullptr);
+        if (videoTex->format == VideoPixelFormat::RGBA)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &videoTex->set, 0, nullptr
+            );
+        }
+        else
+        {
+            // Planar YUV: shader-side conversion, matrix/bias via push constants.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, yuvPipeline_);
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, yuvPipelineLayout_, 0, 1, &videoTex->set, 0, nullptr
+            );
+            vkCmdPushConstants(cmd, yuvPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(yuvPush_), yuvPush_);
+        }
         vkCmdDraw(cmd, 3, 1, 0, 0);
         videoRing_.policy.MarkDisplayedSampled(backend_->FrameCounter());
         viewportSet = true;
@@ -678,7 +845,9 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
             vkCmdSetScissor(cmd, 0, 1, &scissor);
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &overlayTex->set, 0, nullptr);
+        vkCmdBindDescriptorSets(
+            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &overlayTex->set, 0, nullptr
+        );
         vkCmdDraw(cmd, 3, 1, 0, 0);
         overlayRing_.policy.MarkDisplayedSampled(backend_->FrameCounter());
     }

@@ -260,8 +260,9 @@ endif ()
 if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     framelift_compile_shader("${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/shaders/video.vert" kVideoVertSpv FL_VIDEO_VERT_SPV)
     framelift_compile_shader("${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/shaders/video.frag" kVideoFragSpv FL_VIDEO_FRAG_SPV)
+    framelift_compile_shader("${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/shaders/video_yuv.frag" kVideoYuvFragSpv FL_VIDEO_YUV_FRAG_SPV)
     framelift_add_host_module(framelift_mod_graphics_vulkan
-            ${_FRAMELIFT_HOST_GRAPHICS_VULKAN_SOURCES} "${FL_VIDEO_VERT_SPV}" "${FL_VIDEO_FRAG_SPV}")
+            ${_FRAMELIFT_HOST_GRAPHICS_VULKAN_SOURCES} "${FL_VIDEO_VERT_SPV}" "${FL_VIDEO_FRAG_SPV}" "${FL_VIDEO_YUV_FRAG_SPV}")
     target_include_directories(framelift_mod_graphics_vulkan PRIVATE "${FRAMELIFT_SHADER_GEN_DIR}")
     target_link_libraries(framelift_mod_graphics_vulkan PRIVATE
             Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator)

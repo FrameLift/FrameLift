@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VideoFrameDesc.h" // layout of the pixels channel (libav/GL/Vulkan-free)
+
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -9,7 +11,8 @@
 // Decode→render video frame handoff: a latest-wins single-slot mailbox.
 //
 // Two channels share the slot (a loaded file uses exactly one for its lifetime):
-//   pixels — RGBA8 buffers cycling decode-owned → pending → display-owned by
+//   pixels — CPU frame buffers (RGBA or planar YUV, described by VideoFrameDesc)
+//            cycling decode-owned → pending → display-owned by
 //            swap, so steady-state playback does no allocation;
 //   opaque — an owned foreign frame handle (the Vulkan zero-copy AVFrame),
 //            stored as void* with an injected release callback so this header
@@ -28,6 +31,7 @@ public:
         bool newOpaque = false;
         int w = 0;
         int h = 0;
+        VideoFrameDesc desc; // pixels channel only; desc.w/h mirror w/h there
     };
 
     // Must be set before the first PublishOpaque; not thread-safe to change while
@@ -37,15 +41,16 @@ public:
         release_ = release;
     }
 
-    // Hand a finished RGBA frame to the render thread; src is swapped with the
-    // pending buffer (latest wins) so the producer gets a reusable buffer back.
-    void PublishPixels(std::vector<uint8_t>& src, int w, int h)
+    // Hand a finished CPU frame (layout in desc) to the render thread; src is swapped
+    // with the pending buffer (latest wins) so the producer gets a reusable buffer back.
+    void PublishPixels(std::vector<uint8_t>& src, const VideoFrameDesc& desc)
     {
         {
             std::lock_guard lock(mutex_);
             std::swap(src, pendingPixels_);
-            pendingW_ = w;
-            pendingH_ = h;
+            pendingDesc_ = desc;
+            pendingW_ = desc.w;
+            pendingH_ = desc.h;
             pendingValid_ = true;
             pendingIsOpaque_ = false;
         }
@@ -93,7 +98,9 @@ public:
                 else
                 {
                     std::swap(displayPixels_, pendingPixels_);
+                    displayDesc_ = pendingDesc_;
                     r.newPixels = true;
+                    r.desc = pendingDesc_;
                 }
                 r.w = pendingW_;
                 r.h = pendingH_;
@@ -135,6 +142,13 @@ public:
         return displayPixels_;
     }
 
+    // Layout of the display-slot pixels (render-thread-owned, valid after the first
+    // pixels Acquire) — lets the renderer re-upload without a fresh publish.
+    [[nodiscard]] const VideoFrameDesc& DisplayDesc() const
+    {
+        return displayDesc_;
+    }
+
     // Release every held opaque frame (pending and displayed). Call only when the
     // producer threads are joined and the renderer's views over the displayed
     // frame are gone.
@@ -167,6 +181,7 @@ private:
 
     std::mutex mutex_; // guards the pending slot below
     std::vector<uint8_t> pendingPixels_;
+    VideoFrameDesc pendingDesc_;
     void* pendingOpaque_ = nullptr;
     int pendingW_ = 0;
     int pendingH_ = 0;
@@ -176,6 +191,7 @@ private:
 
     // Render-thread-owned display slot.
     std::vector<uint8_t> displayPixels_;
+    VideoFrameDesc displayDesc_;
     void* displayOpaque_ = nullptr;
     bool displayIsOpaque_ = false;
 };
