@@ -319,20 +319,20 @@ dynaudnormFrameLen=250
     {
         // Bool fields parse via (v == "1"); every other token is false, none throw.
         const Settings def;
-        QVERIFY(def.Get<PlaybackSettings>().hrSeek); // default is true, so "not 1" must flip it to false
+        QVERIFY(def.Get<PlaybackSettings>().subAutoLoad); // default is true, so "not 1" must flip it to false
 
         for (const char* token : {"true", "2", "yes"})
         {
-            const TempFile f(std::string("[playback]\nhrSeek=") + token + "\n");
+            const TempFile f(std::string("[playback]\nsubAutoLoad=") + token + "\n");
             Settings s;
             s.Load(f.str());
-            QVERIFY2(!(s.Get<PlaybackSettings>().hrSeek), (std::string("token=") + token).c_str());
+            QVERIFY2(!(s.Get<PlaybackSettings>().subAutoLoad), (std::string("token=") + token).c_str());
         }
 
-        const TempFile one("[playback]\nhrSeek=1\n");
+        const TempFile one("[playback]\nsubAutoLoad=1\n");
         Settings s;
         s.Load(one.str());
-        QVERIFY(s.Get<PlaybackSettings>().hrSeek);
+        QVERIFY(s.Get<PlaybackSettings>().subAutoLoad);
     }
 
     void InvalidHwdecModeNormalizesToAuto()

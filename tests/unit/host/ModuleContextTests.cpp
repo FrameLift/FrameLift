@@ -156,7 +156,7 @@ private Q_SLOTS:
     {
         Ctx c;
         QCOMPARE(c.ctx.Settings().GetSettingFloat("ui.panelWidth"), 320.f);
-        QVERIFY(c.ctx.Settings().GetSettingBool("playback.hrSeek"));
+        QVERIFY(c.ctx.Settings().GetSettingBool("playback.subAutoLoad"));
         QVERIFY((c.ctx.Settings().GetSettingInt("audio.dynaudnormFrameLen")) == (100));
         QVERIFY((GetStr(c.ctx, "files.videoExtensions").rfind("mp4", 0)) == (0u));
     }
@@ -165,12 +165,12 @@ private Q_SLOTS:
     {
         Ctx c;
         c.ctx.Settings().CommitSettingFloat("ui.panelWidth", 500.f);
-        c.ctx.Settings().CommitSettingBool("playback.hrSeek", false);
+        c.ctx.Settings().CommitSettingBool("playback.subAutoLoad", false);
         c.ctx.Settings().CommitSettingInt("audio.dynaudnormFrameLen", 250);
         c.ctx.Settings().CommitSettingString("files.videoExtensions", "avi;mov");
 
         QCOMPARE(c.ctx.Settings().GetSettingFloat("ui.panelWidth"), 500.f);
-        QVERIFY(!(c.ctx.Settings().GetSettingBool("playback.hrSeek")));
+        QVERIFY(!(c.ctx.Settings().GetSettingBool("playback.subAutoLoad")));
         QVERIFY((c.ctx.Settings().GetSettingInt("audio.dynaudnormFrameLen")) == (250));
         QVERIFY((GetStr(c.ctx, "files.videoExtensions")) == ("avi;mov"));
         // The commit also reflects in the underlying Settings object.

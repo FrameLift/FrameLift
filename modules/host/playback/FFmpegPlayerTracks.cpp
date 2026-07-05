@@ -285,7 +285,7 @@ void FFmpegPlayer::SetAudioPreferences(const AudioPreferences& prefs) noexcept
     if (outputChanged && audioOut_->HasDevice() && !idle_.load())
     {
         const double target = ClampSeekTarget(GetMasterClock(), duration_.load());
-        RequestSeek(target);
+        RequestSeek(target, SeekKind::Exact); // device switch resumes exactly where playback was
         audioQ_->Abort();
         videoQ_->Abort();
         subQ_->Abort();
@@ -364,6 +364,7 @@ void FFmpegPlayer::SelectSubtitleTrack(int64_t id) noexcept
         pendingSubId_ = id;
         hasPendingSubSwitch_ = true;
         seekTarget_ = target;
+        seekKind_ = SeekKind::Exact; // resume exactly where playback was
         hasPendingSeek_ = true;
     }
     audioQ_->Abort();
@@ -405,6 +406,7 @@ void FFmpegPlayer::SelectAudioTrack(int64_t id) noexcept
         pendingAudioId_ = id;
         hasPendingAudioSwitch_ = true;
         seekTarget_ = target;
+        seekKind_ = SeekKind::Exact; // resume exactly where playback was
         hasPendingSeek_ = true;
     }
     audioQ_->Abort();

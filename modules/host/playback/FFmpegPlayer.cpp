@@ -272,7 +272,7 @@ bool FFmpegPlayer::StopRequested()
     return shutdown_.load() || hasPendingLoad_ || stopRequested_;
 }
 
-double FFmpegPlayer::TakePendingSeek()
+FFmpegPlayer::PendingSeek FFmpegPlayer::TakePendingSeek()
 {
     std::lock_guard lock(mutex_);
     hasPendingSeek_ = false;
@@ -280,7 +280,7 @@ double FFmpegPlayer::TakePendingSeek()
     // anchor-release gate in the same lock so a held-key Seek() can't read a
     // momentarily-0 GetMasterClock() and re-target from the start.
     seekClockValid_ = false;
-    return seekTarget_;
+    return {seekTarget_, seekKind_};
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -294,4 +294,3 @@ void FFmpegPlayer::SetWakeupCallback(void (*cb)(void*), void* ud) noexcept
 {
     eventSink_.SetWakeupCallback(cb, ud);
 }
-

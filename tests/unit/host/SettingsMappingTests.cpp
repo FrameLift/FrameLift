@@ -78,15 +78,31 @@ private Q_SLOTS:
     {
         PlaybackSettings s;
         s.hwdecMode = "off";
-        s.hrSeek = true;
         s.subAutoLoad = true;
         s.audioFileAutoLoad = false;
 
         const PlaybackOptions o = ToPlaybackOptions(s);
         QVERIFY(!(o.hwdec));
-        QVERIFY(o.hrSeek);
+        QVERIFY(o.hrSeek); // default seekMode "smart" keeps the SDK hrSeek bool true
         QVERIFY(o.subAutoLoad);
         QVERIFY(!(o.audioFileAutoLoad));
+    }
+
+    void SeekModeMapsToPrecisionAndKeepsHrSeekCoherent()
+    {
+        PlaybackSettings s;
+        QVERIFY((ToSeekPrecisionMode(s)) == (SeekPrecisionMode::Smart)); // default "smart"
+
+        s.seekMode = "exact";
+        QVERIFY((ToSeekPrecisionMode(s)) == (SeekPrecisionMode::Exact));
+        QVERIFY(ToPlaybackOptions(s).hrSeek);
+
+        s.seekMode = "keyframe";
+        QVERIFY((ToSeekPrecisionMode(s)) == (SeekPrecisionMode::Keyframe));
+        QVERIFY(!(ToPlaybackOptions(s).hrSeek)); // keyframe-everything is the only hrSeek=false case
+
+        s.seekMode = "not-a-mode";
+        QVERIFY((ToSeekPrecisionMode(s)) == (SeekPrecisionMode::Smart)); // unknown falls back
     }
 
     void PlaybackOptionsTreatHwdecModeOffAsDisabled()

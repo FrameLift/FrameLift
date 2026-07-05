@@ -52,6 +52,33 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
         {
             return;
         }
+        // Post-seek gate: hold the feed until the video worker paints the target
+        // frame (seekSettled_), so an exact seek doesn't play audible audio over a
+        // frozen picture while video is still decode-discarding toward the target.
+        // Bounded and bail-aware — rationale and deadlock analysis at
+        // ShouldReleaseAudioSeekHold (FFmpegClock.h). No-op in steady state and for
+        // audio-only files (deliver itself settles those below).
+        if (hasVideo_ && audioOut_->HasDevice())
+        {
+            const auto holdStart = std::chrono::steady_clock::now();
+            std::unique_lock lock(mutex_);
+            for (;;)
+            {
+                const bool superseded = seekKicked_;
+                const bool tearingDown = shutdown_.load() || hasPendingLoad_ || stopRequested_;
+                const double heldSec =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
+                if (ShouldReleaseAudioSeekHold(seekSettled_, superseded, tearingDown, heldSec, kSeekAudioHoldLimit))
+                {
+                    if (superseded || tearingDown)
+                    {
+                        return; // stale audio for a superseded seek / teardown — drop it
+                    }
+                    break;
+                }
+                cv_.wait_for(lock, std::chrono::milliseconds(50));
+            }
+        }
         const double audioOffsetSec = static_cast<double>(audioSyncOffsetMs_.load()) / 1000.0;
         audioOut_->Feed(f, ptsSec + audioOffsetSec);
         if (audioOut_->HasDevice())
@@ -610,6 +637,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             seekSettled_ = true;
             reseek = hasPendingSeek_; // a newer target (e.g. held key) arrived mid-seek
         }
+        cv_.notify_all(); // release the audio worker's post-seek hold promptly
         if (reseek)
         {
             // Tear the session down so the decode loop re-seeks to the latest target. The

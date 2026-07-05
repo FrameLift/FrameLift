@@ -3,6 +3,7 @@
 #include <framelift/platform/IMediaPlayer.h>
 
 #include "FFmpegClock.h" // VideoWallClockState
+#include "FFmpegSeekPlan.h"
 #include "FFmpegSidecarScan.h"
 #include "FFmpegSubtitles.h"
 #include "FFmpegTrackSelect.h"
@@ -117,6 +118,9 @@ public:
     void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept override;
     void SetPlaybackOptions(const PlaybackOptions& opts) noexcept override;
     void SetVideoDecodeMode(VideoDecodeMode mode) noexcept;
+    // Module-internal knob (playback.seekMode; not part of the SDK PlaybackOptions
+    // POD, the fastProbe precedent): keyframe vs exact seek policy per request kind.
+    void SetSeekMode(SeekPrecisionMode mode) noexcept;
     void SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept override;
     void SetSubtitleStyle(const SubtitleStyle& style) noexcept override;
     void SetAudioPreferences(const AudioPreferences& prefs) noexcept override;
@@ -188,6 +192,14 @@ private:
     // session TU (it is libav-heavy). PlayFile is the ~40-line skeleton that
     // sequences these phases.
     struct SessionContext;
+
+    // A pending seek request: absolute target (seconds; NaN = none) + how precisely
+    // to execute it. Latest-wins together under mutex_.
+    struct PendingSeek
+    {
+        double target = 0.0;
+        SeekKind kind = SeekKind::Exact;
+    };
     enum class SessionEndReason : std::uint8_t
     {
         Eof,  // demuxer reached end of file
@@ -211,7 +223,7 @@ private:
     void ApplyPendingTrackSwitches(const std::string& path, SessionContext& ctx);
     // Apply a pending seek (NaN ⇒ none; cleared on return) and flush/reset the
     // packet queues + read-ahead accounting for the next demux run.
-    void ApplySeekAndPrepareQueues(double& seekTo, SessionContext& ctx);
+    void ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& ctx);
     // Spawn the workers, demux until EOF/stop/seek, stop the queues and join.
     [[nodiscard]] SessionEndReason RunDemuxSession(SessionContext& ctx, AVPacket* pkt);
     // EOF: emit EndFile (per still-image hold rules) and park on the last frame.
@@ -256,10 +268,10 @@ private:
     void EmitDouble(PlayerProperty prop, double value);
     // True when the decode loop should abandon the current file (new load / quit).
     [[nodiscard]] bool StopRequested();
-    // Consume the pending seek target (seconds), clearing the request flag.
-    [[nodiscard]] double TakePendingSeek();
-    // Record an absolute seek target and wake the decode thread / workers.
-    void RequestSeek(double target) noexcept;
+    // Consume the pending seek, clearing the request flag.
+    [[nodiscard]] PendingSeek TakePendingSeek();
+    // Record an absolute seek target (+ execution kind) and wake the decode thread / workers.
+    void RequestSeek(double target, SeekKind kind) noexcept;
     // Emit one sparse perf summary for the loaded session; no file paths are logged.
     void EmitPlaybackSummary(const char* reason);
 
@@ -301,6 +313,11 @@ private:
 
     static constexpr double kDropThreshold = 0.1;  // seconds a frame may lag before being dropped
     static constexpr double kFrameHoldLimit = 0.5; // max seconds a frame may wait on a non-advancing master clock
+    // Max seconds the audio worker holds its first post-seek feed while the video
+    // worker is still grinding to an exact-seek target. Bounded (same philosophy as
+    // kFrameHoldLimit): if video can't paint — decode errors, video stream shorter
+    // than audio at the seek point — audio resumes anyway rather than staying silent.
+    static constexpr double kSeekAudioHoldLimit = 2.0;
 
     struct Callback
     {
@@ -399,6 +416,7 @@ private:
     // before it. seekRefresh_ lets the video worker present one frame while paused.
     bool hasPendingSeek_ = false;
     double seekTarget_ = 0.0;
+    SeekKind seekKind_ = SeekKind::Exact; // execution kind for seekTarget_ (guarded by mutex_)
     // Held-key seek state (all guarded by mutex_). Two distinct release points, so two
     // flags — conflating them re-introduces the jump-to-0 on files with audio:
     //  • seekSettled_  — a post-seek *frame has been painted*. Gates the held-step
@@ -424,7 +442,9 @@ private:
     bool seekKicked_ = false;
     double seekSkipPts_ = -1e18;
     std::atomic<bool> seekRefresh_{false};
-    std::atomic<bool> hrSeek_{true};     // PlaybackOptions.hrSeek (exact vs keyframe)
+    // playback.seekMode policy (Smart = mpv hr-seek=default; see FFmpegSeekPlan.h).
+    // Replaces the old hrSeek_ bool; each request's SeekKind is decided at request time.
+    std::atomic<SeekPrecisionMode> seekMode_{SeekPrecisionMode::Smart};
     std::atomic<bool> hwdec_{true};      // PlaybackOptions.hwdec (try hardware decode on load)
     std::atomic<bool> fastProbe_{false}; // playback.fastProbe (cap open-time stream probing)
     std::atomic<VideoDecodeMode> videoDecodeMode_{VideoDecodeMode::Auto};

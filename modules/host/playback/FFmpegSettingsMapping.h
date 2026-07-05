@@ -19,10 +19,19 @@ inline AudioNormalizeParams ToAudioNormalizeParams(const AudioSettings& s)
     return {s.dynaudnormFrameLen, s.dynaudnormGaussSize, s.dynaudnormPeak, s.dynaudnormMaxGain, s.dynaudnormVolume};
 }
 
+inline SeekPrecisionMode ToSeekPrecisionMode(const PlaybackSettings& s)
+{
+    return SeekPrecisionModeFromString(s.seekMode.c_str());
+}
+
 inline PlaybackOptions ToPlaybackOptions(const PlaybackSettings& s)
 {
-    return {IsVideoDecodeModeEnabled(VideoDecodeModeFromString(s.hwdecMode)), s.hrSeek, s.subAutoLoad,
-            s.audioFileAutoLoad};
+    // The SDK POD's hrSeek bool can't express the three-way seekMode; keep it
+    // coherent for observers: false only when every seek snaps to keyframes.
+    return {
+        IsVideoDecodeModeEnabled(VideoDecodeModeFromString(s.hwdecMode)),
+        ToSeekPrecisionMode(s) != SeekPrecisionMode::Keyframe, s.subAutoLoad, s.audioFileAutoLoad
+    };
 }
 
 inline VideoDecodeMode ToVideoDecodeMode(const PlaybackSettings& s)
@@ -52,7 +61,10 @@ inline SubtitleStyle ToSubtitleStyle(const SubtitleSettings& s)
     {
         float rgb[3] = {0.f, 0.f, 0.f};
         ThemeUtil::ParseHexColor(hex.c_str(), rgb); // leaves rgb at 0 on malformed input
-        auto byte = [](float f) { return static_cast<uint32_t>(std::lround(std::clamp(f, 0.f, 1.f) * 255.f)); };
+        auto byte = [](float f)
+        {
+            return static_cast<uint32_t>(std::lround(std::clamp(f, 0.f, 1.f) * 255.f));
+        };
         const uint32_t alpha = 255u - byte(opacity); // opacity 1.0 ⇒ alpha 0 (opaque)
         return (byte(rgb[0]) << 24) | (byte(rgb[1]) << 16) | (byte(rgb[2]) << 8) | alpha;
     };
