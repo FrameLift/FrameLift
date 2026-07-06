@@ -384,7 +384,7 @@ bool VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, u
     return true;
 }
 
-bool VulkanVideoRenderer::DrawVulkanFrame()
+bool VulkanVideoRenderer::DrawVulkanFrame(int fbX, int fbY, int fbW, int fbH)
 {
     VulkanFrameInfo info{};
     if (!GetVulkanFrameInfo(vkFrame_, info) || !info.valid || info.image == 0)
@@ -436,12 +436,12 @@ bool VulkanVideoRenderer::DrawVulkanFrame()
         backend_->AddFrameOpsWait(frameSem, info.semValue, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
     }
 
-    // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed.
+    // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed within the
+    //    caller's target rect (excludes the fallback title bar strip when present).
     VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
-    const VkExtent2D extent = backend_->SwapchainExtent();
     const int vw = info.width > 0 ? info.width : vkDisplayW_;
     const int vh = info.height > 0 ? info.height : vkDisplayH_;
-    const LetterboxRect lb = ComputeLetterbox(static_cast<int>(extent.width), static_cast<int>(extent.height), vw, vh);
+    const LetterboxRect lb = ComputeLetterbox(fbX, fbY, fbW, fbH, vw, vh);
 
     VkViewport vp{};
     vp.x = static_cast<float>(lb.x);

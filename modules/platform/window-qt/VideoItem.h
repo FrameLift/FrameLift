@@ -19,13 +19,14 @@ public:
     // Host video draw, forwarded to the render node (see VideoRenderNode::RenderCallback).
     // Set by QtAppWindow once the window exists; invoked on the scene-graph render thread.
     void SetRenderCallbacks(
-        std::function<void(int fbW, int fbH)> prepareCb, std::function<void(int fbW, int fbH)> renderCb
+        std::function<void(int fbX, int fbY, int fbW, int fbH)> prepareCb,
+        std::function<void(int fbX, int fbY, int fbW, int fbH)> renderCb
     );
 
 protected:
     QSGNode* updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) override;
 
 private:
-    std::function<void(int, int)> prepareCb_;
-    std::function<void(int, int)> renderCb_;
+    std::function<void(int, int, int, int)> prepareCb_;
+    std::function<void(int, int, int, int)> renderCb_;
 };

@@ -179,7 +179,9 @@ public:
     [[nodiscard]] bool HasNewFrame() noexcept override;
     void RenderFrame(int w, int h) noexcept override;
     void PrepareRenderFrame(int w, int h) noexcept;
-    void DrawPreparedFrame(int w, int h) noexcept;
+    // Target rect in device pixels, top-left origin; (fbX, fbY) is nonzero when the
+    // window insets the video (fallback title bar).
+    void DrawPreparedFrame(int fbX, int fbY, int fbW, int fbH) noexcept;
 
 private:
     // Background decode/playback thread: waits for a load request, then drives the

@@ -68,10 +68,11 @@ private:
 #endif
 
     // The window's scene-graph video node calls this on the GUI thread with the target
-    // framebuffer size: lazily adopts Qt's GL context + builds the renderer on first call,
-    // then draws the current frame letterboxed.
-    void PrepareVideo(int fbW, int fbH);
-    void RenderVideo(int fbW, int fbH);
+    // framebuffer rect in device pixels (origin is nonzero when the fallback title bar
+    // insets the video): lazily adopts Qt's GL context + builds the renderer on first
+    // call, then draws the current frame letterboxed within the rect.
+    void PrepareVideo(int fbX, int fbY, int fbW, int fbH);
+    void RenderVideo(int fbX, int fbY, int fbW, int fbH);
     // Queued-signal handler: drain media events and apply any pending video-driven resize.
     void OnPlayerWakeup();
 

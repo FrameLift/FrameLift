@@ -57,9 +57,12 @@ public:
     // video rectangle so it maps 1:1 over the letterboxed video. Straight alpha.
     virtual void UploadOverlay(const uint8_t* rgba, int w, int h) = 0;
 
-    // Clear the framebuffer (fbW x fbH px) to black and, once a frame has been
-    // uploaded, draw it centered with aspect-ratio-preserving letterboxing. When
-    // drawOverlay is set and an overlay has been uploaded, alpha-composite it over
-    // the video within the same letterboxed rectangle.
-    virtual void Draw(int fbW, int fbH, bool drawOverlay = false) = 0;
+    // Draw the uploaded frame centered with aspect-ratio-preserving letterboxing
+    // within the target rect: (fbX, fbY) top-left origin, fbW x fbH, all in device
+    // pixels. The origin is nonzero when the window insets the video below its
+    // fallback title bar; pixels outside the rect belong to the surrounding UI pass
+    // (its clear paints the letterbox bars) and must not be touched. When drawOverlay
+    // is set and an overlay has been uploaded, alpha-composite it over the video
+    // within the same letterboxed rectangle.
+    virtual void Draw(int fbX, int fbY, int fbW, int fbH, bool drawOverlay = false) = 0;
 };

@@ -44,3 +44,15 @@ inline LetterboxRect ComputeLetterbox(int fbW, int fbH, int texW, int texH)
     }
     return {(fbW - vpW) / 2, (fbH - vpH) / 2, vpW, vpH};
 }
+
+// Same fit, but into a target rect whose top-left corner sits at (fbX, fbY) on the
+// destination surface (top-left origin): the returned rect is offset by the origin so
+// callers can use it directly as a viewport/scissor. Lets the video honor a window
+// inset (e.g. the fallback title bar strip) instead of assuming the full surface.
+inline LetterboxRect ComputeLetterbox(int fbX, int fbY, int fbW, int fbH, int texW, int texH)
+{
+    LetterboxRect lb = ComputeLetterbox(fbW, fbH, texW, texH);
+    lb.x += fbX;
+    lb.y += fbY;
+    return lb;
+}

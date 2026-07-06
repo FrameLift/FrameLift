@@ -519,8 +519,13 @@ void GlVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
     impl_->hasOverlay = true;
 }
 
-void GlVideoRenderer::Draw(int fbW, int fbH, bool drawOverlay)
+void GlVideoRenderer::Draw(int fbX, int fbY, int fbW, int fbH, bool drawOverlay)
 {
+    // A nonzero origin never occurs under GL: the fallback title bar (the only source
+    // of a video inset) exists only with the Vulkan backend on Wayland, and GL's
+    // bottom-left viewport origin would need a flip this path does not implement.
+    (void)fbX;
+    (void)fbY;
     if (!impl_ || fbW <= 0 || fbH <= 0)
     {
         return;

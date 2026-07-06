@@ -25,7 +25,7 @@ public:
     bool Init(IGraphicsBackend* backend) override;
     void UploadFrame(const uint8_t* data, const VideoFrameDesc& desc) override;
     void UploadOverlay(const uint8_t* rgba, int w, int h) override;
-    void Draw(int fbW, int fbH, bool drawOverlay = false) override;
+    void Draw(int fbX, int fbY, int fbW, int fbH, bool drawOverlay = false) override;
 
 private:
     struct Impl;

@@ -313,20 +313,27 @@ void QtAppWindow::SetupCustomChrome()
     chromeItem_->setSize(content->size());
     chromeItem_->setZ(10000.0); // above every plugin surface (plugins use 1.0 + order)
 
-    // Reserve the strip below the bar for the video (plugin overlays stay full-window and
-    // draw under the opaque bar, which sits above them). Single source of truth for the
-    // height: the QML bar's own property.
+    // Reserve the strip below the bar for the video and the plugin surfaces (issue #78:
+    // full-window overlays ended up under the opaque bar). Single source of truth for
+    // the height: the QML bar's own property.
     barHeight_ = chromeItem_->property("barHeight").toReal();
     chromeInset_ = barHeight_;
+    qmlCompositor_->SetTopInset(chromeInset_);
 
-    // FLTitleBar hides itself in fullscreen (visible: !chrome.fullscreen); drop the video
-    // inset to match so no black strip is left where the bar was.
+    // FLTitleBar hides itself in fullscreen (visible: !chrome.fullscreen); drop the
+    // video/overlay inset to match so no black strip is left where the bar was.
     connect(
         window_, &QWindow::visibilityChanged, this,
         [this]
         {
             chromeInset_ = IsFullscreen() ? 0.0 : barHeight_;
             SyncVideoItemSize();
+            if (qmlCompositor_)
+            {
+                // Window teardown can still emit visibilityChanged after the
+                // destructor has released the compositor.
+                qmlCompositor_->SetTopInset(chromeInset_);
+            }
         }
     );
 }
@@ -349,7 +356,7 @@ void QtAppWindow::SetGraphicsInvalidatedHandler(std::function<void()> handler)
 }
 
 void QtAppWindow::SetVideoRenderCallbacks(
-    std::function<void(int, int)> prepareCb, std::function<void(int, int)> renderCb
+    std::function<void(int, int, int, int)> prepareCb, std::function<void(int, int, int, int)> renderCb
 )
 {
     if (videoItem_)
@@ -391,10 +398,14 @@ void QtAppWindow::ResizeToVideo(int videoW, int videoH, float maxDisplayRatio) n
     const QRect usable = screen->availableGeometry();
     const int maxW = static_cast<int>(static_cast<float>(usable.width()) * maxDisplayRatio);
     const int maxH = static_cast<int>(static_cast<float>(usable.height()) * maxDisplayRatio);
-    const WindowSize fit = FitWithinAspect(videoW, videoH, maxW, maxH);
+    // The fallback title bar reserves a top strip inside the window, so fit the video
+    // into the remaining height and size the window to fit + strip: the area below the
+    // bar then matches the video's aspect exactly (no pillarbox from the inset).
+    const int inset = static_cast<int>(chromeInset_);
+    const WindowSize fit = FitWithinAspect(videoW, videoH, maxW, maxH - inset);
     if (window_)
     {
-        window_->resize(fit.w, fit.h);
+        window_->resize(fit.w, fit.h + inset);
     }
 }
 

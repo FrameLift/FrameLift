@@ -274,13 +274,13 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
         }
     );
     appWindow_->SetVideoRenderCallbacks(
-        [this](int fbW, int fbH)
+        [this](int fbX, int fbY, int fbW, int fbH)
         {
-            PrepareVideo(fbW, fbH);
+            PrepareVideo(fbX, fbY, fbW, fbH);
         },
-        [this](int fbW, int fbH)
+        [this](int fbX, int fbY, int fbW, int fbH)
         {
-            RenderVideo(fbW, fbH);
+            RenderVideo(fbX, fbY, fbW, fbH);
         }
     );
 
@@ -453,7 +453,7 @@ void App::SetupPlayerCallbacks()
 
 // ── Frame rendering ───────────────────────────────────────────────────────────
 
-void App::PrepareVideo(const int fbW, const int fbH)
+void App::PrepareVideo(const int /*fbX*/, const int /*fbY*/, const int fbW, const int fbH)
 {
     // The first scene-graph frame exposes the native graphics objects. Adopt Qt's
     // OpenGL context or Vulkan frame resources, then build the matching video renderer.
@@ -479,13 +479,13 @@ void App::PrepareVideo(const int fbW, const int fbH)
     player_->PrepareRenderFrame(fbW, fbH);
 }
 
-void App::RenderVideo(const int fbW, const int fbH)
+void App::RenderVideo(const int fbX, const int fbY, const int fbW, const int fbH)
 {
     if (auto* backend = static_cast<IGraphicsBackend*>(appWindow_->GetGraphicsBackend()))
     {
         backend->PrepareQtFrame(static_cast<QQuickWindow*>(appWindow_->GetNativeHandle()));
     }
-    player_->DrawPreparedFrame(fbW, fbH);
+    player_->DrawPreparedFrame(fbX, fbY, fbW, fbH);
 }
 
 void App::OnPlayerWakeup()

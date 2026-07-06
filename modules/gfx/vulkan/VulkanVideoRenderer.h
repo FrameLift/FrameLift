@@ -35,7 +35,7 @@ public:
     void UploadFrame(const uint8_t* data, const VideoFrameDesc& desc) override;
     void UploadVulkanFrame(void* avFrame, int displayW, int displayH) override;
     void UploadOverlay(const uint8_t* rgba, int w, int h) override;
-    void Draw(int fbW, int fbH, bool drawOverlay = false) override;
+    void Draw(int fbX, int fbY, int fbW, int fbH, bool drawOverlay = false) override;
 
 private:
     // One sampled frame: 1 (RGBA), 2 (NV12) or 3 (I420) plane images sharing a single
@@ -134,8 +134,9 @@ private:
     // command buffer; batching it there avoids a standalone submit stalling the queue.
     bool RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
     // Returns true when it recorded the video draw (and thus set viewport/scissor);
-    // false on any early-out, so Draw() knows the overlay must set its own.
-    bool DrawVulkanFrame();
+    // false on any early-out, so Draw() knows the overlay must set its own. Letterboxes
+    // within Draw()'s target rect (device pixels, top-left origin).
+    bool DrawVulkanFrame(int fbX, int fbY, int fbW, int fbH);
 
     VulkanGraphicsBackend* backend_ = nullptr;
     VkDevice device_ = VK_NULL_HANDLE;
