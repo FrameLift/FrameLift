@@ -283,6 +283,9 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     std::vector<uint8_t> pixelBuf; // reused CPU frame buffer (planar YUV or RGBA; sized at publish)
     bool sentReconfig = false;
     bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
+    // Routine TimePos/PercentPos ticks follow the audio-only path's 250 ms cadence
+    // (see AudioWorker's deliver); primed in the past so the first frame emits.
+    auto lastEmit = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
 
 #if defined(_WIN32)
     // Raise the scheduler tick to 1 ms for the duration of video playback and own a
@@ -649,10 +652,20 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             Wake();
         }
 
-        EmitDouble(PlayerProperty::TimePos, framePts);
-        if (duration_.load() > 0.0)
+        // Throttle the routine position tick: every emission queues an event and
+        // wakes the main thread (which fans it out to every observing plugin), so
+        // per-frame emission is pure churn that scales with the frame rate. A
+        // post-seek refresh frame (!paceThisFrame) always emits, so the position
+        // snaps to the target immediately — including each step of a held key.
+        const auto now = std::chrono::steady_clock::now();
+        if (!paceThisFrame || now - lastEmit >= std::chrono::milliseconds(250))
         {
-            EmitDouble(PlayerProperty::PercentPos, framePts / duration_.load() * 100.0);
+            lastEmit = now;
+            EmitDouble(PlayerProperty::TimePos, framePts);
+            if (duration_.load() > 0.0)
+            {
+                EmitDouble(PlayerProperty::PercentPos, framePts / duration_.load() * 100.0);
+            }
         }
         return false;
     };
