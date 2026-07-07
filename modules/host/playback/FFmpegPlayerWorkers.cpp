@@ -337,6 +337,17 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
 #else
             false;
 #endif
+        // The pts is read off the decoded frame directly — for hardware frames it is
+        // identical on the downloaded copy (MapToSoftware copies the frame props) — so
+        // the exact-seek discard runs BEFORE any GPU readback: while decode-discarding
+        // toward an exact-seek target, a discarded hw frame must not pay a full
+        // av_hwframe_transfer_data just to be thrown away.
+        const double framePts = FramePtsSec(decoded, tb);
+        if (framePts < seekSkipPts_) // exact-seek: discard frames before the target
+        {
+            return false;
+        }
+
         AVFrame* f = decoded;
         if (!vkFrame && hw && hw->Active() && decoded->format == hw->HwPixelFormat())
         {
@@ -345,12 +356,6 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
             {
                 return false; // transfer hiccup: skip this frame, no clock side-effects
             }
-        }
-
-        const double framePts = FramePtsSec(f, tb);
-        if (framePts < seekSkipPts_) // exact-seek: discard frames before the target
-        {
-            return false;
         }
 
         // Emit VideoReconfig on the first frame and whenever the decoded size
