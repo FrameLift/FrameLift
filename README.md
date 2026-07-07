@@ -41,12 +41,14 @@ Download the latest release archive from the [Releases](../../releases) page, ex
 and falls back to OpenGL when needed; zero-copy GPU decode additionally needs a Vulkan 1.3 video-decode
 capable GPU). On Linux, install Qt 6, FFmpeg, and libass from your distribution (e.g. `qt6-base`,
 `qt6-declarative`, `qt6-multimedia`, `libavcodec`, `libavformat`, `libavfilter`, `libass9`) plus a
-Vulkan loader (`libvulkan1`).
+Vulkan loader (`libvulkan1`). Playback history uses Qt's SQLite support — on distributions that split
+it out, also install the Qt 6 SQL SQLite driver (e.g. `libqt6sql6-sqlite`).
 
 ## Configuration
 
 Settings live in `settings.ini` in the platform config directory and are edited through the in-app
-**Settings menu** (Ctrl+,) — no need to hand-edit the file. Among the things you can configure:
+**Settings menu** (Ctrl+,) — no need to hand-edit the file. Playback history and other media metadata
+live next to it in `media.db` (SQLite). Among the things you can configure:
 
 - **Rendering & decode** — graphics backend (Vulkan/OpenGL, applied on restart) and hardware decoding
 - **Playback** — precise seeking, video-sync, automatic loading of matching subtitle/audio files

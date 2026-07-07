@@ -2,13 +2,14 @@
   "fileVersion": 1,
   "id": "framelift.services",
   "name": "Host Services",
-  "description": "Host service implementations for hotkeys and file dialogs.",
+  "description": "Host service implementations for hotkeys, file dialogs, JSON, and the media store.",
   "enabled": true,
   "required": true,
   "provides": {
     "features": [
       "services.hotkeys",
-      "services.file_dialog"
+      "services.file_dialog",
+      "services.media_store"
     ]
   },
   "requires": {

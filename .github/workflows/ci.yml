@@ -139,6 +139,15 @@ jobs:
           for p in "$STAGE"/plugins/*.dll; do
             "$WINDEPLOYQT" --release --no-compiler-runtime --qmldir "$PWD" --dir "$STAGE" "$p"
           done
+          # The host IMediaStore service needs the SQLite driver plugin at runtime.
+          # windeployqt stages sqldrivers/ from the Qt6Sql.dll dependency, but its
+          # detection is heuristic — fail loudly rather than ship a broken store.
+          if [ ! -f "$STAGE/sqldrivers/qsqlite.dll" ]; then
+            echo "ERROR: sqldrivers/qsqlite.dll missing from the staged package" >&2
+            exit 1
+          fi
+          # Only SQLite is used; drop other staged SQL driver DLLs to keep the zip lean.
+          find "$STAGE/sqldrivers" -name '*.dll' ! -name 'qsqlite.dll' -delete
           # FFmpeg/libass runtime DLLs (+ transitive deps) from vcpkg. Copy
           # after windeployqt so FrameLift's FFmpeg wins any filename overlap
           # with Qt Multimedia's backend runtime.

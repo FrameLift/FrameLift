@@ -213,6 +213,10 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     moduleCtx_->RegisterService<Hotkeys>(&keys_);
     moduleCtx_->RegisterService<IFileDialog>(&fileDialogService_);
     moduleCtx_->RegisterService<IJson>(&jsonService_);
+    // Shared SQLite media store, one file next to settings.ini (cwd fallback matches
+    // settingsPath when the pref dir could not be resolved).
+    mediaStore_ = std::make_unique<MediaStoreImpl>(QString::fromStdString(prefDir + "media.db"));
+    moduleCtx_->RegisterService<IMediaStore>(mediaStore_.get());
     moduleCtx_->RegisterService<ILogBuffer>(&HostLogBuffer());
     graphicsInfo_ = std::make_unique<GraphicsInfoService>(appWindow_.get());
     moduleCtx_->RegisterService<IGraphicsInfo>(graphicsInfo_.get());

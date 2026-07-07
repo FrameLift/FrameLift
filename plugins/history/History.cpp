@@ -11,15 +11,11 @@
 
 #include <QtCore/QVariantMap>
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <ctime>
 #include <filesystem>
-#include <framelift/JsonHelpers.h>
-#include <fstream>
-#include <iterator>
+#include <framelift/MediaStoreHelpers.h>
 #include <numeric>
-#include <thread>
 #include <vector>
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -37,6 +33,23 @@ History::History()
 }
 
 History::~History() = default;
+
+namespace
+{
+// Local "%Y-%m-%d %H:%M:%S" display string for a unix timestamp.
+std::string FormatDate(std::time_t t)
+{
+    tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t); // MSVC: (struct tm*, const time_t*)
+#else
+    localtime_r(&t, &tm); // POSIX: (const time_t*, struct tm*)
+#endif
+    char dateBuf[20];
+    std::strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d %H:%M:%S", &tm);
+    return dateBuf;
+}
+} // namespace
 
 std::string History::FilenameOf(const std::string& path)
 {
@@ -99,17 +112,10 @@ void History::SaveSettings(IModuleSettings& ps)
 
 void History::OnInstall(IModuleContext& ctx)
 {
-    // Discover the host JSON service before SetStoragePath so Load() can read.
-    json_ = ctx.GetService<IJson>();
-
-    // Register storage path from pref dir if not already set by App.
-    if (storagePath_.empty())
+    // Discover the shared media store; without it history stays in-memory only.
+    if (!store_)
     {
-        const std::string prefPath = framelift::GetPrefPath(ctx);
-        if (!prefPath.empty())
-        {
-            SetStoragePath(prefPath + "history.json");
-        }
+        SetMediaStore(ctx.GetService<IMediaStore>());
     }
 
     if (auto* pages = ctx.GetService<ISettingsPageRegistry>())
@@ -132,7 +138,6 @@ void History::OnInstall(IModuleContext& ctx)
         [this](const FileEndedEvent& e)
         {
             UpdateResumePos(e.path, e.position);
-            Save();
         }
     );
 
@@ -171,7 +176,7 @@ void History::ApplySettings(int maxEntries)
         SaveSettings(ps);
         ps.Save();
     }
-    Save();
+    PersistTrim();
     Q_EMIT historyChanged();
 }
 
@@ -206,49 +211,117 @@ int History::MaxEntries() const
     return maxEntries_;
 }
 
-void History::SetStoragePath(std::string path)
+void History::SetMediaStore(IMediaStore* store)
 {
-    storagePath_ = std::move(path);
+    store_ = store;
+    if (!store_)
+    {
+        return;
+    }
+    EnsureSchema();
     Load();
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
+void History::EnsureSchema()
+{
+    if (store_->GetSchemaVersion("history") >= 1)
+    {
+        return;
+    }
+    (void)store_->Exec(
+        "CREATE TABLE IF NOT EXISTS history_entries ("
+        "    path            TEXT PRIMARY KEY,"
+        "    resume_pos      REAL    NOT NULL DEFAULT 0,"
+        "    last_played_utc INTEGER NOT NULL,"
+        "    play_count      INTEGER NOT NULL DEFAULT 1)"
+    );
+    (void)store_->Exec(
+        "CREATE INDEX IF NOT EXISTS history_entries_by_last_played "
+        "ON history_entries(last_played_utc DESC)"
+    );
+    (void)store_->SetSchemaVersion("history", 1);
+}
+
 void History::Load()
 {
-    if (!json_)
+    // last_played_utc has second resolution, so rowid breaks ties by insertion order
+    // (re-adds within the same second keep their original rowid — acceptable skew).
+    framelift::SqlStmt select(
+        *store_, "SELECT path, resume_pos, last_played_utc FROM history_entries "
+                 "ORDER BY last_played_utc DESC, rowid DESC LIMIT ?"
+    );
+    (void)select.bind(0, static_cast<long long>(MaxEntries()));
+    while (select.step() == 1)
     {
-        return;
-    }
-
-    std::ifstream f(storagePath_, std::ios::binary);
-    if (!f)
-    {
-        return;
-    }
-    const std::string contents((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-
-    const framelift::JsonDocument doc(*json_, contents);
-    const framelift::JsonRef root = doc.root();
-    if (doc && root.isArray())
-    {
-        for (int i = 0; i < root.size(); ++i)
+        std::string path = select.str(0);
+        if (path.empty())
         {
-            const framelift::JsonRef item = root.at(i);
-            std::string path = item.str("p");
-            if (path.empty())
-            {
-                continue;
-            }
-            const double pos = item.num("r", 0.0);
-            std::string date = item.str("d");
-            std::string label = FilenameOf(path);
-            Entry e{std::move(path), std::move(label), pos, std::move(date)};
-            FormatEntry(e);
-            entries_.push_back(std::move(e));
+            continue;
         }
+        const double pos = select.num(1);
+        std::string date = FormatDate(static_cast<std::time_t>(select.integer(2)));
+        std::string label = FilenameOf(path);
+        Entry e{std::move(path), std::move(label), pos, std::move(date)};
+        FormatEntry(e);
+        entries_.push_back(std::move(e));
     }
     RebuildFilter();
+}
+
+void History::PersistEntry(const char* path, const double resumePos, const long long playedUtc) const
+{
+    if (!store_)
+    {
+        return;
+    }
+    // Re-adding a file bumps recency and play count but keeps the stored resume
+    // position (mirrors the in-memory dedup that carries existingPos over).
+    framelift::SqlStmt upsert(
+        *store_, "INSERT INTO history_entries(path, resume_pos, last_played_utc) VALUES(?, ?, ?) "
+                 "ON CONFLICT(path) DO UPDATE SET last_played_utc = excluded.last_played_utc, "
+                 "play_count = play_count + 1"
+    );
+    (void)upsert.bind(0, path);
+    (void)upsert.bind(1, resumePos);
+    (void)upsert.bind(2, playedUtc);
+    (void)upsert.step();
+    PersistTrim();
+}
+
+void History::PersistResumePos(const char* path, const double pos) const
+{
+    if (!store_)
+    {
+        return;
+    }
+    framelift::SqlStmt update(*store_, "UPDATE history_entries SET resume_pos = ? WHERE path = ?");
+    (void)update.bind(0, pos);
+    (void)update.bind(1, path);
+    (void)update.step();
+}
+
+void History::PersistTrim() const
+{
+    if (!store_)
+    {
+        return;
+    }
+    framelift::SqlStmt trim(
+        *store_, "DELETE FROM history_entries WHERE path NOT IN "
+                 "(SELECT path FROM history_entries ORDER BY last_played_utc DESC, rowid DESC LIMIT ?)"
+    );
+    (void)trim.bind(0, static_cast<long long>(MaxEntries()));
+    (void)trim.step();
+}
+
+void History::PersistClear() const
+{
+    if (store_)
+    {
+        (void)store_->Exec("DELETE FROM history_entries");
+    }
 }
 
 void History::Clear()
@@ -256,7 +329,7 @@ void History::Clear()
     entries_.clear();
     searchQuery_.clear();
     filteredIndices_.clear();
-    Save();
+    PersistClear();
     Q_EMIT historyChanged();
 }
 
@@ -305,69 +378,6 @@ void History::RebuildFilter()
     Q_EMIT historyChanged();
 }
 
-void History::Save() const noexcept
-{
-    if (storagePath_.empty() || !json_)
-    {
-        return;
-    }
-
-    // Serialise synchronously on the caller's thread (which already owns entries_),
-    // so the detached writer only does file IO and never touches the JSON service —
-    // no cross-thread service use and no json_ lifetime hazard on the writer.
-    framelift::JsonWriter arr = framelift::JsonWriter::Array(*json_);
-    for (const auto& e : entries_)
-    {
-        framelift::JsonWriter o = framelift::JsonWriter::Object(*json_);
-        o.set("p", e.path);
-        o.set("r", e.resumePos);
-        o.set("d", e.playbackDate);
-        arr.append(std::move(o));
-    }
-    std::string payload = arr.dump(2);
-
-    const std::string dst = storagePath_;
-    // Monotonic stamp so the writer can tell newer snapshots from older ones, and
-    // a unique suffix so two concurrent saves never clobber the same temp file.
-    const unsigned seq = saveSeq_.fetch_add(1, std::memory_order_relaxed);
-    auto coord = saveCoord_;
-
-    std::thread(
-        [payload = std::move(payload), dst, seq, coord]
-        {
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(dst).parent_path(), ec);
-
-            // Write to a unique temp file, then atomically rename over the target so
-            // a crash mid-write or a racing save can never leave a truncated file.
-            const std::string tmp = dst + "." + std::to_string(seq) + ".tmp";
-            {
-                std::ofstream f(tmp, std::ios::trunc);
-                f << payload << '\n';
-            }
-
-            // Commit under the lock so renames are serialised and ordered: drop this
-            // snapshot if a newer save has already been published, otherwise rename
-            // it into place and become the newest. Guarantees the latest entry wins
-            // regardless of the order the detached writer threads are scheduled.
-            std::lock_guard lock(coord->mutex);
-            if (coord->any && seq < coord->published)
-            {
-                std::filesystem::remove(tmp, ec);
-                return;
-            }
-            std::filesystem::rename(tmp, dst, ec);
-            if (ec)
-            {
-                std::filesystem::remove(tmp, ec);
-                return;
-            }
-            coord->published = seq;
-            coord->any = true;
-        }
-    ).detach();
-}
-
 // ── Entry management ──────────────────────────────────────────────────────────
 
 int History::GetMostRecent(char* buf, int cap) const noexcept
@@ -410,16 +420,7 @@ void History::AddEntry(const char* path) noexcept
     );
 
     const std::time_t now = std::time(nullptr);
-    tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &now); // MSVC: (struct tm*, const time_t*)
-#else
-    localtime_r(&now, &tm); // POSIX: (const time_t*, struct tm*)
-#endif
-    char dateBuf[20];
-    std::strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d %H:%M:%S", &tm);
-
-    Entry e{path, FilenameOf(path), existingPos, dateBuf};
+    Entry e{path, FilenameOf(path), existingPos, FormatDate(now)};
     FormatEntry(e);
     entries_.push_front(std::move(e));
 
@@ -429,7 +430,7 @@ void History::AddEntry(const char* path) noexcept
     }
 
     RebuildFilter();
-    Save();
+    PersistEntry(path, existingPos, static_cast<long long>(now));
     Q_EMIT historyChanged();
 }
 
@@ -445,6 +446,7 @@ void History::UpdateResumePos(const char* path, const double pos) noexcept
         {
             e.resumePos = pos;
             FormatEntry(e); // refresh cached meta string with the new position
+            PersistResumePos(path, pos);
             Q_EMIT historyChanged();
             return;
         }

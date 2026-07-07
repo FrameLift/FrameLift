@@ -15,7 +15,7 @@ endif ()
 
 # JSON — backs the host JsonServiceImpl (Qt6::Core QJson), compiled into the History
 # test so its persistence round-trips exercise the real backend.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Sql)
 
 enable_testing()
 find_package(Threads REQUIRED)
@@ -66,6 +66,7 @@ add_executable(framelift_tests
         unit/misc/TestMediaSpecTests.cpp
         unit/host/SettingsTests.cpp
         unit/host/AppStateStoreTests.cpp
+        unit/host/MediaStoreTests.cpp
         unit/host/ModuleContextTests.cpp
         unit/host/PluginConfigTests.cpp
         unit/host/CommandRegistryTests.cpp
@@ -114,6 +115,7 @@ add_executable(framelift_tests
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginResolver.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/AppStateStore.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/HotkeysImpl.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
         "${FRAMELIFT_ROOT}/src/TestMediaGenerator.cpp"
@@ -129,7 +131,7 @@ target_include_directories(framelift_tests PRIVATE
         "${FRAMELIFT_ROOT}/tests/support"  # TempIni.h for PluginConfig/ModuleSettings tests
         "${FRAMELIFT_ROOT}/plugins/playlist"
 )
-target_link_libraries(framelift_tests PRIVATE Threads::Threads Qt6::Core Qt6::Gui Qt6::Test)
+target_link_libraries(framelift_tests PRIVATE Threads::Threads Qt6::Core Qt6::Gui Qt6::Test Qt6::Sql)
 framelift_apply_coverage(framelift_tests)
 framelift_qt_discover_tests(framelift_tests)
 
@@ -208,14 +210,14 @@ function(add_framelift_plugin_test name)
 endfunction()
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
-# History persists through the host IJson service; compile the real QJson-backed
-# JsonServiceImpl into the test (the only suite that exercises JSON) and link Qt6::Core.
+# History persists through the host IMediaStore service; compile the real Qt SQL-backed
+# MediaStoreImpl into the test so its persistence round-trips exercise the real backend.
 add_framelift_plugin_test(framelift_test_history
         plugins/history/HistoryTests.cpp
         "${FRAMELIFT_ROOT}/plugins/history/History.cpp"
         "${FRAMELIFT_ROOT}/plugins/history/HistorySettings.cpp"
-        "${FRAMELIFT_ROOT}/modules/host/services/JsonServiceImpl.cpp")
-target_link_libraries(framelift_test_history PRIVATE Qt6::Core)
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
+target_link_libraries(framelift_test_history PRIVATE Qt6::Core Qt6::Sql)
 
 # Playlist + SettingsMenu drive the real ModuleContext, so they also compile
 # the host plugin runtime and settings modules.

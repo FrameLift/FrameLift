@@ -21,7 +21,8 @@
   "optional": {
     "plugins": [],
     "features": [
-      "ui.context_menu"
+      "ui.context_menu",
+      "services.media_store"
     ]
   },
   "platforms": []
