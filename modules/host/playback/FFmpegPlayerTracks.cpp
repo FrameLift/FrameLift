@@ -289,6 +289,10 @@ void FFmpegPlayer::SetAudioPreferences(const AudioPreferences& prefs) noexcept
         audioQ_->Abort();
         videoQ_->Abort();
         subQ_->Abort();
+        // RequestSeek only wakes cv_ when it kicks (pipeline settled); when a seek is
+        // already in flight the aborts above need their own wake or a worker parked on
+        // cv_ notices them only via its wait timeout (mirrors SelectAudioTrack).
+        Wake();
     }
 }
 
