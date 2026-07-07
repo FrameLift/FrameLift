@@ -202,6 +202,36 @@ private Q_SLOTS:
         QVERIFY(!IsKnownDecodeModeToken(""));
         QVERIFY(!IsKnownDecodeModeToken("nvidia"));
     }
+
+    // ── HwDeviceCache (negative cache of failed device creates) ───────────────────
+
+    void FreshCacheHasNoFailedTypes()
+    {
+        const HwDeviceCache cache;
+        for (int t = 0; t < 32; ++t)
+        {
+            QVERIFY(!cache.HasFailed(t));
+        }
+    }
+
+    void MarkFailedIsStickyAndPerType()
+    {
+        HwDeviceCache cache;
+        cache.MarkFailed(2);
+        QVERIFY(cache.HasFailed(2));
+        QVERIFY(!cache.HasFailed(3));
+        cache.MarkFailed(5);
+        QVERIFY(cache.HasFailed(2));
+        QVERIFY(cache.HasFailed(5));
+    }
+
+    void NegativeTypeIsNeitherRecordedNorReported()
+    {
+        HwDeviceCache cache;
+        cache.MarkFailed(-1); // AV_HWDEVICE_TYPE_NONE guard — must not shift by a negative
+        QVERIFY(!cache.HasFailed(-1));
+        QVERIFY((cache.failedTypes) == (0u));
+    }
 };
 
 namespace

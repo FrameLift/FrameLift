@@ -79,11 +79,29 @@ inline const char* HwBackendName(HwBackend backend)
 // keeps one alive between files instead of recreating it per open. Decode-thread
 // owned; the owner unrefs `device` after the decode thread has joined. `type` is
 // the AVHWDeviceType the device was created for (as int so this header stays
-// libav-free); a backend change just re-creates and replaces the entry.
+// libav-free); a backend change just re-creates and replaces the entry. Failed
+// creates are remembered too (`failedTypes`, a bitmask over the small consecutive
+// AVHWDeviceType values): retrying would fail identically — no driver appears
+// mid-session — and costs a dlopen + driver init attempt per open, so the auto
+// candidate walk skips known-dead backends outright.
 struct HwDeviceCache
 {
     AVBufferRef* device = nullptr;
     int type = -1;
+    unsigned failedTypes = 0;
+
+    [[nodiscard]] bool HasFailed(int t) const
+    {
+        return t >= 0 && ((failedTypes >> static_cast<unsigned>(t)) & 1u) != 0;
+    }
+
+    void MarkFailed(int t)
+    {
+        if (t >= 0)
+        {
+            failedTypes |= 1u << static_cast<unsigned>(t);
+        }
+    }
 };
 
 class FFmpegHwDecode
