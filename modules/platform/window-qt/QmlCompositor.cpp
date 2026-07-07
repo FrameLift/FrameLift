@@ -100,8 +100,10 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
 
         item->setParentItem(root_);
         item->setParent(root_);
-        item->setPosition(QPointF(0, 0));
-        item->setSize(root_->size());
+        // Plugin surfaces span the window minus the reserved top strip (the fallback
+        // title bar), so no plugin UI can end up under the opaque bar.
+        item->setPosition(QPointF(0, topInset_));
+        item->setSize(QSizeF(root_->width(), root_->height() - topInset_));
         // The custom VideoItem is the first child of the window content item and
         // occupies z=0. Keep every plugin surface strictly above it while retaining
         // the plugin render-order relationship.
@@ -113,11 +115,12 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
                 item->setWidth(root->width());
             }
         );
+        // Safe to capture this: the compositor owns the items and outlives them.
         QObject::connect(
             root_, &QQuickItem::heightChanged, item,
-            [root = root_, item]
+            [this, root = root_, item]
             {
-                item->setHeight(root->height());
+                item->setHeight(root->height() - topInset_);
             }
         );
 
@@ -126,5 +129,19 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
             "QML '{}': loaded '{}' at z={} ({}x{})", view.moduleId.toStdString(), view.sourceUrl.toStdString(),
             item->z(), item->width(), item->height()
         );
+    }
+}
+
+void QmlCompositor::SetTopInset(qreal inset)
+{
+    if (inset == topInset_)
+    {
+        return;
+    }
+    topInset_ = inset;
+    for (const LoadedView& view : views_)
+    {
+        view.item->setY(topInset_);
+        view.item->setHeight(root_->height() - topInset_);
     }
 }

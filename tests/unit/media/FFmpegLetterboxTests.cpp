@@ -71,6 +71,25 @@ private Q_SLOTS:
         QVERIFY((b.w) == (0));
         QVERIFY((b.h) == (0));
     }
+
+    void OriginOverloadOffsetsTheFitRect()
+    {
+        // Inset rect below a 32px title bar: same fit as the origin-less overload,
+        // shifted by the rect origin (issue #78).
+        const LetterboxRect base = ComputeLetterbox(1600, 868, 640, 480);
+        const LetterboxRect r = ComputeLetterbox(0, 32, 1600, 868, 640, 480);
+        QVERIFY((r.x) == (base.x));
+        QVERIFY((r.y) == (base.y + 32));
+        QVERIFY((r.w) == (base.w));
+        QVERIFY((r.h) == (base.h));
+
+        // Degenerate texture still yields the (offset) full rect.
+        const LetterboxRect d = ComputeLetterbox(10, 32, 640, 480, 0, 0);
+        QVERIFY((d.x) == (10));
+        QVERIFY((d.y) == (32));
+        QVERIFY((d.w) == (640));
+        QVERIFY((d.h) == (480));
+    }
 };
 
 namespace

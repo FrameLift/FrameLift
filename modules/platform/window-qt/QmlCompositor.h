@@ -29,6 +29,11 @@ public:
     void Clear();
     void Load(std::vector<QmlViewSpec> views);
 
+    // Reserve a top strip (logical px) that plugin surfaces must not cover — the
+    // fallback title bar. Applies to already-loaded views and to later Load()s;
+    // 0 restores full-window surfaces (fullscreen hides the bar).
+    void SetTopInset(qreal inset);
+
 private:
     struct LoadedView
     {
@@ -39,4 +44,5 @@ private:
     QQuickItem* root_ = nullptr;
     std::unique_ptr<QQmlEngine> engine_;
     std::vector<LoadedView> views_;
+    qreal topInset_ = 0.0;
 };

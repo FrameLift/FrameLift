@@ -3,14 +3,17 @@
 #include <QtQuick/QQuickWindow>
 #include <QtQuick/QSGRendererInterface>
 
-std::pair<int, int> VideoRenderNode::FramebufferSize() const
+VideoRenderNode::FbRect VideoRenderNode::FramebufferRect() const
 {
     if (!window_)
     {
-        return {0, 0};
+        return {};
     }
     const qreal dpr = window_->effectiveDevicePixelRatio();
-    return {static_cast<int>(itemW_ * dpr), static_cast<int>(itemH_ * dpr)};
+    return {
+        static_cast<int>(itemX_ * dpr), static_cast<int>(itemY_ * dpr), static_cast<int>(itemW_ * dpr),
+        static_cast<int>(itemH_ * dpr)
+    };
 }
 
 void VideoRenderNode::prepare()
@@ -20,10 +23,10 @@ void VideoRenderNode::prepare()
     {
         return;
     }
-    const auto [fbW, fbH] = FramebufferSize();
-    if (fbW > 0 && fbH > 0)
+    const FbRect fb = FramebufferRect();
+    if (fb.w > 0 && fb.h > 0)
     {
-        prepareCb_(fbW, fbH);
+        prepareCb_(fb.x, fb.y, fb.w, fb.h);
     }
 }
 
@@ -34,11 +37,11 @@ void VideoRenderNode::render(const RenderState* /*state*/)
         return;
     }
 
-    // The item fills the window, so the target framebuffer rect is the item's logical
-    // size scaled by the device pixel ratio. The host video renderer sets its own
-    // viewport and clears + letterboxes within this rect.
-    const auto [fbW, fbH] = FramebufferSize();
-    if (fbW <= 0 || fbH <= 0)
+    // The target framebuffer rect is the item's logical geometry scaled by the device
+    // pixel ratio; the origin is nonzero when the fallback title bar insets the item.
+    // The host video renderer letterboxes within this rect.
+    const FbRect fb = FramebufferRect();
+    if (fb.w <= 0 || fb.h <= 0)
     {
         return;
     }
@@ -49,9 +52,9 @@ void VideoRenderNode::render(const RenderState* /*state*/)
     if (window_->rendererInterface() &&
         window_->rendererInterface()->graphicsApi() != QSGRendererInterface::Vulkan && prepareCb_)
     {
-        prepareCb_(fbW, fbH);
+        prepareCb_(fb.x, fb.y, fb.w, fb.h);
     }
-    renderCb_(fbW, fbH);
+    renderCb_(fb.x, fb.y, fb.w, fb.h);
     window_->endExternalCommands();
 }
 

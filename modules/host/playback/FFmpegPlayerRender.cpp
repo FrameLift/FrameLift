@@ -76,7 +76,7 @@ bool FFmpegPlayer::HasNewFrame() noexcept
 void FFmpegPlayer::RenderFrame(int w, int h) noexcept
 {
     PrepareRenderFrame(w, h);
-    DrawPreparedFrame(w, h);
+    DrawPreparedFrame(0, 0, w, h);
 }
 
 void FFmpegPlayer::PrepareRenderFrame(int w, int h) noexcept
@@ -129,10 +129,10 @@ void FFmpegPlayer::PrepareRenderFrame(int w, int h) noexcept
     }
 }
 
-void FFmpegPlayer::DrawPreparedFrame(int w, int h) noexcept
+void FFmpegPlayer::DrawPreparedFrame(int fbX, int fbY, int fbW, int fbH) noexcept
 {
     if (rendererReady_)
     {
-        renderer_->Draw(w, h, preparedOverlayActive_);
+        renderer_->Draw(fbX, fbY, fbW, fbH, preparedOverlayActive_);
     }
 }

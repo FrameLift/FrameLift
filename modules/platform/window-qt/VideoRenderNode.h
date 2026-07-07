@@ -16,10 +16,11 @@ class VideoRenderNode final : public QSGRenderNode
 public:
     VideoRenderNode() = default;
 
-    // Host video draw: given the target framebuffer size in pixels, clears to black and
-    // draws the current frame letterboxed. Set by VideoItem (forwarded from QtAppWindow,
-    // ultimately App's player_->RenderFrame).
-    using RenderCallback = std::function<void(int fbW, int fbH)>;
+    // Host video draw: given the target rect in device pixels (top-left origin within
+    // the window surface), draws the current frame letterboxed inside that rect. The
+    // origin is nonzero when the fallback title bar insets the video item. Set by
+    // VideoItem (forwarded from QtAppWindow, ultimately App's player_->RenderFrame).
+    using RenderCallback = std::function<void(int fbX, int fbY, int fbW, int fbH)>;
 
     // Per-update state pushed from VideoItem::updatePaintNode().
     void SetPrepareCallback(RenderCallback cb)
@@ -37,8 +38,10 @@ public:
         window_ = window;
     }
 
-    void SetItemSize(int logicalW, int logicalH)
+    void SetItemRect(int logicalX, int logicalY, int logicalW, int logicalH)
     {
+        itemX_ = logicalX;
+        itemY_ = logicalY;
         itemW_ = logicalW;
         itemH_ = logicalH;
     }
@@ -52,8 +55,17 @@ private:
     RenderCallback prepareCb_;
     RenderCallback renderCb_;
     QQuickWindow* window_ = nullptr;
+    int itemX_ = 0;
+    int itemY_ = 0;
     int itemW_ = 0;
     int itemH_ = 0;
 
-    [[nodiscard]] std::pair<int, int> FramebufferSize() const;
+    struct FbRect
+    {
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+    [[nodiscard]] FbRect FramebufferRect() const;
 };

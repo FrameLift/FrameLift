@@ -8,7 +8,9 @@ VideoItem::VideoItem(QQuickItem* parent) : QQuickItem(parent)
     setFlag(ItemHasContents, true);
 }
 
-void VideoItem::SetRenderCallbacks(std::function<void(int, int)> prepareCb, std::function<void(int, int)> renderCb)
+void VideoItem::SetRenderCallbacks(
+    std::function<void(int, int, int, int)> prepareCb, std::function<void(int, int, int, int)> renderCb
+)
 {
     prepareCb_ = std::move(prepareCb);
     renderCb_ = std::move(renderCb);
@@ -23,7 +25,11 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData* /*data*/)
         node = new VideoRenderNode();
     }
     node->SetWindow(window());
-    node->SetItemSize(static_cast<int>(width()), static_cast<int>(height()));
+    // Direct child of the window content item, so position() is the scene position;
+    // y is the chrome inset when the fallback title bar reserves the top strip.
+    node->SetItemRect(
+        static_cast<int>(x()), static_cast<int>(y()), static_cast<int>(width()), static_cast<int>(height())
+    );
     node->SetPrepareCallback(prepareCb_);
     node->SetRenderCallback(renderCb_);
     return node;

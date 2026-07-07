@@ -759,7 +759,7 @@ void VulkanVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
     }
 }
 
-void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
+void VulkanVideoRenderer::Draw(int fbX, int fbY, int fbW, int fbH, bool drawOverlay)
 {
     // The compositor reuses the cached video layer when the frame is unchanged: the
     // backend then leaves the video-layer pass closed, so there is nothing to record
@@ -776,15 +776,16 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
 
     if (vkFrame_)
     {
-        viewportSet = DrawVulkanFrame(); // zero-copy YCbCr video
+        viewportSet = DrawVulkanFrame(fbX, fbY, fbW, fbH); // zero-copy YCbCr video
     }
     else if (videoTex)
     {
-        const VkExtent2D extent = backend_->SwapchainExtent();
-        // Aspect-preserving fit, centered. The overlay is uploaded at this same on-screen
-        // size, so it maps 1:1 over the video within the same letterbox rectangle.
-        const LetterboxRect lb =
-            ComputeLetterbox(static_cast<int>(extent.width), static_cast<int>(extent.height), videoTex->w, videoTex->h);
+        // Aspect-preserving fit, centered within the target rect (which excludes the
+        // fallback title bar strip when present — the swapchain also covers that strip,
+        // so the rect must come from the caller, never SwapchainExtent()). The overlay
+        // is uploaded at this same on-screen size, so it maps 1:1 over the video within
+        // the same letterbox rectangle.
+        const LetterboxRect lb = ComputeLetterbox(fbX, fbY, fbW, fbH, videoTex->w, videoTex->h);
 
         VkViewport vp{};
         vp.x = static_cast<float>(lb.x);
@@ -829,10 +830,7 @@ void VulkanVideoRenderer::Draw(int /*fbW*/, int /*fbH*/, bool drawOverlay)
             // The overlay was rendered at the video's on-screen letterbox size, so its own
             // dimensions reproduce the same rectangle; never rely on a previous frame's
             // dynamic state (a bailed video draw leaves it stale or unset).
-            const VkExtent2D extent = backend_->SwapchainExtent();
-            const LetterboxRect lb = ComputeLetterbox(
-                static_cast<int>(extent.width), static_cast<int>(extent.height), overlayTex->w, overlayTex->h
-            );
+            const LetterboxRect lb = ComputeLetterbox(fbX, fbY, fbW, fbH, overlayTex->w, overlayTex->h);
             VkViewport vp{};
             vp.x = static_cast<float>(lb.x);
             vp.y = static_cast<float>(lb.y);

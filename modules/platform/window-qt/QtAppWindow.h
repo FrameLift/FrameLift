@@ -54,8 +54,11 @@ public:
     void SetPlayerWakeupHandler(std::function<void()> handler);
     void SetGraphicsInvalidatedHandler(std::function<void()> handler);
     // Host video draw, forwarded to the scene-graph node (App's player_->RenderFrame).
+    // The callbacks receive the video target rect in device pixels (top-left origin);
+    // the origin is nonzero when the fallback title bar insets the video item.
     void SetVideoRenderCallbacks(
-        std::function<void(int fbW, int fbH)> prepareCb, std::function<void(int fbW, int fbH)> renderCb
+        std::function<void(int fbX, int fbY, int fbW, int fbH)> prepareCb,
+        std::function<void(int fbX, int fbY, int fbW, int fbH)> renderCb
     );
     void SetPluginViews(std::vector<QmlViewSpec> views);
     // Show the window (created hidden) and run Qt's event loop until quit. Returns the
