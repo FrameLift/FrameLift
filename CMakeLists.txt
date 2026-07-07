@@ -57,7 +57,9 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 # use Qt media playback classes here: compressed media stays on FFmpegPlayer and
 # the external `ffmpeg` target above. Widgets provides the native QFileDialog
 # open-file picker.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets)
+# Sql backs the host IMediaStore service (modules/host/services/MediaStoreImpl) over
+# the bundled QSQLITE driver; plugins never link a database library themselves.
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets Sql)
 
 # Guard: no Qt Multimedia playback APIs (compressed media stays on external FFmpeg).
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftMediaAudit.cmake")
@@ -164,7 +166,7 @@ target_include_directories(FrameLift PRIVATE
         ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
 target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk OpenGL::GL
-        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets)
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets Qt6::Sql)
 
 # Built-in module OBJECT libraries (defined in FrameLiftHostSources); the exe links the
 # objects + their compile usage requirements.

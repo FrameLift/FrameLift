@@ -15,7 +15,7 @@ endif ()
 
 # JSON — backs the host JsonServiceImpl (Qt6::Core QJson), compiled into the History
 # test so its persistence round-trips exercise the real backend.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Sql)
 
 enable_testing()
 find_package(Threads REQUIRED)
@@ -66,6 +66,7 @@ add_executable(framelift_tests
         unit/misc/TestMediaSpecTests.cpp
         unit/host/SettingsTests.cpp
         unit/host/AppStateStoreTests.cpp
+        unit/host/MediaStoreTests.cpp
         unit/host/ModuleContextTests.cpp
         unit/host/PluginConfigTests.cpp
         unit/host/CommandRegistryTests.cpp
@@ -114,6 +115,7 @@ add_executable(framelift_tests
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginResolver.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/AppStateStore.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/HotkeysImpl.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/KeyNames.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp"
         "${FRAMELIFT_ROOT}/src/TestMediaGenerator.cpp"
@@ -129,7 +131,7 @@ target_include_directories(framelift_tests PRIVATE
         "${FRAMELIFT_ROOT}/tests/support"  # TempIni.h for PluginConfig/ModuleSettings tests
         "${FRAMELIFT_ROOT}/plugins/playlist"
 )
-target_link_libraries(framelift_tests PRIVATE Threads::Threads Qt6::Core Qt6::Gui Qt6::Test)
+target_link_libraries(framelift_tests PRIVATE Threads::Threads Qt6::Core Qt6::Gui Qt6::Test Qt6::Sql)
 framelift_apply_coverage(framelift_tests)
 framelift_qt_discover_tests(framelift_tests)
 

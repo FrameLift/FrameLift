@@ -5,6 +5,7 @@
 #include "GraphicsInfoService.h"
 #include "HotkeysImpl.h"
 #include "JsonServiceImpl.h"
+#include "MediaStoreImpl.h"
 #include "ModuleContext.h"
 #include "ModuleRegistry.h"
 #include "PlaybackControls.h"
@@ -119,6 +120,7 @@ private:
     FileDialogServiceImpl fileDialogService_{&settings_};
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
+    std::unique_ptr<MediaStoreImpl> mediaStore_; // needs prefDir, so built in InitServices
     std::unique_ptr<GraphicsInfoService> graphicsInfo_;
     std::unique_ptr<VideoDecodeCaps> videoDecodeCaps_;
 

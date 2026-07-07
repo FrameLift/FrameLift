@@ -55,6 +55,8 @@ set(_FRAMELIFT_HOST_SERVICES_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/services/HotkeysImpl.h"
         "${CMAKE_SOURCE_DIR}/modules/host/services/JsonServiceImpl.cpp"
         "${CMAKE_SOURCE_DIR}/modules/host/services/JsonServiceImpl.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/services/MediaStoreImpl.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/services/MediaStoreImpl.h"
 )
 
 set(_FRAMELIFT_HOST_CONTROLS_SOURCES
@@ -220,7 +222,7 @@ function(framelift_add_host_module target)
             ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
     target_link_libraries(${target} PRIVATE
             FrameLiftSdk OpenGL::GL ffmpeg libass
-            Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets)
+            Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets Qt6::Sql)
     framelift_apply_builtin_module_definitions(${target})
     framelift_apply_release_opts(${target})
     set_property(GLOBAL APPEND PROPERTY FRAMELIFT_HOST_MODULE_TARGETS ${target})
