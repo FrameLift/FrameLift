@@ -56,6 +56,15 @@ bool g_color = false;
 //     passthrough format — harmless pod-parse noise on playback start.
 //   - "Using Qt multimedia with FFmpeg": Qt's FFmpeg media backend logs this banner on
 //     init; we only use Qt Multimedia for audio output, so it's irrelevant noise.
+//   - "Got leave event for surface 0x0": Qt's Wayland client (QWaylandTextInputv3) warns
+//     when the compositor sends a text-input-v3 leave for a null surface at startup — a
+//     known harmless upstream quirk. Matching on "0x0" keeps genuine mismatches visible.
+//   - "fontselect: Using default font family": libass's routine font-fallback notice
+//     (routed in via AssLogCallback in FFmpegSubtitles at warn level) — expected
+//     substitution info, not a problem.
+//   - "Failed to register with host portal": Qt's xdg-desktop-portal app-ID registration
+//     fails whenever framelift.desktop isn't installed in the XDG data dirs (i.e. every
+//     dev-tree run) — harmless; registration works on installed copies.
 //   - The rest are benign libav* container quirks (routed in via FFmpegLogCallback):
 //     mov UDTA atoms it can't parse, dangling QT chapter-track references, and the
 //     "couldn't probe codec params / increase analyzeduration" pair on lazy-init files.
@@ -63,6 +72,9 @@ bool IsSuppressed(const QString& msg)
 {
     return msg.contains(QLatin1String("spaVisitChoice")) ||
            msg.contains(QLatin1String("Using Qt multimedia with FFmpeg")) ||
+           msg.contains(QLatin1String("Got leave event for surface 0x0")) ||
+           msg.contains(QLatin1String("fontselect: Using default font family")) ||
+           msg.contains(QLatin1String("Failed to register with host portal")) ||
            msg.contains(QLatin1String("UDTA parsing failed")) ||
            msg.contains(QLatin1String("Referenced QT chapter track not found")) ||
            msg.contains(QLatin1String("Could not find codec parameters for stream")) ||
