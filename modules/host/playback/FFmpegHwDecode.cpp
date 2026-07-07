@@ -204,9 +204,25 @@ bool FFmpegHwDecode::TryEnableBackend(
     }
     else
     {
+        if (cache && cache->HasFailed(static_cast<int>(type)))
+        {
+            return false; // already failed this run — don't pay the driver probe again
+        }
+        // Silence libav's own error spam for an *expected* miss (e.g. "Cannot load
+        // libcuda.so.1" when the auto walk tries CUDA on a machine without the NVIDIA
+        // driver) — the caller just falls through to the next backend. Same idiom and
+        // rationale as ProbeHwBackendAvailable above.
+        const int prevLevel = av_log_get_level();
+        av_log_set_level(AV_LOG_QUIET);
         const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
+        av_log_set_level(prevLevel);
         if (err < 0 || !device)
         {
+            if (cache)
+            {
+                cache->MarkFailed(static_cast<int>(type));
+            }
+            Log::Debug("FFmpegHwDecode: {} device unavailable ({})", HwBackendName(backend), err);
             return false; // device unavailable (no driver / no GPU)
         }
         if (cache)
