@@ -210,14 +210,14 @@ function(add_framelift_plugin_test name)
 endfunction()
 
 # ── Per-plugin behaviour suites ───────────────────────────────────────────────
-# History persists through the host IJson service; compile the real QJson-backed
-# JsonServiceImpl into the test (the only suite that exercises JSON) and link Qt6::Core.
+# History persists through the host IMediaStore service; compile the real Qt SQL-backed
+# MediaStoreImpl into the test so its persistence round-trips exercise the real backend.
 add_framelift_plugin_test(framelift_test_history
         plugins/history/HistoryTests.cpp
         "${FRAMELIFT_ROOT}/plugins/history/History.cpp"
         "${FRAMELIFT_ROOT}/plugins/history/HistorySettings.cpp"
-        "${FRAMELIFT_ROOT}/modules/host/services/JsonServiceImpl.cpp")
-target_link_libraries(framelift_test_history PRIVATE Qt6::Core)
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
+target_link_libraries(framelift_test_history PRIVATE Qt6::Core Qt6::Sql)
 
 # Playlist + SettingsMenu drive the real ModuleContext, so they also compile
 # the host plugin runtime and settings modules.

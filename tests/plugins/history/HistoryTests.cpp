@@ -1,19 +1,36 @@
 #include "History.h"
-#include "JsonServiceImpl.h"
+#include "MediaStoreImpl.h"
 #include "TempIni.h"
 
 #include "QtTestRunner.h"
-#include <chrono>
 
 #include <QtTest/QtTest>
-#include <thread>
+
+#include <filesystem>
+#include <string>
 
 namespace
 {
-// Real QJson-backed host JSON service shared by the persistence tests. The service
-// object is stateless, so a single instance is safe across the suite (including
-// detached writer threads).
-JsonServiceImpl g_json;
+// Owns a unique directory holding a real Qt SQL-backed store database (WAL mode adds
+// -wal/-shm siblings, so per-file cleanup is not enough). The store creates the
+// directory on first open. A temp file is required — the store keeps one connection
+// per calling thread, and :memory: would give each thread a private database.
+class TempDb
+{
+public:
+    ~TempDb()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    [[nodiscard]] QString qstr() const
+    {
+        return QString::fromStdString((dir / "media.db").string());
+    }
+
+    std::filesystem::path dir = UniqueTempPath();
+};
 
 std::string MostRecent(const History& h)
 {
@@ -24,27 +41,6 @@ std::string MostRecent(const History& h)
         h.GetMostRecent(s.data(), n + 1);
     }
     return s;
-}
-
-// Save() persists on a detached thread; reload into a fresh History until the
-// most-recent entry matches (or time out). Returns the loaded most-recent path.
-std::string WaitForPersistedMostRecent(const std::string& path, const std::string& expected)
-{
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    std::string got;
-    do
-    {
-        History reload;
-        reload.SetJsonService(&g_json);
-        reload.SetStoragePath(path);
-        got = MostRecent(reload);
-        if (got == expected)
-        {
-            return got;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    } while (std::chrono::steady_clock::now() < deadline);
-    return got;
 }
 } // namespace
 
@@ -122,46 +118,77 @@ private Q_SLOTS:
         QCOMPARE(h.GetResumePos("/old.mp4"), 0.0); // gone
     }
 
-    void LoadsEntriesFromJson()
+    void LoadsEntriesFromStore()
     {
-        const TempFile f(R"([{"p":"/x/y.mp4","r":42.5,"d":"2024-01-01 00:00:00"}])");
+        const TempDb db;
+        MediaStoreImpl store(db.qstr());
+        QVERIFY(store.Exec(
+            "CREATE TABLE history_entries ("
+            "    path            TEXT PRIMARY KEY,"
+            "    resume_pos      REAL    NOT NULL DEFAULT 0,"
+            "    last_played_utc INTEGER NOT NULL,"
+            "    play_count      INTEGER NOT NULL DEFAULT 1)"
+        ));
+        QVERIFY(store.Exec(
+            "INSERT INTO history_entries(path, resume_pos, last_played_utc) "
+            "VALUES('/x/y.mp4', 42.5, 1700000000)"
+        ));
 
         History h;
-        h.SetJsonService(&g_json);
-        h.SetStoragePath(f.str()); // triggers Load()
+        h.SetMediaStore(&store); // triggers EnsureSchema() + Load()
 
         QVERIFY((MostRecent(h)) == ("/x/y.mp4"));
         QCOMPARE(h.GetResumePos("/x/y.mp4"), 42.5);
     }
 
-    void SaveRoundTripsToDisk()
+    void PersistsAcrossReload()
     {
-        const TempFile f; // owns a unique path; not yet written
+        const TempDb db;
+        MediaStoreImpl store(db.qstr());
 
         History h;
-        h.SetJsonService(&g_json);
-        h.SetStoragePath(f.str()); // empty load (file absent)
-        h.AddEntry("/a.mp4");      // triggers Save() on a detached thread
+        h.SetMediaStore(&store);
+        h.AddEntry("/a.mp4"); // writes through synchronously
+        h.UpdateResumePos("/a.mp4", 7.5);
 
-        QVERIFY((WaitForPersistedMostRecent(f.str(), "/a.mp4")) == ("/a.mp4"));
+        History reload;
+        reload.SetMediaStore(&store);
+        QVERIFY((MostRecent(reload)) == ("/a.mp4"));
+        QCOMPARE(reload.GetResumePos("/a.mp4"), 7.5);
     }
 
-    // Several rapid saves race on the detached writer thread; atomic temp-file +
-    // rename must guarantee the destination is always a complete, parseable file
-    // (never truncated/empty), so a reload recovers the latest entry intact.
-    void ConcurrentSavesNeverCorruptFile()
+    void ReloadAfterManyAddsKeepsOrderAndResume()
     {
-        const TempFile f;
+        const TempDb db;
+        MediaStoreImpl store(db.qstr());
 
         History h;
-        h.SetJsonService(&g_json);
-        h.SetStoragePath(f.str());
+        h.SetMediaStore(&store);
         for (int i = 0; i < 20; ++i)
         {
             h.AddEntry(("/f" + std::to_string(i) + ".mp4").c_str());
         }
+        h.UpdateResumePos("/f3.mp4", 33.0);
 
-        QVERIFY((WaitForPersistedMostRecent(f.str(), "/f19.mp4")) == ("/f19.mp4"));
+        History reload;
+        reload.SetMediaStore(&store);
+        QVERIFY((MostRecent(reload)) == ("/f19.mp4"));
+        QCOMPARE(reload.GetResumePos("/f3.mp4"), 33.0);
+    }
+
+    void ClearEmptiesTheStore()
+    {
+        const TempDb db;
+        MediaStoreImpl store(db.qstr());
+
+        History h;
+        h.SetMediaStore(&store);
+        h.AddEntry("/a.mp4");
+        h.Clear();
+
+        History reload;
+        reload.SetMediaStore(&store);
+        QVERIFY((MostRecent(reload)) == (""));
     }
 };
 

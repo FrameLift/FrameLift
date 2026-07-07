@@ -5,15 +5,14 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QVariantList>
-#include <atomic>
 #include <deque>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
 // Slide-in panel (right edge) showing recently played files with resume positions.
-// Entries are persisted to a plain-text file in the user's pref directory.
+// Entries are persisted to the shared media store (SQLite) under the `history`
+// namespace; every mutation writes through synchronously.
 class HistorySettings;
 
 class History : public QObject, public ModuleBase, public IHistory
@@ -30,17 +29,11 @@ public:
     // ── IModule ───────────────────────────────────────────────────────────────
     bool HandleKeyDownEvent(const AppEvent& e) override;
 
-    // Inject the host JSON service used for load/save. Set from OnInstall in
-    // production; tests inject a JsonServiceImpl directly. Must be set before
-    // SetStoragePath() for Load() to read anything.
-    void SetJsonService(IJson* json) noexcept
-    {
-        json_ = json;
-    }
-
-    // Set the file path for persistence and immediately load any saved data.
-    // Must be called before AddEntry().
-    void SetStoragePath(std::string path);
+    // Inject the host media store used for persistence and immediately create the
+    // history schema and load any saved entries. Set from OnInstall in production;
+    // tests inject a MediaStoreImpl over a temp database directly. A null/absent
+    // store degrades to in-memory-only history.
+    void SetMediaStore(IMediaStore* store);
 
     // Push a path to the front; deduplicates, caps, and persists.
     // Driven internally by the FileOpenedEvent subscription.
@@ -75,9 +68,6 @@ public:
     // IHistory: return the saved resume position for `path`, or 0.0 if not found.
     [[nodiscard]] double GetResumePos(const char* path) const noexcept override;
 
-    // Serialise entries to storagePath_.
-    void Save() const noexcept;
-
 protected:
     // ── ModuleBase hooks ────────────────────────────────────────────────────
     const char* ModuleName() const override
@@ -97,10 +87,10 @@ Q_SIGNALS:
 private:
     struct Entry
     {
-        std::string path;         // JSON: "p"
+        std::string path;         // column: path (PRIMARY KEY)
         std::string label;        // display name (filename without directory) — not persisted
-        double resumePos = 0.0;   // JSON: "r" — last known playback position in seconds
-        std::string playbackDate; // JSON: "d" — ISO 8601 local timestamp of last play
+        double resumePos = 0.0;   // column: resume_pos — last known playback position in seconds
+        std::string playbackDate; // derived from column last_played_utc — local "%Y-%m-%d %H:%M:%S"
         // Cached display strings, recomputed only on mutation (not per frame) — the
         // panel renders every frame, so per-row path parsing/formatting would be hot.
         std::string dir;  // parent directory of path
@@ -111,8 +101,15 @@ private:
     static std::string FilenameOf(const std::string& path);
     // Refresh an entry's cached display strings (dir, meta) from its path/pos/date.
     static void FormatEntry(Entry& e);
-    // Deserialise entries from storagePath_; called from SetStoragePath().
+    // Create/migrate the history_* tables (per-namespace schema versioning).
+    void EnsureSchema();
+    // Rebuild entries_ from the store; called from SetMediaStore().
     void Load();
+    // Write-through helpers; each is a no-op without a store.
+    void PersistEntry(const char* path, double resumePos, long long playedUtc) const;
+    void PersistResumePos(const char* path, double pos) const;
+    void PersistTrim() const;
+    void PersistClear() const;
     // Maximum number of entries to retain, sourced from settings (or a fallback).
     [[nodiscard]] int MaxEntries() const;
     // Rebuild filteredIndices_ from entries_ using searchQuery_.
@@ -127,24 +124,7 @@ private:
     std::deque<Entry> entries_;
     std::vector<int> filteredIndices_; // indices into entries_ matching searchQuery_
     std::string searchQuery_;
-    std::string storagePath_;
-    IJson* json_ = nullptr; // host JSON service for load/save (host-owned; not owned here)
-
-    // ── Save ordering ─────────────────────────────────────────────────────────
-    // Each Save() snapshots and writes on a detached thread, so renames can land
-    // out of order. We stamp every save with a monotonic sequence and let the
-    // background writer commit (rename) only while holding `mutex`, discarding any
-    // snapshot older than one already published — so the newest entry always wins.
-    // Held by shared_ptr captured into the writer thread; outlives `this` safely.
-    struct SaveCoordinator
-    {
-        std::mutex mutex;
-        unsigned published = 0; // highest seq already renamed into place
-        bool any = false;       // whether `published` is meaningful yet
-    };
-
-    mutable std::atomic<unsigned> saveSeq_{0};
-    std::shared_ptr<SaveCoordinator> saveCoord_ = std::make_shared<SaveCoordinator>();
+    IMediaStore* store_ = nullptr; // shared media store (host-owned; not owned here)
 
     void ApplySettings(int maxEntries);
     void SetOpen(bool value);
