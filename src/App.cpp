@@ -217,6 +217,12 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     // settingsPath when the pref dir could not be resolved).
     mediaStore_ = std::make_unique<MediaStoreImpl>(QString::fromStdString(prefDir + "media.db"));
     moduleCtx_->RegisterService<IMediaStore>(mediaStore_.get());
+#if FRAMELIFT_MODULE_FRAME_SAMPLER
+    // Off-playback frame decode: opens its own demux/decode session per file, so it
+    // needs no state from the player and is safe to register unconditionally here.
+    frameSampler_ = std::make_unique<FrameSamplerService>();
+    moduleCtx_->RegisterService<IFrameSampler>(frameSampler_.get());
+#endif
     moduleCtx_->RegisterService<ILogBuffer>(&HostLogBuffer());
     graphicsInfo_ = std::make_unique<GraphicsInfoService>(appWindow_.get());
     moduleCtx_->RegisterService<IGraphicsInfo>(graphicsInfo_.get());

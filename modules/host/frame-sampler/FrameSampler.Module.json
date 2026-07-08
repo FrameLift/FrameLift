@@ -1,0 +1,22 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.frame_sampler",
+  "name": "Frame Sampler",
+  "description": "FFmpeg one-shot frame decoding off the playback path — decodes a frame at a timestamp to RGBA for indexing/analysis plugins.",
+  "enabled": true,
+  "required": false,
+  "provides": {
+    "features": [
+      "media.frame_sampler"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}
