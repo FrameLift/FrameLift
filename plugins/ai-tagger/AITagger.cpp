@@ -1,5 +1,10 @@
 #include "AITagger.h"
 
+#include "AITaggerSettings.h"
+#include "ModelDownloader.h"
+
+#include <framelift/ContextMenu.h>
+#include <framelift/ContextMenuHelpers.h>
 #include <framelift/Log.h>
 #include <framelift/platform/IAppWindow.h>
 #include <framelift/services/IFrameSampler.h>
@@ -10,6 +15,7 @@
 #include <QtCore/QFileInfo>
 
 #include <cstring>
+#include <filesystem>
 
 namespace
 {
@@ -27,7 +33,34 @@ int CopyOut(const std::string& s, char* buf, int cap) noexcept
 }
 } // namespace
 
-AITagger::AITagger() = default;
+AITagger::AITagger()
+{
+    // Debounced restore: only lift the throttle after a quiet period (a playlist file
+    // change is a brief EndFile→StartFile that must not un-throttle the worker).
+    throttleRestoreTimer_.setSingleShot(true);
+    throttleRestoreTimer_.setInterval(10000);
+    connect(
+        &throttleRestoreTimer_, &QTimer::timeout, this,
+        [this]
+        {
+            if (!playbackActive_ && worker_)
+            {
+                worker_->SetThrottle(0);
+            }
+        }
+    );
+    connect(
+        &dirWatcher_, &QFileSystemWatcher::directoryChanged, this,
+        [this](const QString&)
+        {
+            if (auto* events = ctx_ && dirChangedEvent_ ? ctx_->GetService<IEventPump>() : nullptr)
+            {
+                events->PushCustomEvent(dirChangedEvent_);
+            }
+        }
+    );
+}
+
 AITagger::~AITagger() = default;
 
 void AITagger::OnInstall(IModuleContext& ctx)
@@ -48,14 +81,132 @@ void AITagger::OnInstall(IModuleContext& ctx)
     {
         progressEvent_ = events->RegisterCustomEventType();
         doneEvent_ = events->RegisterCustomEventType();
+        dirChangedEvent_ = events->RegisterCustomEventType();
         worker_->Configure(events, progressEvent_, doneEvent_);
     }
 
     ctx.RegisterService<IMediaTags>(this);
 
+    framelift::Subscribe<FileOpenedEvent>(
+        ctx,
+        [this](const FileOpenedEvent& e)
+        {
+            currentFile_ = e.path ? e.path : "";
+        }
+    );
+
+    if (auto* pages = ctx.GetService<ISettingsPageRegistry>())
+    {
+        settingsPage_ = std::make_unique<AITaggerSettings>(*this);
+        pages->RegisterSettingsPage(
+            "aitagger", "AI Tagger", "qrc:/qt/qml/FrameLift/Plugins/AITagger/AITaggerSettings.qml", settingsPage_.get(),
+            320
+        );
+    }
+
+    if (auto* menu = ctx.GetService<ContextMenu>())
+    {
+        framelift::AddSection(
+            *menu,
+            [this](ContextMenu& m)
+            {
+                framelift::AddItem(
+                    m, "Tag this video", "aitagger.tagFile",
+                    [this]
+                    {
+                        tagFile(QString::fromStdString(currentFile_));
+                    }
+                );
+                framelift::AddItem(
+                    m, "Tag this folder", "aitagger.tagFolder",
+                    [this]
+                    {
+                        if (!currentFile_.empty())
+                        {
+                            tagFolder(
+                                QString::fromStdString(std::filesystem::path(currentFile_).parent_path().string())
+                            );
+                        }
+                    }
+                );
+            }
+        );
+    }
+
+    ArmWatchers();
+
     if (!sampler_)
     {
         Log::Warn("AITagger: IFrameSampler unavailable; tagging disabled");
+    }
+}
+
+void AITagger::OnRulesChanged()
+{
+    ArmWatchers();
+}
+
+void AITagger::ArmWatchers()
+{
+    if (!dirWatcher_.directories().isEmpty())
+    {
+        dirWatcher_.removePaths(dirWatcher_.directories());
+    }
+    if (!store_)
+    {
+        return;
+    }
+    QStringList dirs;
+    for (const aitagger::TagRule& r : store_->ListRules())
+    {
+        if (r.watch && QFileInfo::exists(QString::fromStdString(r.folder)))
+        {
+            dirs << QString::fromStdString(r.folder);
+        }
+    }
+    if (!dirs.isEmpty())
+    {
+        dirWatcher_.addPaths(dirs);
+    }
+}
+
+void AITagger::SetPlaybackActive(bool active)
+{
+    playbackActive_ = active;
+    if (!worker_)
+    {
+        return;
+    }
+    if (active)
+    {
+        throttleRestoreTimer_.stop();
+        worker_->SetThrottle(1); // cap the background worker while playback is active
+    }
+    else
+    {
+        throttleRestoreTimer_.start(); // restore full speed only after the quiet period
+    }
+}
+
+void AITagger::HandleMediaEvent(const MediaEvent& e)
+{
+    switch (e.type)
+    {
+    case MediaEventType::StartFile:
+    case MediaEventType::PlaybackRestart:
+        SetPlaybackActive(true);
+        break;
+    case MediaEventType::EndFile:
+        SetPlaybackActive(false);
+        break;
+    case MediaEventType::PropertyChange:
+        if (e.property.prop == PlayerProperty::Pause)
+        {
+            SetPlaybackActive(e.property.value.flag == 0); // paused ⇒ inactive
+        }
+        break;
+    default:
+        break;
     }
 }
 
@@ -190,6 +341,22 @@ bool AITagger::HandleEvent(const AppEvent& e)
         if (progressEvent_ != 0 && et == progressEvent_)
         {
             Q_EMIT progressChanged();
+            return false;
+        }
+        if (dirChangedEvent_ != 0 && et == dirChangedEvent_)
+        {
+            // A watched folder changed: enqueue any new untagged files (tagFolder
+            // skips files already tagged with a matching mtime/size).
+            if (store_)
+            {
+                for (const aitagger::TagRule& r : store_->ListRules())
+                {
+                    if (r.watch)
+                    {
+                        tagFolder(QString::fromStdString(r.folder));
+                    }
+                }
+            }
             return false;
         }
     }
