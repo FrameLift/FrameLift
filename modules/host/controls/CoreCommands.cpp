@@ -11,6 +11,15 @@
 #include <string>
 #include <utility>
 
+#if FRAMELIFT_MODULE_FRAME_SAMPLER
+#include <framelift/services/IFrameSampler.h>
+
+#include <QImage>
+
+#include <cstdint>
+#include <vector>
+#endif
+
 namespace
 {
 void CommandWrite(const ICommandRegistry::Invocation& invocation, const int level, const std::string& text)
@@ -319,25 +328,82 @@ void RegisterCoreCommands(
                 return;
             }
             CommandInfo(
-                invocation,
-                "prefs: " + BufferString(
-                                [&context](char* buf, int cap)
-                                {
-                                    return context.Paths().GetPrefPath(buf, cap);
-                                }
-                            )
+                invocation, "prefs: " + BufferString(
+                                            [&context](char* buf, int cap)
+                                            {
+                                                return context.Paths().GetPrefPath(buf, cap);
+                                            }
+                                        )
             );
             CommandInfo(
-                invocation,
-                "settings: " + BufferString(
-                                   [&context](char* buf, int cap)
-                                   {
-                                       return context.Settings().GetSettingsFilePath(buf, cap);
-                                   }
-                               )
+                invocation, "settings: " + BufferString(
+                                               [&context](char* buf, int cap)
+                                               {
+                                                   return context.Settings().GetSettingsFilePath(buf, cap);
+                                               }
+                                           )
             );
             CommandInfo(invocation, "plugins: " + pluginsPath);
         }
     );
+
+#if FRAMELIFT_MODULE_FRAME_SAMPLER
+    commands.RegisterHostCommand(
+        "framesampler-grab", {"grab-frame"}, "Decode one frame via IFrameSampler (verification)",
+        "framesampler-grab <path> <sec> [out.png]",
+        [&context](const ICommandRegistry::Invocation& invocation)
+        {
+            double seconds = 0.0;
+            if ((invocation.argc != 3 && invocation.argc != 4) ||
+                !CommandRegistry::ParseDurationSeconds(invocation.argv[2], seconds))
+            {
+                CommandUsage(invocation, "framesampler-grab <path> <sec> [out.png]");
+                return;
+            }
+            auto* sampler = context.GetService<IFrameSampler>();
+            if (!sampler)
+            {
+                CommandError(invocation, "IFrameSampler service unavailable");
+                return;
+            }
+            void* session = sampler->Open(invocation.argv[1]);
+            if (!session)
+            {
+                CommandError(invocation, std::string("Could not open ") + invocation.argv[1]);
+                return;
+            }
+            int w = 0;
+            int h = 0;
+            sampler->NativeSize(session, &w, &h);
+            std::vector<std::uint8_t> buf(static_cast<std::size_t>(w) * h * 4);
+            double actual = 0.0;
+            const bool ok =
+                sampler->ReadFrameRGBA(session, seconds, 0, 0, buf.data(), static_cast<int>(buf.size()), &actual);
+            if (!ok)
+            {
+                sampler->Close(session);
+                CommandError(invocation, "Frame decode failed");
+                return;
+            }
+            std::uint64_t sum = 0;
+            for (std::size_t i = 0; i < buf.size(); i += 4)
+            {
+                sum += buf[i] + buf[i + 1] + buf[i + 2];
+            }
+            const double avg = buf.empty() ? 0.0 : static_cast<double>(sum) / (static_cast<double>(w) * h * 3.0);
+            std::ostringstream line;
+            line << w << "x" << h << " dur=" << sampler->DurationSec(session) << "s got frame @" << actual
+                 << "s avgLuma=" << avg;
+            if (invocation.argc == 4)
+            {
+                const QImage img(buf.data(), w, h, w * 4, QImage::Format_RGBA8888);
+                line << (img.save(QString::fromUtf8(invocation.argv[3])) ? " saved " : " SAVE FAILED ")
+                     << invocation.argv[3];
+            }
+            sampler->Close(session);
+            CommandInfo(invocation, line.str());
+        }
+    );
+#endif
 }
 } // namespace host

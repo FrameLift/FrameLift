@@ -153,6 +153,11 @@ set(_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/playback/FFmpegVulkanDevice.h"
 )
 
+set(_FRAMELIFT_HOST_FRAME_SAMPLER_SOURCES
+        "${CMAKE_SOURCE_DIR}/modules/host/frame-sampler/FrameSamplerService.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/frame-sampler/FrameSamplerService.h"
+)
+
 set(_FRAMELIFT_HOST_GRAPHICS_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsApi.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsBackendFactory.cpp"
@@ -248,6 +253,11 @@ if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
     list(APPEND _framelift_playback_sources ${_FRAMELIFT_HOST_PLAYBACK_VULKAN_SOURCES})
 endif ()
 framelift_add_host_module(framelift_mod_playback ${_framelift_playback_sources})
+
+# Frame sampler: one-shot FFmpeg frame decode off the playback path (toggleable).
+if (FRAMELIFT_MODULE_FRAME_SAMPLER)
+    framelift_add_host_module(framelift_mod_frame_sampler ${_FRAMELIFT_HOST_FRAME_SAMPLER_SOURCES})
+endif ()
 if (WIN32)
     # winmm: timeBeginPeriod/timeEndPeriod used by the video frame-pacing timer in
     # FFmpegPlayerWorkers.cpp (this module is where those calls actually live).

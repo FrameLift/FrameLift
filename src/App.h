@@ -1,6 +1,9 @@
 #pragma once
 
 #include "FileDialogServiceImpl.h"
+#if FRAMELIFT_MODULE_FRAME_SAMPLER
+#include "FrameSamplerService.h"
+#endif
 #include "GraphicsApi.h"
 #include "GraphicsInfoService.h"
 #include "HotkeysImpl.h"
@@ -121,6 +124,10 @@ private:
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
     std::unique_ptr<MediaStoreImpl> mediaStore_; // needs prefDir, so built in InitServices
+#if FRAMELIFT_MODULE_FRAME_SAMPLER
+    // Off-playback FFmpeg frame decode for indexing/analysis plugins (IFrameSampler).
+    std::unique_ptr<FrameSamplerService> frameSampler_;
+#endif
     std::unique_ptr<GraphicsInfoService> graphicsInfo_;
     std::unique_ptr<VideoDecodeCaps> videoDecodeCaps_;
 
