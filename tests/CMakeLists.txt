@@ -202,6 +202,7 @@ function(add_framelift_plugin_test name)
             "${FRAMELIFT_ROOT}/plugins/remote-stream"
         "${FRAMELIFT_ROOT}/plugins/context-menu"
             "${FRAMELIFT_ROOT}/plugins/console"
+            "${FRAMELIFT_ROOT}/plugins/ai-tagger"
     )
     target_link_libraries(${name} PRIVATE
             Threads::Threads Qt6::Core Qt6::Gui Qt6::Test)
@@ -218,6 +219,18 @@ add_framelift_plugin_test(framelift_test_history
         "${FRAMELIFT_ROOT}/plugins/history/HistorySettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
 target_link_libraries(framelift_test_history PRIVATE Qt6::Core Qt6::Sql)
+
+# AI Tagger: pure-logic core (scheduler, convergence, store, worker) exercised with a
+# fake sampler + fake backend against the real SQL-backed store. The llama.cpp backend
+# (LlamaBackend.cpp) and the QObject module (AITagger.cpp) are deliberately excluded so
+# the test build stays FFmpeg-/llama-free.
+add_framelift_plugin_test(framelift_test_aitagger
+        plugins/ai-tagger/AITaggerTests.cpp
+        "${FRAMELIFT_ROOT}/plugins/ai-tagger/SampleScheduler.cpp"
+        "${FRAMELIFT_ROOT}/plugins/ai-tagger/TagStore.cpp"
+        "${FRAMELIFT_ROOT}/plugins/ai-tagger/TagWorker.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
+target_link_libraries(framelift_test_aitagger PRIVATE Qt6::Core Qt6::Sql)
 
 # Playlist + SettingsMenu drive the real ModuleContext, so they also compile
 # the host plugin runtime and settings modules.

@@ -89,3 +89,12 @@ struct CliCommandEvent
     int argc = 0;
     const char* const* argv = nullptr;
 };
+
+// Published by AITagger when a file's tag set changes (a tagging run finished or
+// updated it). Consumers of IMediaTags (Playlist row chips, search) subscribe and
+// re-query the tags for `path`. The pointer is valid only during the callback.
+struct MediaTagsUpdatedEvent
+{
+    static constexpr const char* EventId = "framelift.MediaTagsUpdatedEvent";
+    const char* path = nullptr;
+};
