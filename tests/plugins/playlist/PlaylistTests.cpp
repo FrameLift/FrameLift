@@ -13,9 +13,11 @@
 #include <fstream>
 
 #include <QtTest/QtTest>
+#include <cstring>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -40,6 +42,75 @@ struct TempDir
         std::filesystem::remove_all(path, ec);
     }
 };
+
+// Minimal IMediaTags: returns a fixed tag list for one path, nothing for others.
+class FakeMediaTags final : public IMediaTags
+{
+public:
+    std::string taggedPath;
+    std::vector<std::string> tags;
+
+    [[nodiscard]] int GetTagCount(const char* path) const noexcept override
+    {
+        return (path && taggedPath == path) ? static_cast<int>(tags.size()) : 0;
+    }
+
+    [[nodiscard]] int GetTag(
+        const char* path, int index, char* buf, int cap, float* confidence, char* modelBuf, int modelCap
+    ) const noexcept override
+    {
+        if (!path || taggedPath != path || index < 0 || index >= static_cast<int>(tags.size()))
+        {
+            return -1;
+        }
+        if (confidence)
+        {
+            *confidence = 0.9f;
+        }
+        if (modelBuf && modelCap > 0)
+        {
+            modelBuf[0] = '\0';
+        }
+        const std::string& s = tags[static_cast<std::size_t>(index)];
+        const int len = static_cast<int>(s.size());
+        if (buf && cap > 0)
+        {
+            const int n = len < cap - 1 ? len : cap - 1;
+            std::memcpy(buf, s.data(), static_cast<std::size_t>(n));
+            buf[n] = '\0';
+        }
+        return len;
+    }
+
+    [[nodiscard]] bool HasTag(const char* path, const char* tag, float) const noexcept override
+    {
+        if (!path || taggedPath != path || !tag)
+        {
+            return false;
+        }
+        for (const std::string& t : tags)
+        {
+            if (t == tag)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+QStringList RowTags(const QVariantList& rows, const QString& path)
+{
+    for (const QVariant& v : rows)
+    {
+        const QVariantMap row = v.toMap();
+        if (row.value("path").toString() == path)
+        {
+            return row.value("tags").toStringList();
+        }
+    }
+    return {};
+}
 } // namespace
 
 // ── Navigation: needs no context (LoadFile no-ops when ctx_ is null) ──────────
@@ -87,6 +158,38 @@ private Q_SLOTS:
         pl.Clear();
         QVERIFY(pl.Empty());
         QVERIFY((pl.Current()) == (-1));
+    }
+
+    // Rows carry AI tags from IMediaTags when the service is present; rows for untagged
+    // files carry an empty list.
+    void QmlEntriesCarryMediaTags()
+    {
+        FakeMediaTags tags;
+        tags.taggedPath = "/a.mp4";
+        tags.tags = {"beach", "ocean"};
+
+        Settings settings;
+        const TempFile ini;
+        ModuleContext ctx("pref/", &settings, ini.str());
+        ctx.RegisterService<IMediaTags>(&tags);
+
+        Playlist pl;
+        pl.Install(ctx); // discovers IMediaTags
+        pl.AddFile("/a.mp4", "/");
+        pl.AddFile("/b.mp4", "/");
+
+        const QVariantList rows = pl.QmlEntries();
+        QCOMPARE(RowTags(rows, "/a.mp4"), (QStringList{"beach", "ocean"}));
+        QVERIFY(RowTags(rows, "/b.mp4").isEmpty());
+    }
+
+    // Without the service, rows still build and simply carry no tags.
+    void QmlEntriesWithoutTagsServiceAreEmpty()
+    {
+        Playlist pl;
+        pl.AddFile("/a.mp4", "/");
+        const QVariantList rows = pl.QmlEntries();
+        QVERIFY(RowTags(rows, "/a.mp4").isEmpty());
     }
 
     void OpenFileScansDirectoryForVideosOnly()
