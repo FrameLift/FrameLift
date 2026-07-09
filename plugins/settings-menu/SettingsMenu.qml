@@ -1,9 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Window
 import FrameLift.Controls
 
 Item {
@@ -13,7 +11,7 @@ Item {
     required property var viewModel
     property var vm: viewModel
 
-    ApplicationWindow {
+    FLWindow {
         id: settingsWindow
         width: 980
         height: 680
