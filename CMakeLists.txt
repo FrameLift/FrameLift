@@ -106,7 +106,9 @@ set_target_properties(FrameLift PROPERTIES AUTOMOC ON)
 set(_framelift_control_qml
         qml/FrameLift/Controls/FLTheme.qml
         qml/FrameLift/Controls/FLSettingsUiState.qml
+        qml/FrameLift/Controls/FLWindowChromeBar.qml
         qml/FrameLift/Controls/FLTitleBar.qml
+        qml/FrameLift/Controls/FLWindow.qml
         qml/FrameLift/Controls/FLGlassPanel.qml
         qml/FrameLift/Controls/FLActionButton.qml
         qml/FrameLift/Controls/FLDrawer.qml
