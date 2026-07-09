@@ -259,6 +259,15 @@ int MediaStoreImpl::ColumnCount(const void* stmt) const noexcept
     return stmt ? AsStmt(stmt)->query.record().count() : 0;
 }
 
+int MediaStoreImpl::ColumnName(void* stmt, int col, char* buf, int cap) noexcept
+{
+    if (!stmt)
+    {
+        return 0;
+    }
+    return CopyOut(AsStmt(stmt)->query.record().fieldName(col).toUtf8(), buf, cap);
+}
+
 int MediaStoreImpl::ColumnText(void* stmt, int col, char* buf, int cap) noexcept
 {
     if (!stmt)

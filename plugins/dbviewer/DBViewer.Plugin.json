@@ -1,0 +1,27 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.dbviewer",
+  "name": "Database Viewer",
+  "publisher": "FrameLift",
+  "description": "Inspect the shared SQLite media store: browse tables and run read-only SQL",
+  "version": "project",
+  "abi": 1,
+  "enabled": true,
+  "provides": {
+    "features": [
+      "dbviewer.panel"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": [
+      "ui.context_menu",
+      "services.media_store"
+    ]
+  },
+  "platforms": []
+}

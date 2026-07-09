@@ -47,6 +47,10 @@ public:
 
     // ── Column reads (valid after Step returned 1; col is 0-based) ─────────────
     [[nodiscard]] virtual int ColumnCount(const void* stmt) const noexcept = 0;
+    // Name of the `col`-th result column (buf/cap idiom, like ColumnText). Valid once
+    // the statement has a result set (after the first Step, or immediately for a
+    // prepared SELECT). Empty for a statement that produces no rows.
+    [[nodiscard]] virtual int ColumnName(void* stmt, int col, char* buf, int cap) noexcept = 0;
     // Writes up to cap-1 chars + NUL into buf and returns the full length excl.
     // NUL; pass buf=nullptr to query the required length.
     [[nodiscard]] virtual int ColumnText(void* stmt, int col, char* buf, int cap) noexcept = 0;

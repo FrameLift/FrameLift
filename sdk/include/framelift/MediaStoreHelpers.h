@@ -72,6 +72,29 @@ public:
         return stmt_ && store_->Reset(stmt_);
     }
 
+    // Number of result columns (0 on an inert statement or a non-SELECT).
+    [[nodiscard]] int count() const noexcept
+    {
+        return stmt_ ? store_->ColumnCount(stmt_) : 0;
+    }
+
+    // Name of the col-th result column (empty on an inert statement).
+    [[nodiscard]] std::string name(int col) const
+    {
+        if (!stmt_)
+        {
+            return {};
+        }
+        const int len = store_->ColumnName(stmt_, col, nullptr, 0);
+        if (len <= 0)
+        {
+            return {};
+        }
+        std::string s(static_cast<std::size_t>(len), '\0');
+        (void)store_->ColumnName(stmt_, col, s.data(), len + 1);
+        return s;
+    }
+
     [[nodiscard]] std::string str(int col) const
     {
         if (!stmt_)

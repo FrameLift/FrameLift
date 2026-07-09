@@ -39,6 +39,7 @@ public:
 
     // ── Column reads ──
     int ColumnCount(const void* stmt) const noexcept override;
+    int ColumnName(void* stmt, int col, char* buf, int cap) noexcept override;
     int ColumnText(void* stmt, int col, char* buf, int cap) noexcept override;
     double ColumnDouble(void* stmt, int col) noexcept override;
     long long ColumnInt64(void* stmt, int col) noexcept override;
