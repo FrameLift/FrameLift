@@ -248,6 +248,20 @@ void Playlist::OnInstall(IModuleContext& ctx)
         );
     }
 
+    // Optional tags: show them as row chips and refresh when a file is (re)tagged.
+    mediaTags_ = ctx.GetService<IMediaTags>();
+    if (mediaTags_)
+    {
+        framelift::Subscribe<MediaTagsUpdatedEvent>(
+            ctx,
+            [this](const MediaTagsUpdatedEvent&)
+            {
+                entriesCacheDirty_ = true;
+                Q_EMIT playlistChanged();
+            }
+        );
+    }
+
     framelift::Subscribe<OpenFileRequestEvent>(
         ctx,
         [this](const OpenFileRequestEvent& e)
@@ -928,11 +942,34 @@ QVariantList Playlist::QmlEntries() const
         row.insert(QStringLiteral("subfolder"), QString::fromStdString(entries_[i].subfolder));
         row.insert(QStringLiteral("path"), QString::fromStdString(entries_[i].path));
         row.insert(QStringLiteral("current"), i == current_);
+        row.insert(QStringLiteral("tags"), TagsFor(entries_[i].path));
         result.push_back(row);
     }
     entriesCache_ = std::move(result);
     entriesCacheDirty_ = false;
     return entriesCache_;
+}
+
+QStringList Playlist::TagsFor(const std::string& path) const
+{
+    QStringList tags;
+    if (!mediaTags_ || path.empty())
+    {
+        return tags;
+    }
+    const int n = mediaTags_->GetTagCount(path.c_str());
+    for (int i = 0; i < n && i < 8; ++i) // cap the chips shown per row
+    {
+        const int len = mediaTags_->GetTag(path.c_str(), i, nullptr, 0, nullptr, nullptr, 0);
+        if (len <= 0)
+        {
+            continue;
+        }
+        std::string s(static_cast<std::size_t>(len), '\0');
+        (void)mediaTags_->GetTag(path.c_str(), i, s.data(), len + 1, nullptr, nullptr, 0);
+        tags << QString::fromStdString(s);
+    }
+    return tags;
 }
 
 void Playlist::togglePanel()

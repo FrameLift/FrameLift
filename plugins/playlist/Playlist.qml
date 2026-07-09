@@ -78,7 +78,8 @@ Item {
                     id: row
                     required property var modelData
                     required property int index
-                    height: 46
+                    readonly property var tags: row.modelData.tags ?? []
+                    height: 46 + (row.tags.length > 0 ? 18 : 0)
                     current: row.modelData.current
                     selected: row.ListView.isCurrentItem
                     onSelectRequested: { view.currentIndex = row.index; view.forceActiveFocus() }
@@ -102,6 +103,29 @@ Item {
                             elide: Text.ElideMiddle
                             width: parent.width
                             font.pixelSize: 11
+                        }
+                        // AI tag chips (only present when the AI Tagger plugin tagged this file).
+                        Flow {
+                            width: parent.width
+                            spacing: 4
+                            visible: row.tags.length > 0
+                            Repeater {
+                                model: row.tags
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    radius: 5
+                                    color: FLTheme.accentSoft
+                                    height: 14
+                                    width: chip.implicitWidth + 10
+                                    Text {
+                                        id: chip
+                                        anchors.centerIn: parent
+                                        text: parent.modelData
+                                        color: FLTheme.text
+                                        font.pixelSize: 9
+                                    }
+                                }
+                            }
                         }
                     }
                 }

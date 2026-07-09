@@ -20,7 +20,8 @@
   "optional": {
     "plugins": [],
     "features": [
-      "ui.context_menu"
+      "ui.context_menu",
+      "tags.service"
     ]
   },
   "platforms": []

@@ -6,6 +6,7 @@
 
 #include <QtCore/QFileSystemWatcher>
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 #include <QtCore/QVariantList>
 #include <atomic>
 #include <memory>
@@ -239,6 +240,11 @@ private:
     // whenever playlistChanged fires (the NOTIFY for the `entries` property).
     mutable QVariantList entriesCache_;
     mutable bool entriesCacheDirty_ = true;
+
+    // Optional AI tags shown as row chips. Discovered from the host; null when the AI
+    // Tagger plugin isn't loaded, in which case rows simply carry no tags.
+    IMediaTags* mediaTags_ = nullptr;
+    [[nodiscard]] QStringList TagsFor(const std::string& path) const;
 
     friend class PlaylistSettings;
 };
