@@ -29,15 +29,29 @@ namespace
 {
 QStringList CaseNames(const QObject& suite)
 {
+    // QtTest's reserved lifecycle slots run automatically around the real test
+    // functions; they are not selectable cases, so skip them (and data-provider slots,
+    // which end in "_data"). Listing them would make discovery emit standalone tests
+    // that QTest::qExec rejects with "Unknown test function".
+    static const QStringList kReserved{
+        QStringLiteral("initTestCase"), QStringLiteral("cleanupTestCase"), QStringLiteral("init"),
+        QStringLiteral("cleanup")
+    };
     QStringList cases;
     const QMetaObject* meta = suite.metaObject();
     for (int i = meta->methodOffset(); i < meta->methodCount(); ++i)
     {
         const QMetaMethod method = meta->method(i);
-        if (method.methodType() == QMetaMethod::Slot && method.parameterCount() == 0)
+        if (method.methodType() != QMetaMethod::Slot || method.parameterCount() != 0)
         {
-            cases.push_back(QString::fromLatin1(method.name()));
+            continue;
         }
+        const QString name = QString::fromLatin1(method.name());
+        if (kReserved.contains(name) || name.endsWith(QStringLiteral("_data")))
+        {
+            continue;
+        }
+        cases.push_back(name);
     }
     cases.sort();
     return cases;

@@ -1,0 +1,28 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.aitagger",
+  "name": "AI Tagger",
+  "publisher": "FrameLift",
+  "description": "Tags videos with local AI inference on sampled frames, governed by per-folder rules",
+  "version": "project",
+  "abi": 1,
+  "enabled": true,
+  "provides": {
+    "features": [
+      "tags.service"
+    ]
+  },
+  "requires": {
+    "plugins": [],
+    "features": []
+  },
+  "optional": {
+    "plugins": [],
+    "features": [
+      "services.media_store",
+      "media.frame_sampler",
+      "ui.context_menu"
+    ]
+  },
+  "platforms": []
+}

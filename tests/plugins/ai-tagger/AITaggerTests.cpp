@@ -1,0 +1,272 @@
+#include "InferenceBackend.h"
+#include "SampleScheduler.h"
+#include "TagStore.h"
+#include "TagWorker.h"
+
+#include "MediaStoreImpl.h"
+#include "QtTestRunner.h"
+#include "TempIni.h"
+#include "fakes/FakeFrameSampler.h"
+
+#include <QtTest/QtTest>
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+using namespace aitagger;
+
+namespace
+{
+// A real Qt SQL-backed store over a unique temp directory (WAL adds -wal/-shm siblings).
+class TempDb
+{
+public:
+    ~TempDb()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    [[nodiscard]] QString qstr() const
+    {
+        return QString::fromStdString((dir / "media.db").string());
+    }
+
+    std::filesystem::path dir = UniqueTempPath();
+};
+
+// Fake backend returning fixed yes-probabilities for every frame.
+class FakeBackend final : public IInferenceBackend
+{
+public:
+    std::vector<float> probs;
+
+    explicit FakeBackend(std::vector<float> p) : probs(std::move(p))
+    {
+    }
+
+    bool LoadModel(const ModelSpec&, std::string&) override
+    {
+        return true;
+    }
+
+    void UnloadModel() override
+    {
+    }
+
+    void SetThreads(int) override
+    {
+    }
+
+    bool EvaluateFrame(
+        const std::uint8_t*, int, int, const std::vector<BackendQuestion>& qs, std::vector<float>& out, std::string&
+    ) override
+    {
+        out.assign(qs.size(), 0.0f);
+        for (std::size_t i = 0; i < qs.size() && i < probs.size(); ++i)
+        {
+            out[i] = probs[i];
+        }
+        return true;
+    }
+};
+
+TagJob MakeJob(const std::string& path, std::vector<RuleEntry> entries, float threshold, int budget)
+{
+    TagJob j;
+    j.path = path;
+    j.model.modelPath = "fake-model";
+    j.model.modelId = "fake";
+    j.entries = std::move(entries);
+    j.ruleThreshold = threshold;
+    j.frameBudget = budget;
+    return j;
+}
+} // namespace
+
+class AITaggerTest final : public QObject
+{
+    Q_OBJECT
+
+    // One store for the whole suite. MediaStoreImpl keeps a per-thread connection in
+    // QThreadStorage; creating several instances in one process can hand a new instance
+    // the previous one's stale (removed) connection (QThreadStorage id recycling), so we
+    // use a single store and clear the tables between tests instead.
+    std::unique_ptr<TempDb> db_;
+    std::unique_ptr<MediaStoreImpl> store_;
+    std::unique_ptr<TagStore> ts_;
+
+    void ClearTables()
+    {
+        for (const char* t :
+             {"aitagger_files", "aitagger_runs", "aitagger_tags", "aitagger_rules", "aitagger_rule_entries"})
+        {
+            (void)store_->Exec((std::string("DELETE FROM ") + t).c_str());
+        }
+    }
+
+private Q_SLOTS:
+
+    void initTestCase()
+    {
+        db_ = std::make_unique<TempDb>();
+        store_ = std::make_unique<MediaStoreImpl>(db_->qstr());
+        ts_ = std::make_unique<TagStore>(store_.get());
+        ts_->EnsureSchema();
+        QVERIFY(store_->Exec("SELECT 1")); // fail early if the SQLite driver is unavailable
+    }
+
+    void init()
+    {
+        ClearTables();
+    }
+
+    void cleanupTestCase()
+    {
+        ts_.reset();
+        store_.reset();
+        db_.reset();
+    }
+
+    // ── SampleScheduler ──────────────────────────────────────────────────────
+    void PlanBudgetAndBoundaries()
+    {
+        const SamplePlan p = BuildSamplePlan(20.0, 31);
+        QCOMPARE(static_cast<int>(p.timestamps.size()), 31);
+        const std::vector<int> expectedEnds{1, 3, 7, 15, 31};
+        QCOMPARE(p.generationEnd, expectedEnds);
+        QCOMPARE(p.timestamps[0], 10.0); // d/2
+        QCOMPARE(p.timestamps[1], 5.0);  // d/4
+        QCOMPARE(p.timestamps[2], 15.0); // 3d/4
+    }
+
+    void PlanRespectsSmallBudget()
+    {
+        const SamplePlan p = BuildSamplePlan(20.0, 5);
+        QCOMPARE(static_cast<int>(p.timestamps.size()), 5);
+    }
+
+    void PlanZeroDurationYieldsOne()
+    {
+        const SamplePlan p = BuildSamplePlan(0.0, 31);
+        QCOMPARE(static_cast<int>(p.timestamps.size()), 1);
+        QCOMPARE(p.timestamps[0], 0.0);
+    }
+
+    // ── ConvergenceTracker ───────────────────────────────────────────────────
+    void PositiveSettlesImmediately()
+    {
+        ConvergenceTracker t({0.6f}, {});
+        t.Observe({0.9f});
+        QVERIFY(t.Settled(0));
+        QVERIFY(t.AllSettled());
+        QCOMPARE(t.MaxConf(0), 0.9f);
+    }
+
+    void NegativeNeedsMinSamples()
+    {
+        ConvergenceTracker t({0.6f}, {}); // minSamples 7, negCeiling 0.25
+        for (int i = 0; i < 6; ++i)
+        {
+            t.Observe({0.1f});
+            QVERIFY(!t.Settled(0));
+        }
+        t.Observe({0.1f});
+        QVERIFY(t.Settled(0)); // confident negative at 7 samples
+    }
+
+    // ── Worker + store integration ───────────────────────────────────────────
+    void PositiveTagIsStoredPresent()
+    {
+        FakeFrameSampler sampler;
+        TagWorker worker(
+            &sampler, ts_.get(),
+            []
+            {
+                return std::make_unique<FakeBackend>(std::vector<float>{0.9f});
+            }
+        );
+        worker.RunSync({MakeJob("/videos/a.mp4", {{"Does this scene contain a beach?", "beach", -1.0f}}, 0.6f, 31)});
+
+        QCOMPARE(ts_->TagCount("/videos/a.mp4"), 1);
+        TagResult r;
+        QVERIFY(ts_->TagAt("/videos/a.mp4", 0, r));
+        QCOMPARE(QString::fromStdString(r.tag), QStringLiteral("beach"));
+        QVERIFY(r.confidence > 0.85f);
+        QVERIFY(ts_->HasTag("/videos/a.mp4", "beach", 0.5f));
+        QCOMPARE(sampler.readCalls, 1); // a strong positive settles after the first sample
+    }
+
+    void NegativeTagNotPresentButRecorded()
+    {
+        FakeFrameSampler sampler;
+        TagWorker worker(
+            &sampler, ts_.get(),
+            []
+            {
+                return std::make_unique<FakeBackend>(std::vector<float>{0.1f});
+            }
+        );
+        worker.RunSync({MakeJob("/videos/b.mp4", {{"Beach?", "beach", -1.0f}}, 0.6f, 31)});
+
+        QCOMPARE(ts_->TagCount("/videos/b.mp4"), 0);           // not present (below threshold)
+        QVERIFY(ts_->HasTag("/videos/b.mp4", "beach", 0.05f)); // but the row exists at conf 0.1
+        QCOMPARE(sampler.readCalls, 7);                        // confident negative at the 7-sample boundary
+    }
+
+    void RuleRoundTripAndMostSpecificMatch()
+    {
+        TagRule broad;
+        broad.folder = "/videos";
+        broad.modelId = "m1";
+        broad.entries = {{"Q?", "t1", -1.0f}};
+        ts_->UpsertRule(broad);
+
+        TagRule narrow;
+        narrow.folder = "/videos/holidays";
+        narrow.modelId = "m2";
+        narrow.entries = {{"Q?", "t2", 0.8f}};
+        ts_->UpsertRule(narrow);
+
+        TagRule got;
+        QVERIFY(ts_->RuleForFile("/videos/holidays/x.mp4", got));
+        QCOMPARE(QString::fromStdString(got.modelId), QStringLiteral("m2"));
+        QCOMPARE(static_cast<int>(got.entries.size()), 1);
+        QCOMPARE(got.entries[0].threshold, 0.8f);
+
+        QVERIFY(ts_->RuleForFile("/videos/other/y.mp4", got));
+        QCOMPARE(QString::fromStdString(got.modelId), QStringLiteral("m1"));
+
+        // A sibling that only shares a name prefix must not match.
+        QVERIFY(!ts_->RuleForFile("/videos2/z.mp4", got));
+    }
+
+    void NeedsTaggingTracksMtimeSize()
+    {
+        FakeFrameSampler sampler;
+        TagWorker worker(
+            &sampler, ts_.get(),
+            []
+            {
+                return std::make_unique<FakeBackend>(std::vector<float>{0.9f});
+            }
+        );
+        worker.RunSync({MakeJob("/videos/c.mp4", {{"Q?", "beach", -1.0f}}, 0.6f, 31)});
+
+        // Same identity (the worker recorded mtime=size=0 for a nonexistent path).
+        QVERIFY(!ts_->NeedsTagging("/videos/c.mp4", 0, 0));
+        // Changed size ⇒ needs re-tagging.
+        QVERIFY(ts_->NeedsTagging("/videos/c.mp4", 0, 123));
+        // Never seen ⇒ needs tagging.
+        QVERIFY(ts_->NeedsTagging("/videos/never.mp4", 1, 1));
+    }
+};
+
+namespace
+{
+const ::framelift::test::Registrar<AITaggerTest> kRegisterAITaggerTest{"AITaggerTest"};
+}
+
+#include "AITaggerTests.moc"
