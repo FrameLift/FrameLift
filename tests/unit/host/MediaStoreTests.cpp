@@ -72,6 +72,21 @@ private Q_SLOTS:
         QCOMPARE(select.step(), 0);
     }
 
+    void ColumnNamesAndCountAreReadable()
+    {
+        const TempDb db;
+        MediaStoreImpl store(db.qstr());
+        QVERIFY(store.Exec("CREATE TABLE demo_items(name TEXT, score REAL)"));
+        QVERIFY(store.Exec("INSERT INTO demo_items VALUES('a', 1.0)"));
+
+        framelift::SqlStmt select(store, "SELECT name, score FROM demo_items");
+        QCOMPARE(select.step(), 1);
+        QCOMPARE(select.count(), 2);
+        QCOMPARE(select.name(0), std::string("name"));
+        QCOMPARE(select.name(1), std::string("score"));
+        QCOMPARE(select.name(9), std::string("")); // out of range → empty
+    }
+
     void ResetReExecutesWithNewBindings()
     {
         const TempDb db;

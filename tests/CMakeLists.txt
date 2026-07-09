@@ -203,6 +203,7 @@ function(add_framelift_plugin_test name)
         "${FRAMELIFT_ROOT}/plugins/context-menu"
             "${FRAMELIFT_ROOT}/plugins/console"
             "${FRAMELIFT_ROOT}/plugins/ai-tagger"
+            "${FRAMELIFT_ROOT}/plugins/dbviewer"
     )
     target_link_libraries(${name} PRIVATE
             Threads::Threads Qt6::Core Qt6::Gui Qt6::Test)
@@ -231,6 +232,14 @@ add_framelift_plugin_test(framelift_test_aitagger
         "${FRAMELIFT_ROOT}/plugins/ai-tagger/TagWorker.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
 target_link_libraries(framelift_test_aitagger PRIVATE Qt6::Core Qt6::Sql)
+
+# Database Viewer: enumerates and projects the store through the real SQL-backed
+# MediaStoreImpl, so compile it in and link Qt SQL like the History suite.
+add_framelift_plugin_test(framelift_test_dbviewer
+        plugins/dbviewer/DBViewerTests.cpp
+        "${FRAMELIFT_ROOT}/plugins/dbviewer/DBViewer.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
+target_link_libraries(framelift_test_dbviewer PRIVATE Qt6::Core Qt6::Sql)
 
 # Playlist + SettingsMenu drive the real ModuleContext, so they also compile
 # the host plugin runtime and settings modules.
