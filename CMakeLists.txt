@@ -3,6 +3,11 @@ cmake_minimum_required(VERSION 4.2.0)
 set(FRAMELIFT_VERSION "0.0.0" CACHE STRING "Numeric version passed to CMake project() — must be X.Y.Z")
 project(FrameLift VERSION ${FRAMELIFT_VERSION} LANGUAGES C CXX)
 
+# FrameLift does not use C++ modules. Disabling CMake's compiler dependency scan
+# avoids Ninja's dyndep path, which currently asserts in Ninja 1.13.x on this
+# project while processing the many Qt-generated translation units.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 # Build the native unit-test suite (tests/) as part of this project so it shows up
 # in IDEs. Disabled for the Windows app/CI build, which can't run native test exes.
 option(FRAMELIFT_BUILD_TESTS "Build the unit tests (tests/)" OFF)

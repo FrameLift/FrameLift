@@ -12,8 +12,7 @@ void VideoItem::SetRenderCallbacks(
     std::function<void(int, int, int, int)> prepareCb, std::function<void(int, int, int, int)> renderCb
 )
 {
-    prepareCb_ = std::move(prepareCb);
-    renderCb_ = std::move(renderCb);
+    callbacks_->Set(std::move(prepareCb), std::move(renderCb));
     update();
 }
 
@@ -30,7 +29,6 @@ QSGNode* VideoItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData* /*data*/)
     node->SetItemRect(
         static_cast<int>(x()), static_cast<int>(y()), static_cast<int>(width()), static_cast<int>(height())
     );
-    node->SetPrepareCallback(prepareCb_);
-    node->SetRenderCallback(renderCb_);
+    node->SetCallbacks(callbacks_);
     return node;
 }

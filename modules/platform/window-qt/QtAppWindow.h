@@ -53,7 +53,8 @@ public:
     // Drain handler invoked (GUI thread) when a player worker posts a wakeup.
     void SetPlayerWakeupHandler(std::function<void()> handler);
     void SetGraphicsInvalidatedHandler(std::function<void()> handler);
-    // Host video draw, forwarded to the scene-graph node (App's player_->RenderFrame).
+    // Host video draw, forwarded to an invalidatable scene-graph binding (App's
+    // player_->RenderFrame). Passing two empty callbacks detaches existing nodes too.
     // The callbacks receive the video target rect in device pixels (top-left origin);
     // the origin is nonzero when the fallback title bar insets the video item.
     void SetVideoRenderCallbacks(
@@ -61,6 +62,9 @@ public:
         std::function<void(int fbX, int fbY, int fbW, int fbH)> renderCb
     );
     void SetPluginViews(std::vector<QmlViewSpec> views);
+    // Request a native Qt close so launch tests exercise QEvent::Close and the same
+    // host shutdown route as a user closing the window.
+    void RequestClose();
     // Show the window (created hidden) and run Qt's event loop until quit. Returns the
     // QGuiApplication::exec() exit code.
     int RunEventLoop();

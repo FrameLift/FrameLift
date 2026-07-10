@@ -2,7 +2,10 @@
 
 #include <QtQuick/QQuickItem>
 
+#include "VideoRenderCallbacks.h"
+
 #include <functional>
+#include <memory>
 
 // The video surface as a real Qt Quick scene-graph citizen:
 //   QQuickWindow → scene graph → VideoItem (QQuickItem) → VideoRenderNode (QSGRenderNode)
@@ -27,6 +30,8 @@ protected:
     QSGNode* updatePaintNode(QSGNode* old, UpdatePaintNodeData* data) override;
 
 private:
-    std::function<void(int, int, int, int)> prepareCb_;
-    std::function<void(int, int, int, int)> renderCb_;
+    // Render nodes retain this shared binding rather than copies of callbacks that
+    // capture App. Clearing it immediately detaches even nodes awaiting a scene-graph
+    // synchronization during shutdown.
+    std::shared_ptr<VideoRenderCallbacks> callbacks_ = std::make_shared<VideoRenderCallbacks>();
 };

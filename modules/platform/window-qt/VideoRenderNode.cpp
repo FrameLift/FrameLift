@@ -18,7 +18,7 @@ VideoRenderNode::FbRect VideoRenderNode::FramebufferRect() const
 
 void VideoRenderNode::prepare()
 {
-    if (!prepareCb_ || !window_ || !window_->rendererInterface() ||
+    if (!callbacks_ || !callbacks_->HasPrepare() || !window_ || !window_->rendererInterface() ||
         window_->rendererInterface()->graphicsApi() != QSGRendererInterface::Vulkan)
     {
         return;
@@ -26,13 +26,13 @@ void VideoRenderNode::prepare()
     const FbRect fb = FramebufferRect();
     if (fb.w > 0 && fb.h > 0)
     {
-        prepareCb_(fb.x, fb.y, fb.w, fb.h);
+        callbacks_->Prepare(fb.x, fb.y, fb.w, fb.h);
     }
 }
 
 void VideoRenderNode::render(const RenderState* /*state*/)
 {
-    if (!renderCb_ || !window_)
+    if (!callbacks_ || !callbacks_->HasRender() || !window_)
     {
         return;
     }
@@ -49,12 +49,12 @@ void VideoRenderNode::render(const RenderState* /*state*/)
     // Tell Qt's RHI we are issuing native API commands outside its tracking, so it can
     // flush pending state and restore afterwards.
     window_->beginExternalCommands();
-    if (window_->rendererInterface() &&
-        window_->rendererInterface()->graphicsApi() != QSGRendererInterface::Vulkan && prepareCb_)
+    if (window_->rendererInterface() && window_->rendererInterface()->graphicsApi() != QSGRendererInterface::Vulkan &&
+        callbacks_->HasPrepare())
     {
-        prepareCb_(fb.x, fb.y, fb.w, fb.h);
+        callbacks_->Prepare(fb.x, fb.y, fb.w, fb.h);
     }
-    renderCb_(fb.x, fb.y, fb.w, fb.h);
+    callbacks_->Render(fb.x, fb.y, fb.w, fb.h);
     window_->endExternalCommands();
 }
 
