@@ -18,9 +18,9 @@ extern "C"
 // far ahead of the other: Push() blocks once the queue is full so the demuxer
 // naturally paces itself.
 //
-// When a shared ReadAheadCache budget is attached, Push() also waits
-// for byte-space in the common budget, so read-ahead is bounded by a configured
-// memory size across all streams; Pop() records hit/miss metrics and brackets
+// When a shared ReadAheadCache budget is attached, Push() reserves byte-space in
+// the common budget, so read-ahead is bounded by a configured memory size across
+// all streams; Pop() records hit/miss metrics and brackets
 // underruns so the player can surface CacheUsed / PausedForCache.
 //
 // Header-only and ffmpeg-side (it touches AVPacket), so it is only ever compiled
@@ -54,17 +54,19 @@ public:
     {
         const int64_t sz = pkt->size;
 
-        // Wait for byte-space in the shared budget before taking ownership, so
-        // total read-ahead across streams stays within the configured memory.
-        if (budget_ && !budget_->WaitForSpace(sz))
-        {
-            return false; // aborted while waiting (seek / stop)
-        }
-
         AVPacket* owned = av_packet_alloc();
         if (!owned)
         {
             return false;
+        }
+
+        // Reserve byte-space before taking ownership, so concurrent demuxers
+        // cannot exceed the shared read-ahead budget between admission and
+        // accounting.
+        if (budget_ && !budget_->Reserve(sz))
+        {
+            av_packet_free(&owned);
+            return false; // aborted while waiting (seek / stop)
         }
         av_packet_move_ref(owned, pkt);
 
@@ -74,16 +76,16 @@ public:
         {
             lock.unlock();
             av_packet_free(&owned);
+            if (budget_)
+            {
+                budget_->RemoveBytes(sz);
+            }
             return false;
         }
         q_.push(owned);
         primed_ = true;
         lock.unlock();
         notEmpty_.notify_one();
-        if (budget_)
-        {
-            budget_->AddBytes(sz);
-        }
         return true;
     }
 
@@ -105,14 +107,20 @@ public:
         if (stall)
         {
             budget_->RecordMiss();
+            // The cache callback reaches host code, so do not invoke it while
+            // holding the packet-queue mutex.
+            lock.unlock();
             budget_->BeginStall();
+            lock.lock();
         }
 
         notEmpty_.wait(lock, [this] { return abort_ || eof_ || !q_.empty(); });
 
         if (stall)
         {
+            lock.unlock();
             budget_->EndStall();
+            lock.lock();
         }
 
         if (!q_.empty())
@@ -158,7 +166,7 @@ public:
         }
         notEmpty_.notify_all();
         notFull_.notify_all();
-        // Release a demuxer parked in budget_->WaitForSpace(). Queues are always
+        // Release a demuxer parked in budget_->Reserve(). Queues are always
         // aborted as a group (seek / stop), so aborting the shared budget here is
         // safe; the player Reset()s it before resuming reads.
         if (budget_)

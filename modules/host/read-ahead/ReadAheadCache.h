@@ -25,7 +25,7 @@ public:
     ReadAheadCache& operator=(const ReadAheadCache&) = delete;
 
     // Set the budget. enabled == false disables byte-bounding entirely
-    // (WaitForSpace returns immediately) so the queues fall back to their own
+    // (Reserve returns immediately) so the queues fall back to their own
     // packet-count cap. Safe to call between files.
     void Configure(bool enabled, int64_t maxBytes)
     {
@@ -40,11 +40,13 @@ public:
         return enabled_;
     }
 
-    // Block until `bytes` more can be admitted without exceeding the budget, or
-    // the cache is aborted. Returns false if aborted while waiting (the caller
-    // should drop the packet and unwind). A single packet larger than the whole
-    // budget is always admitted once the cache is empty so playback can progress.
-    bool WaitForSpace(int64_t bytes)
+    // Block until `bytes` can be reserved without exceeding the budget, or the
+    // cache is aborted. A successful return atomically accounts the reservation,
+    // so concurrent demuxers cannot both pass admission before either records its
+    // packet. Returns false if aborted while waiting (the caller should drop the
+    // packet and unwind). A single packet larger than the whole budget is always
+    // admitted once the cache is empty so playback can progress.
+    bool Reserve(int64_t bytes)
     {
         std::unique_lock lock(m_);
         cv_.wait(
@@ -54,22 +56,20 @@ public:
                 return aborted_ || CanAccept(bytes);
             }
         );
-        return !aborted_;
-    }
-
-    // Account bytes now buffered in a queue (call right after a successful push).
-    void AddBytes(int64_t bytes)
-    {
-        std::lock_guard lock(m_);
+        if (aborted_)
+        {
+            return false;
+        }
         used_ += bytes;
         if (used_ > peakUsed_)
         {
             peakUsed_ = used_;
         }
+        return true;
     }
 
     // Release bytes as a queue hands a packet to its decode worker. Wakes a
-    // demuxer parked in WaitForSpace.
+    // demuxer parked in Reserve.
     void RemoveBytes(int64_t bytes)
     {
         {
@@ -158,7 +158,7 @@ public:
         return stalls_.load(std::memory_order_relaxed) > 0;
     }
 
-    // Wake every waiter; subsequent WaitForSpace return false immediately. Used
+    // Wake every waiter; subsequent Reserve calls return false immediately. Used
     // to release the demuxer when abandoning the current file or seeking.
     void Abort()
     {

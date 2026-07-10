@@ -5,6 +5,7 @@
 #include <QtTest/QtTest>
 
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -22,10 +23,9 @@ private Q_SLOTS:
     {
         ReadAheadCache c;
         c.Configure(/*enabled=*/false, /*maxBytes=*/1024);
-        // Byte-bounding off: WaitForSpace never blocks regardless of used bytes.
-        QVERIFY(c.WaitForSpace(1 << 30));
-        c.AddBytes(1 << 30);
-        QVERIFY(c.WaitForSpace(1 << 30));
+        // Byte-bounding off: Reserve never blocks regardless of used bytes.
+        QVERIFY(c.Reserve(1 << 30));
+        QVERIFY(c.Reserve(1 << 30));
     }
 
     void AdmitsUntilBudgetReached()
@@ -33,10 +33,8 @@ private Q_SLOTS:
         ReadAheadCache c;
         c.Configure(true, 1000);
 
-        QVERIFY(c.WaitForSpace(400));
-        c.AddBytes(400);
-        QVERIFY(c.WaitForSpace(400)); // 800 <= 1000
-        c.AddBytes(400);
+        QVERIFY(c.Reserve(400));
+        QVERIFY(c.Reserve(400)); // 800 <= 1000
         QVERIFY((c.UsedBytes()) == (800));
         // A further 400 would exceed 1000 and the cache is non-empty ⇒ would block.
         // Verified via the blocking test below; here just confirm accounting.
@@ -48,21 +46,21 @@ private Q_SLOTS:
         c.Configure(true, 100);
         // A single packet larger than the whole budget must still go through when the
         // cache is empty, otherwise playback would deadlock.
-        QVERIFY(c.WaitForSpace(10'000));
+        QVERIFY(c.Reserve(10'000));
     }
 
     void RemoveBytesFreesSpaceAndUnblocks()
     {
         ReadAheadCache c;
         c.Configure(true, 1000);
-        c.AddBytes(1000); // full
+        QVERIFY(c.Reserve(1000)); // full
 
         std::atomic<bool> admitted{false};
         std::thread producer(
             [&]
             {
                 // Blocks until space frees up.
-                if (c.WaitForSpace(500))
+                if (c.Reserve(500))
                 {
                     admitted = true;
                 }
@@ -82,13 +80,13 @@ private Q_SLOTS:
     {
         ReadAheadCache c;
         c.Configure(true, 1000);
-        c.AddBytes(1000);
+        QVERIFY(c.Reserve(1000));
 
         std::atomic<int> result{-1};
         std::thread producer(
             [&]
             {
-                result = c.WaitForSpace(500) ? 1 : 0;
+                result = c.Reserve(500) ? 1 : 0;
             }
         );
 
@@ -102,13 +100,13 @@ private Q_SLOTS:
     {
         ReadAheadCache c;
         c.Configure(true, 1000);
-        c.AddBytes(700);
+        QVERIFY(c.Reserve(700));
         c.Abort();
-        QVERIFY(!(c.WaitForSpace(1))); // aborted
+        QVERIFY(!(c.Reserve(1))); // aborted
 
         c.Reset();
         QVERIFY((c.UsedBytes()) == (0));
-        QVERIFY(c.WaitForSpace(500)); // usable again
+        QVERIFY(c.Reserve(500)); // usable again
     }
 
     void HitMissCounters()
@@ -142,7 +140,7 @@ private Q_SLOTS:
     {
         ReadAheadCache c;
         c.Configure(true, 1 << 20);
-        c.AddBytes(2048 + 512); // 2.5 KiB
+        QVERIFY(c.Reserve(2048 + 512)); // 2.5 KiB
         QVERIFY((c.UsedKB()) == (2));
     }
 
@@ -151,10 +149,10 @@ private Q_SLOTS:
         ReadAheadCache c;
         c.Configure(true, 1 << 20);
 
-        c.AddBytes(1024);
-        c.AddBytes(2048);
+        QVERIFY(c.Reserve(1024));
+        QVERIFY(c.Reserve(2048));
         c.RemoveBytes(2500);
-        c.AddBytes(512);
+        QVERIFY(c.Reserve(512));
 
         QVERIFY((c.UsedBytes()) == (1084));
         QVERIFY((c.PeakUsedBytes()) == (3072));
@@ -165,7 +163,7 @@ private Q_SLOTS:
     {
         ReadAheadCache c;
         c.Configure(true, 1 << 20);
-        c.AddBytes(4096);
+        QVERIFY(c.Reserve(4096));
         c.RecordHit();
         c.ResetMetrics();
 
@@ -175,8 +173,60 @@ private Q_SLOTS:
         c.RemoveBytes(2048);
         QVERIFY((c.PeakUsedBytes()) == (4096));
 
-        c.AddBytes(4096);
+        QVERIFY(c.Reserve(4096));
         QVERIFY((c.PeakUsedBytes()) == (6144));
+    }
+
+    void ConcurrentReservationsStayWithinBudget()
+    {
+        ReadAheadCache c;
+        c.Configure(true, 1000);
+
+        std::barrier start{2};
+        std::atomic<int> attempted{0};
+        std::atomic<int> reserved{0};
+        std::atomic<bool> failed{false};
+        std::thread first(
+            [&]
+            {
+                start.arrive_and_wait();
+                ++attempted;
+                if (c.Reserve(600))
+                {
+                    ++reserved;
+                }
+                else
+                {
+                    failed = true;
+                }
+            }
+        );
+        std::thread second(
+            [&]
+            {
+                start.arrive_and_wait();
+                ++attempted;
+                if (c.Reserve(600))
+                {
+                    ++reserved;
+                }
+                else
+                {
+                    failed = true;
+                }
+            }
+        );
+
+        QTRY_COMPARE_WITH_TIMEOUT(attempted.load(), 2, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(reserved.load(), 1, 1000);
+        QCOMPARE(c.UsedBytes(), 600);
+
+        c.RemoveBytes(600);
+        first.join();
+        second.join();
+        QVERIFY(!failed.load());
+        QCOMPARE(c.UsedBytes(), 600);
+        QCOMPARE(c.PeakUsedBytes(), 600);
     }
 
     void StallCallbackFiresOnAggregateTransition()

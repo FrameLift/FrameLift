@@ -395,7 +395,7 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
 
     sink_ = std::make_unique<AudioSink>();
     const QString preferred = QString::fromStdString(preferredDevice_);
-    const int bufBytes = static_cast<int>(static_cast<double>(bytesPerSec_) * kSinkBufferSeconds);
+    int bufBytes = static_cast<int>(static_cast<double>(bytesPerSec_) * kSinkBufferSeconds);
     bool ok = sink_->Start(dstRate_, dstChannels_, preferred, CurrentGainLocked(), bufBytes);
 
     if (!ok && dstChannels_ == 6)
@@ -406,6 +406,7 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
         if (buildSwr(dstChannels_))
         {
             bytesPerSec_ = dstRate_ * dstChannels_ * static_cast<int>(sizeof(float));
+            bufBytes = static_cast<int>(static_cast<double>(bytesPerSec_) * kSinkBufferSeconds);
             ok = sink_->Start(dstRate_, dstChannels_, preferred, CurrentGainLocked(), bufBytes);
         }
     }
