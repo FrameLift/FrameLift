@@ -234,7 +234,7 @@ void FFmpegPlayer::SetSeekMode(SeekPrecisionMode mode) noexcept
 
 void FFmpegPlayer::SetReadAheadCache(const ReadAheadCacheOptions& opts) noexcept
 {
-    // Takes effect immediately; the new byte budget governs the next WaitForSpace.
+    // Takes effect immediately; the new byte budget governs the next reservation.
     cache_.Configure(opts.enabled, opts.maxBytes);
 }
 
