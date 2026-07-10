@@ -56,7 +56,7 @@ public:
 
     // Decode one subtitle packet and append its events to the current track.
     // tbNum/tbDen are the subtitle stream's time_base.
-    void ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNum, int tbDen);
+    void ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNum, int tbDen, double timelineStart);
 
     // Open an external subtitle file and pre-load ALL of its events into a fresh
     // track (events carry absolute timestamps, so no live demux/sync is needed).
@@ -72,7 +72,7 @@ public:
     // RunDeferredPreload (on any thread) exactly once to read/decode the cues; it
     // then feeds them to the track in bounded locked batches. The feed stops if the
     // preload is cancelled or the track was replaced meanwhile (generation check).
-    bool BeginDeferredPreload(const char* path, int streamIndex);
+    bool BeginDeferredPreload(const char* path, int streamIndex, double timelineStart);
     void RunDeferredPreload();
 
     // Make a running RunDeferredPreload return early (its packet loop polls this).
@@ -125,6 +125,7 @@ private:
         AVFormatContext* fmt = nullptr;
         AVCodecContext* dec = nullptr;
         int streamIndex = -1;
+        double timelineStart = 0.0;
         std::uint64_t gen = 0; // trackGen_ at Begin — feed only while still current
     };
 

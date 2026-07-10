@@ -2,6 +2,7 @@
 
 #include "DeferredSubtitlePreload.h"
 #include "FFmpegSubtitleBlend.h"
+#include "FFmpegTimeline.h"
 
 #include <framelift/Log.h>
 
@@ -123,7 +124,7 @@ void FFmpegSubtitles::BeginTrack(const unsigned char* header, int headerSize)
     forceNextUpdate_ = true;
 }
 
-void FFmpegSubtitles::ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNum, int tbDen)
+void FFmpegSubtitles::ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNum, int tbDen, double timelineStart)
 {
     std::lock_guard lock(mutex_);
     if (!track_ || !dec || !pkt || tbDen <= 0)
@@ -141,7 +142,10 @@ void FFmpegSubtitles::ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNu
     // Packet pts → milliseconds; AVSubtitle display times are ms relative to it.
     const AVRational tb{tbNum, tbDen};
     const int64_t ts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-    const long long baseMs = ts != AV_NOPTS_VALUE ? av_rescale_q(ts, tb, AVRational{1, 1000}) : 0;
+    const long long baseMs =
+        ts != AV_NOPTS_VALUE
+            ? FFmpegTimeline::ToRelativeMilliseconds(av_rescale_q(ts, tb, AVRational{1, 1000}), timelineStart)
+            : 0;
 
     for (unsigned i = 0; i < sub.num_rects; ++i)
     {
@@ -278,7 +282,7 @@ bool FFmpegSubtitles::LoadExternalFile(const char* path)
     return ok;
 }
 
-bool FFmpegSubtitles::BeginDeferredPreload(const char* path, int streamIndex)
+bool FFmpegSubtitles::BeginDeferredPreload(const char* path, int streamIndex, double timelineStart)
 {
     std::lock_guard lock(mutex_);
     if (!lib_ || !path || streamIndex < 0)
@@ -301,7 +305,7 @@ bool FFmpegSubtitles::BeginDeferredPreload(const char* path, int streamIndex)
         return false;
     }
 
-    pending_ = {fmt, dec, sIdx, trackGen_};
+    pending_ = {fmt, dec, sIdx, timelineStart, trackGen_};
     abortPreload_ = false;
     forceNextUpdate_ = true;
     return true;
@@ -344,7 +348,11 @@ void FFmpegSubtitles::RunDeferredPreload()
             if (avcodec_decode_subtitle2(p.dec, &sub, &got, pkt) >= 0 && got)
             {
                 const int64_t ts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-                const long long baseMs = ts != AV_NOPTS_VALUE ? av_rescale_q(ts, tb, AVRational{1, 1000}) : 0;
+                const long long baseMs = ts != AV_NOPTS_VALUE
+                                             ? FFmpegTimeline::ToRelativeMilliseconds(
+                                                   av_rescale_q(ts, tb, AVRational{1, 1000}), p.timelineStart
+                                               )
+                                             : 0;
                 for (unsigned i = 0; i < sub.num_rects; ++i)
                 {
                     const AVSubtitleRect* r = sub.rects[i];

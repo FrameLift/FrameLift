@@ -6,6 +6,7 @@
 #include "FFmpegError.h"
 #include "FFmpegHwDecode.h"
 #include "FFmpegPacketQueue.h"
+#include "FFmpegTimeline.h"
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +15,7 @@
 #include <future>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,7 +59,20 @@ struct FFmpegPlayer::SessionContext
     AVStream* sStream = nullptr;
     bool isImage = false; // single video frame, no audio (still image / slideshow)
     double durationSec = 0.0;
+    double timelineStartSec = 0.0; // absolute FFmpeg timestamp corresponding to player time 0
 };
+
+namespace
+{
+std::optional<double> StreamStartSeconds(const AVStream* stream)
+{
+    if (!stream || stream->start_time == AV_NOPTS_VALUE)
+    {
+        return std::nullopt;
+    }
+    return static_cast<double>(stream->start_time) * av_q2d(stream->time_base);
+}
+} // namespace
 
 void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
 {
@@ -267,9 +282,15 @@ bool FFmpegPlayer::BindSelectedTracks(
         PerfScope perf("audio-bind");
         OpenAudioBinding(selectedAudioId_, ctx.fmt, ctx.aud);
     }
+    const std::optional<double> containerStart =
+        ctx.fmt->start_time == AV_NOPTS_VALUE
+            ? std::nullopt
+            : std::optional<double>{static_cast<double>(ctx.fmt->start_time) / AV_TIME_BASE};
+    const AVStream* primaryStream = hasVideo_ ? ctx.vStream : ctx.aud.stream;
+    ctx.timelineStartSec = FFmpegTimeline::SelectStart(containerStart, StreamStartSeconds(primaryStream));
     {
         PerfScope perf("subtitle-bind");
-        OpenSubtitleBinding(selectedSubId_, path, ctx.fmt, ctx.subIdx, ctx.sDec, ctx.sStream);
+        OpenSubtitleBinding(selectedSubId_, path, ctx.fmt, ctx.timelineStartSec, ctx.subIdx, ctx.sDec, ctx.sStream);
     }
 
     if (!hasVideo_ && !ctx.aud.dec)
@@ -277,7 +298,7 @@ bool FFmpegPlayer::BindSelectedTracks(
         Log::Error("FFmpegPlayer: failed to open any decoder for {}", path);
         avcodec_free_context(&ctx.vDec);
         OpenAudioBinding(-1, ctx.fmt, ctx.aud); // tears down any partial audio binding
-        OpenSubtitleBinding(-1, path, ctx.fmt, ctx.subIdx, ctx.sDec, ctx.sStream);
+        OpenSubtitleBinding(-1, path, ctx.fmt, ctx.timelineStartSec, ctx.subIdx, ctx.sDec, ctx.sStream);
         avformat_close_input(&ctx.fmt);
         QueueEvent(MakeEndFile(EndFileReason::NoStream));
         FRAMELIFT_PERF_END("file-load-metadata");
@@ -363,7 +384,7 @@ void FFmpegPlayer::ApplyPendingTrackSwitches(const std::string& path, SessionCon
     }
     if (doSub)
     {
-        OpenSubtitleBinding(subId, path, ctx.fmt, ctx.subIdx, ctx.sDec, ctx.sStream);
+        OpenSubtitleBinding(subId, path, ctx.fmt, ctx.timelineStartSec, ctx.subIdx, ctx.sDec, ctx.sStream);
     }
 }
 
@@ -387,7 +408,7 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& 
     if (!std::isnan(seek.target))
     {
         const SeekPlan plan = BuildSeekPlan(seek.kind, seek.target);
-        const auto ts = static_cast<int64_t>(seek.target * AV_TIME_BASE);
+        const auto ts = static_cast<int64_t>(FFmpegTimeline::ToDemux(seek.target, ctx.timelineStartSec) * AV_TIME_BASE);
         // A failed seek leaves the demuxer position untouched. Flushing the
         // decoders / clock anyway would blank the picture for a seek that never
         // happened, so only tear down and refresh when the seek actually landed.
@@ -409,7 +430,10 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& 
             // The external-audio side seek always lands at/before: every audio packet
             // is a sync point, so backward is exact there and guarantees the audio
             // stream covers whatever keyframe the video seek landed on.
-            if (ctx.aud.external && ctx.aud.fmt && av_seek_frame(ctx.aud.fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
+            const auto externalAudioTs =
+                static_cast<int64_t>(FFmpegTimeline::ToDemux(seek.target, ctx.aud.startOffset) * AV_TIME_BASE);
+            if (ctx.aud.external && ctx.aud.fmt &&
+                av_seek_frame(ctx.aud.fmt, -1, externalAudioTs, AVSEEK_FLAG_BACKWARD) < 0)
             {
                 Log::Warn("FFmpegPlayer: external audio seek to {}s failed", seek.target);
             }
@@ -479,15 +503,18 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
     // Spawn workers, then demux until EOF / stop / a new seek.
     if (ctx.aud.dec)
     {
-        audioThread_ = std::thread(&FFmpegPlayer::AudioWorker, this, ctx.aud.dec, ctx.aud.stream, ctx.aud.startOffset);
+        const double audioTimestampOffset = ctx.aud.external ? ctx.aud.startOffset : ctx.timelineStartSec;
+        audioThread_ = std::thread(&FFmpegPlayer::AudioWorker, this, ctx.aud.dec, ctx.aud.stream, audioTimestampOffset);
     }
     if (hasVideo_)
     {
-        videoThread_ = std::thread(&FFmpegPlayer::VideoWorker, this, ctx.vDec, ctx.vStream, ctx.W, ctx.H, &ctx.hw);
+        videoThread_ = std::thread(
+            &FFmpegPlayer::VideoWorker, this, ctx.vDec, ctx.vStream, ctx.W, ctx.H, &ctx.hw, ctx.timelineStartSec
+        );
     }
     if (ctx.subIdx >= 0 && ctx.sDec)
     {
-        subtitleThread_ = std::thread(&FFmpegPlayer::SubtitleWorker, this, ctx.sDec, ctx.sStream);
+        subtitleThread_ = std::thread(&FFmpegPlayer::SubtitleWorker, this, ctx.sDec, ctx.sStream, ctx.timelineStartSec);
     }
     if (ctx.aud.external && ctx.aud.fmt)
     {

@@ -191,8 +191,8 @@ void FFmpegPlayer::JoinSubtitlePreload()
 }
 
 void FFmpegPlayer::OpenSubtitleBinding(
-    int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx, AVCodecContext*& sDec,
-    AVStream*& sStream
+    int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, double timelineStart, int& subIdx,
+    AVCodecContext*& sDec, AVStream*& sStream
 )
 {
     JoinSubtitlePreload(); // the track is replaced below — no reader may be in flight
@@ -224,13 +224,13 @@ void FFmpegPlayer::OpenSubtitleBinding(
         return;
     }
 
-    // Embedded subtitles need the same absolute-event model as sidecars so a seek
+    // Embedded subtitles need the same 0-based event model as sidecars so a seek
     // can render the active cue immediately, even when that cue began before the
     // seek target. Use a separate input so the playback demuxer stays untouched.
     // The cue read demuxes the whole container, so only the outcome-determining
     // open runs here; the read continues on its own thread while the first frame
     // is already on screen (cues appear once loaded, via the RequestRender).
-    if (subtitles_->BeginDeferredPreload(mediaPath.c_str(), e.streamIndex))
+    if (subtitles_->BeginDeferredPreload(mediaPath.c_str(), e.streamIndex, timelineStart))
     {
         subtitlePreloadThread_ = std::thread(
             [this]
