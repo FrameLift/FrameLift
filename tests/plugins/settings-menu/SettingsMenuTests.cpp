@@ -60,6 +60,8 @@ private Q_SLOTS:
     {
         Settings settings;
         settings.Get<UISettings>().panelWidth = 500.f; // non-default host values
+        settings.Get<AudioSettings>().normalizeMode = "dynaudnorm";
+        settings.Get<AudioSettings>().limiterLevelIn = 2.5f;
         settings.Get<AudioSettings>().dynaudnormFrameLen = 321;
         settings.Get<FilesSettings>().videoExtensions = "avi;mov";
 
@@ -70,6 +72,8 @@ private Q_SLOTS:
         sm.Install(ctx); // OnInstall seeds the model via the ABI-stable ctx getters
 
         QCOMPARE(sm.SettingFloat("ui.panelWidth"), 500.f);
+        QVERIFY((sm.SettingString("audio.normalizeMode")) == ("dynaudnorm"));
+        QCOMPARE(sm.SettingFloat("audio.limiterLevelIn"), 2.5f);
         QVERIFY((sm.SettingInt("audio.dynaudnormFrameLen")) == (321));
         QVERIFY((sm.SettingString("files.videoExtensions")) == ("avi;mov"));
     }

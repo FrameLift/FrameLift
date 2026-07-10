@@ -10,11 +10,35 @@ class FFmpegFiltersTest final : public QObject
 
 private Q_SLOTS:
 
-    void DefaultParamsProduceExpectedChain()
+    void DefaultParamsProduceLegacyLimiterChain()
     {
         const std::string f = BuildAudioNormalizeGraph(AudioNormalizeParams{});
-        // The libavfilter chain description, without any "lavfi=[...]" wrapper
-        // (abuffer/abuffersink are added when the graph is built).
+        QVERIFY(
+            (f) == ("alimiter=level_in=10.000000:level_out=1.000000:limit=1.000000:attack=5.000000:release=8000.000000")
+        );
+    }
+
+    void LimiterParamsAreReflected()
+    {
+        AudioNormalizeParams p;
+        p.limiterLevelIn = 2.5f;
+        p.limiterLevelOut = 0.8f;
+        p.limiterLimit = 0.9f;
+        p.limiterAttack = 7.5f;
+        p.limiterRelease = 250.f;
+        const std::string f = BuildAudioNormalizeGraph(p);
+        QVERIFY((f.find("level_in=2.500000")) != (std::string::npos));
+        QVERIFY((f.find("level_out=0.800000")) != (std::string::npos));
+        QVERIFY((f.find("limit=0.900000")) != (std::string::npos));
+        QVERIFY((f.find("attack=7.500000")) != (std::string::npos));
+        QVERIFY((f.find("release=250.000000")) != (std::string::npos));
+    }
+
+    void DynamicNormalizerProducesExpectedChain()
+    {
+        AudioNormalizeParams p;
+        p.algorithm = AudioNormalizeAlgorithm::DynamicNormalizer;
+        const std::string f = BuildAudioNormalizeGraph(p);
         QVERIFY(
             (f) == ("dynaudnorm=f=100:g=5:p=0.950000:m=5.000000"
                     ",asoftclip=type=tanh,volume=1.500000")
@@ -24,6 +48,7 @@ private Q_SLOTS:
     void GaussSizeIsForcedOdd()
     {
         AudioNormalizeParams p;
+        p.algorithm = AudioNormalizeAlgorithm::DynamicNormalizer;
         p.gaussSize = 4;
         QVERIFY((BuildAudioNormalizeGraph(p).find(":g=5")) != (std::string::npos));
         p.gaussSize = 6;
@@ -35,13 +60,16 @@ private Q_SLOTS:
     void FrameLengthIsReflected()
     {
         AudioNormalizeParams p;
+        p.algorithm = AudioNormalizeAlgorithm::DynamicNormalizer;
         p.frameLen = 250;
         QVERIFY((BuildAudioNormalizeGraph(p).find("dynaudnorm=f=250")) != (std::string::npos));
     }
 
     void AlwaysIncludesSoftClipSafetyNet()
     {
-        QVERIFY((BuildAudioNormalizeGraph(AudioNormalizeParams{}).find("asoftclip=type=tanh")) != (std::string::npos));
+        AudioNormalizeParams p;
+        p.algorithm = AudioNormalizeAlgorithm::DynamicNormalizer;
+        QVERIFY((BuildAudioNormalizeGraph(p).find("asoftclip=type=tanh")) != (std::string::npos));
     }
 
     void NoLavfiWrapper()

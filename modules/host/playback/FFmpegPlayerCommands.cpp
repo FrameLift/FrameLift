@@ -180,9 +180,12 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
         // toggles don't force the seek-to-current below (which flushes the queues and,
         // while paused, audibly restarted the audio sink).
         const AudioNormalizeParams& cur = normalizeParams_;
-        const bool paramsEqual = cur.frameLen == params.frameLen && cur.gaussSize == params.gaussSize &&
-                                 cur.peak == params.peak && cur.maxGain == params.maxGain &&
-                                 cur.volume == params.volume;
+        const bool paramsEqual = cur.algorithm == params.algorithm && cur.limiterLevelIn == params.limiterLevelIn &&
+                                 cur.limiterLevelOut == params.limiterLevelOut &&
+                                 cur.limiterLimit == params.limiterLimit && cur.limiterAttack == params.limiterAttack &&
+                                 cur.limiterRelease == params.limiterRelease && cur.frameLen == params.frameLen &&
+                                 cur.gaussSize == params.gaussSize && cur.peak == params.peak &&
+                                 cur.maxGain == params.maxGain && cur.volume == params.volume;
         changed = enabled != normalizeEnabled_.load() || (enabled && !paramsEqual);
         normalizeParams_ = params;
     }

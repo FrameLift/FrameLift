@@ -78,6 +78,8 @@ private Q_SLOTS:
         const Settings s;
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);
+        QVERIFY((s.Get<AudioSettings>().normalizeMode) == ("limiter"));
+        QCOMPARE(s.Get<AudioSettings>().limiterLevelIn, 10.f);
         QVERIFY((s.Get<AudioSettings>().dynaudnormFrameLen) == (100));
         QVERIFY((s.Get<FilesSettings>().videoExtensions.rfind("mp4", 0)) == (0u)); // starts with "mp4"
         QVERIFY(s.Get<FilesSettings>().rememberOpenDialogDirectory);
@@ -134,6 +136,16 @@ dynaudnormFrameLen=250
         QVERIFY((s.Get<FilesSettings>().videoExtensions) == ("avi;mov"));
         QVERIFY(!(s.Get<FilesSettings>().rememberOpenDialogDirectory));
         QVERIFY((s.Get<AudioSettings>().dynaudnormFrameLen) == (250));
+    }
+
+    void InvalidNormalizeModeFallsBackToLimiter()
+    {
+        const TempFile f("[audio]\nnormalizeMode=unsupported\n");
+
+        Settings s;
+        s.Load(f.str());
+
+        QVERIFY((s.Get<AudioSettings>().normalizeMode) == ("limiter"));
     }
 
     void ReadAheadCacheDefaults()
@@ -412,6 +424,8 @@ dynaudnormFrameLen=250
         s.Get<FilesSettings>().videoExtensions = "mkv;webm";
         s.Get<FilesSettings>().rememberOpenDialogDirectory = false;
         s.Get<AudioSettings>().dynaudnormFrameLen = 321;
+        s.Get<AudioSettings>().normalizeMode = "dynaudnorm";
+        s.Get<AudioSettings>().limiterAttack = 7.5f;
         s.Get<KeybindSettings>().togglePause = "P";
         s.Save(f.str());
 
@@ -423,6 +437,8 @@ dynaudnormFrameLen=250
         QVERIFY((loaded.Get<FilesSettings>().videoExtensions) == ("mkv;webm"));
         QVERIFY(!(loaded.Get<FilesSettings>().rememberOpenDialogDirectory));
         QVERIFY((loaded.Get<AudioSettings>().dynaudnormFrameLen) == (321));
+        QVERIFY((loaded.Get<AudioSettings>().normalizeMode) == ("dynaudnorm"));
+        QCOMPARE(loaded.Get<AudioSettings>().limiterAttack, 7.5f);
         QVERIFY((loaded.Get<KeybindSettings>().togglePause) == ("P"));
     }
 

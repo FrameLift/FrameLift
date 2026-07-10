@@ -9,13 +9,20 @@
 // the chain-building logic can be unit-tested natively. Takes only POD types from
 // IMediaPlayer.h.
 
-// Builds the libavfilter chain description for dynamic audio normalization, passed to
+// Builds the libavfilter chain description for audio normalization, passed to
 // avfilter_graph_parse_ptr between the abuffer source and abuffersink. There is no
 // "lavfi=[...]" wrapper — the buffer/buffersink endpoints are added when the graph is
 // constructed. The dynaudnorm gaussian window must be odd, so gaussSize is rounded up
 // via | 1.
 inline std::string BuildAudioNormalizeGraph(const AudioNormalizeParams& params)
 {
+    if (params.algorithm == AudioNormalizeAlgorithm::Limiter)
+    {
+        return "alimiter=level_in=" + std::to_string(params.limiterLevelIn) +
+               ":level_out=" + std::to_string(params.limiterLevelOut) +
+               ":limit=" + std::to_string(params.limiterLimit) + ":attack=" + std::to_string(params.limiterAttack) +
+               ":release=" + std::to_string(params.limiterRelease);
+    }
     const int g = params.gaussSize | 1; // dynaudnorm requires an odd gaussian window
     return "dynaudnorm=f=" + std::to_string(params.frameLen) + ":g=" + std::to_string(g) +
            ":p=" + std::to_string(params.peak) + ":m=" + std::to_string(params.maxGain) +

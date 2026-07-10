@@ -16,7 +16,20 @@
 
 inline AudioNormalizeParams ToAudioNormalizeParams(const AudioSettings& s)
 {
-    return {s.dynaudnormFrameLen, s.dynaudnormGaussSize, s.dynaudnormPeak, s.dynaudnormMaxGain, s.dynaudnormVolume};
+    AudioNormalizeParams p;
+    p.algorithm =
+        s.normalizeMode == "dynaudnorm" ? AudioNormalizeAlgorithm::DynamicNormalizer : AudioNormalizeAlgorithm::Limiter;
+    p.limiterLevelIn = s.limiterLevelIn;
+    p.limiterLevelOut = s.limiterLevelOut;
+    p.limiterLimit = s.limiterLimit;
+    p.limiterAttack = s.limiterAttack;
+    p.limiterRelease = s.limiterRelease;
+    p.frameLen = s.dynaudnormFrameLen;
+    p.gaussSize = s.dynaudnormGaussSize;
+    p.peak = s.dynaudnormPeak;
+    p.maxGain = s.dynaudnormMaxGain;
+    p.volume = s.dynaudnormVolume;
+    return p;
 }
 
 inline SeekPrecisionMode ToSeekPrecisionMode(const PlaybackSettings& s)
