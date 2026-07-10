@@ -15,6 +15,12 @@ private Q_SLOTS:
     {
         const AudioSettings s;
         const AudioNormalizeParams p = ToAudioNormalizeParams(s);
+        QVERIFY((p.algorithm) == (AudioNormalizeAlgorithm::Limiter));
+        QCOMPARE(p.limiterLevelIn, s.limiterLevelIn);
+        QCOMPARE(p.limiterLevelOut, s.limiterLevelOut);
+        QCOMPARE(p.limiterLimit, s.limiterLimit);
+        QCOMPARE(p.limiterAttack, s.limiterAttack);
+        QCOMPARE(p.limiterRelease, s.limiterRelease);
         QVERIFY((p.frameLen) == (s.dynaudnormFrameLen));
         QVERIFY((p.gaussSize) == (s.dynaudnormGaussSize));
         QCOMPARE(p.peak, s.dynaudnormPeak);
@@ -25,11 +31,22 @@ private Q_SLOTS:
     void AudioParamsTrackEditedSettings()
     {
         AudioSettings s;
+        s.normalizeMode = "dynaudnorm";
+        s.limiterLevelIn = 2.25f;
         s.dynaudnormFrameLen = 321;
         s.dynaudnormVolume = 2.25f;
         const AudioNormalizeParams p = ToAudioNormalizeParams(s);
+        QVERIFY((p.algorithm) == (AudioNormalizeAlgorithm::DynamicNormalizer));
+        QCOMPARE(p.limiterLevelIn, 2.25f);
         QVERIFY((p.frameLen) == (321));
         QCOMPARE(p.volume, 2.25f);
+    }
+
+    void InvalidAudioModeFallsBackToLimiter()
+    {
+        AudioSettings s;
+        s.normalizeMode = "unknown";
+        QVERIFY((ToAudioNormalizeParams(s).algorithm) == (AudioNormalizeAlgorithm::Limiter));
     }
 
     void AudioPreferencesMapDefaults()

@@ -175,10 +175,24 @@ struct DisplaySize
     int64_t height;
 };
 
-// Parameters for the dynamic audio normalization filter chain (dynaudnorm + asoftclip).
-// Defaults match the filter's tuned values; all fields map 1-to-1 to libavfilter options.
+enum class AudioNormalizeAlgorithm : std::uint8_t
+{
+    Limiter,
+    DynamicNormalizer,
+};
+
+// Parameters for the selectable audio-normalization filter chains. Defaults reproduce
+// the legacy alimiter=10:1:1:5:8000 graph; dynamic-normalizer fields map to dynaudnorm.
 struct AudioNormalizeParams
 {
+    AudioNormalizeAlgorithm algorithm = AudioNormalizeAlgorithm::Limiter;
+
+    float limiterLevelIn = 10.f;   // alimiter level_in
+    float limiterLevelOut = 1.f;   // alimiter level_out
+    float limiterLimit = 1.f;      // alimiter limit
+    float limiterAttack = 5.f;     // alimiter attack in ms
+    float limiterRelease = 8000.f; // alimiter release in ms
+
     int frameLen = 100;  // dynaudnorm f: analysis frame length in ms
     int gaussSize = 5;   // dynaudnorm g: gaussian smoothing window in frames (must be odd)
     float peak = 0.95f;  // dynaudnorm p: target peak level (0.0–1.0)

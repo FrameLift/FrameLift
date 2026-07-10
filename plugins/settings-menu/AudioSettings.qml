@@ -136,6 +136,77 @@ ScrollView {
                 }
             }
             FLSettingRow {
+                title: "Algorithm"
+                description: "Limiter boosts quiet audio and prevents clipping; Dynamic normalizer levels audio over time."
+                keyName: "audio.normalizeMode"
+                FLComboBox {
+                    model: ["limiter", "dynaudnorm"]
+                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("audio.normalizeMode"))))
+                    onActivated: root.vm.setFieldValue("audio.normalizeMode", model[currentIndex])
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                title: "Input gain"
+                description: "Gain applied before lookahead limiting."
+                keyName: "audio.limiterLevelIn"
+                FLTextField {
+                    implicitWidth: 100
+                    validator: DoubleValidator { bottom: 0.015625; top: 64.0 }
+                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLevelIn"))).toFixed(2)
+                    onEditingFinished: root.vm.setFieldValue("audio.limiterLevelIn", Number(text))
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                title: "Output gain"
+                description: "Gain applied after lookahead limiting."
+                keyName: "audio.limiterLevelOut"
+                FLTextField {
+                    implicitWidth: 100
+                    validator: DoubleValidator { bottom: 0.015625; top: 64.0 }
+                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLevelOut"))).toFixed(2)
+                    onEditingFinished: root.vm.setFieldValue("audio.limiterLevelOut", Number(text))
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                title: "Peak limit"
+                description: "Maximum output signal magnitude."
+                keyName: "audio.limiterLimit"
+                FLTextField {
+                    implicitWidth: 100
+                    validator: DoubleValidator { bottom: 0.0625; top: 1.0 }
+                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLimit"))).toFixed(2)
+                    onEditingFinished: root.vm.setFieldValue("audio.limiterLimit", Number(text))
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                title: "Attack (ms)"
+                description: "How quickly limiting begins when a peak arrives."
+                keyName: "audio.limiterAttack"
+                FLTextField {
+                    implicitWidth: 100
+                    validator: DoubleValidator { bottom: 0.1; top: 80.0 }
+                    text: Number((root.rev, root.vm.fieldValue("audio.limiterAttack"))).toFixed(2)
+                    onEditingFinished: root.vm.setFieldValue("audio.limiterAttack", Number(text))
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                title: "Release (ms)"
+                description: "How long gain reduction takes to recover."
+                keyName: "audio.limiterRelease"
+                FLTextField {
+                    implicitWidth: 100
+                    validator: DoubleValidator { bottom: 1.0; top: 8000.0 }
+                    text: Number((root.rev, root.vm.fieldValue("audio.limiterRelease"))).toFixed(2)
+                    onEditingFinished: root.vm.setFieldValue("audio.limiterRelease", Number(text))
+                }
+            }
+            FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
                 title: "Frame length (ms)"
                 description: "Filter frame length in milliseconds."
                 keyName: "audio.dynaudnormFrameLen"
@@ -146,6 +217,7 @@ ScrollView {
                 }
             }
             FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
                 title: "Gaussian window"
                 description: "Gaussian filter window size (odd number)."
                 keyName: "audio.dynaudnormGaussSize"
@@ -156,6 +228,7 @@ ScrollView {
                 }
             }
             FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
                 title: "Target peak"
                 description: "Target peak magnitude (0.0-1.0)."
                 keyName: "audio.dynaudnormPeak"
@@ -167,6 +240,7 @@ ScrollView {
                 }
             }
             FLSettingRow {
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
                 title: "Max gain"
                 description: "Maximum gain factor."
                 keyName: "audio.dynaudnormMaxGain"
@@ -178,8 +252,9 @@ ScrollView {
                 }
             }
             FLSettingRow {
-                title: "Target RMS"
-                description: "Target RMS volume factor."
+                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                title: "Post-normalization gain"
+                description: "Output gain applied after dynamic normalization."
                 keyName: "audio.dynaudnormVolume"
                 FLTextField {
                     implicitWidth: 100
