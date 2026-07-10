@@ -104,6 +104,7 @@ set(_FRAMELIFT_HOST_WINDOW_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/WindowChrome.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoItem.cpp"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoItem.h"
+        "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoRenderCallbacks.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoRenderNode.cpp"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/VideoRenderNode.h"
         "${CMAKE_SOURCE_DIR}/modules/platform/window-qt/util.h"

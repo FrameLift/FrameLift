@@ -88,6 +88,7 @@ add_executable(framelift_tests
         unit/media/FFmpegLetterboxTests.cpp
         unit/media/SwsColorspaceTests.cpp
         unit/gfx/GraphicsApiTests.cpp
+        unit/gfx/VideoRenderCallbacksTests.cpp
         unit/media/FFmpegSubtitleBlendTests.cpp
         unit/media/FFmpegTrackLabelTests.cpp
         unit/media/PlayerEventSinkTests.cpp

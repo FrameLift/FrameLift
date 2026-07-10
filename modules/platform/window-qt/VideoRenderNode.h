@@ -2,7 +2,9 @@
 
 #include <QtQuick/QSGRenderNode>
 
-#include <functional>
+#include "VideoRenderCallbacks.h"
+
+#include <memory>
 
 class QQuickWindow;
 
@@ -16,21 +18,11 @@ class VideoRenderNode final : public QSGRenderNode
 public:
     VideoRenderNode() = default;
 
-    // Host video draw: given the target rect in device pixels (top-left origin within
-    // the window surface), draws the current frame letterboxed inside that rect. The
-    // origin is nonzero when the fallback title bar insets the video item. Set by
-    // VideoItem (forwarded from QtAppWindow, ultimately App's player_->RenderFrame).
-    using RenderCallback = std::function<void(int fbX, int fbY, int fbW, int fbH)>;
-
-    // Per-update state pushed from VideoItem::updatePaintNode().
-    void SetPrepareCallback(RenderCallback cb)
+    // Per-update state pushed from VideoItem::updatePaintNode(). The shared binding
+    // is deliberately invalidatable so old nodes cannot call into a torn-down App.
+    void SetCallbacks(std::shared_ptr<VideoRenderCallbacks> callbacks)
     {
-        prepareCb_ = std::move(cb);
-    }
-
-    void SetRenderCallback(RenderCallback cb)
-    {
-        renderCb_ = std::move(cb);
+        callbacks_ = std::move(callbacks);
     }
 
     void SetWindow(QQuickWindow* window)
@@ -52,8 +44,7 @@ public:
     RenderingFlags flags() const override;
 
 private:
-    RenderCallback prepareCb_;
-    RenderCallback renderCb_;
+    std::shared_ptr<VideoRenderCallbacks> callbacks_;
     QQuickWindow* window_ = nullptr;
     int itemX_ = 0;
     int itemY_ = 0;
@@ -67,5 +58,6 @@ private:
         int w = 0;
         int h = 0;
     };
+
     [[nodiscard]] FbRect FramebufferRect() const;
 };

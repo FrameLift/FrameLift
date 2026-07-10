@@ -662,9 +662,7 @@ void App::ScheduleTestExitIfRequested()
         delayMs,
         [this]
         {
-            AppEvent quit{};
-            quit.type = AppEventType::Quit;
-            Dispatch(quit);
+            appWindow_->RequestClose();
         }
     );
 }

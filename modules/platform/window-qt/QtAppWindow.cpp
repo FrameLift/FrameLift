@@ -261,8 +261,18 @@ QtAppWindow::QtAppWindow(const char* title, int width, int height, GraphicsApi a
 QtAppWindow::~QtAppWindow()
 {
     qmlCompositor_.reset();
-    delete window_; // deletes the content-item tree (videoItem_) with it
-    window_ = nullptr;
+    if (window_)
+    {
+        // QQuickWindow emits visibility/geometry signals while destroying its content
+        // tree. The connected lambdas resize these raw QQuickItem pointers, but the
+        // items may already be gone at that point. Disconnect every window → this
+        // callback and invalidate the non-owning pointers before Qt starts teardown.
+        QObject::disconnect(window_, nullptr, this, nullptr);
+        videoItem_ = nullptr;
+        chromeItem_ = nullptr;
+        delete window_;
+        window_ = nullptr;
+    }
     if (backend_)
     {
         backend_->Shutdown();
@@ -370,6 +380,14 @@ void QtAppWindow::SetPluginViews(std::vector<QmlViewSpec> views)
     if (qmlCompositor_)
     {
         qmlCompositor_->Load(std::move(views));
+    }
+}
+
+void QtAppWindow::RequestClose()
+{
+    if (window_)
+    {
+        window_->close();
     }
 }
 
