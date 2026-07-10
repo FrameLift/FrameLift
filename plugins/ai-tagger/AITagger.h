@@ -35,6 +35,16 @@ public:
     AITagger();
     ~AITagger() override;
 
+    // Why BuildJob declined to enqueue a file (surfaced in the "nothing to tag" logs).
+    enum class JobSkip
+    {
+        None,
+        NoStore,
+        NoRule,
+        NoQuestions,
+        ModelMissing
+    };
+
     // Queue a single file (if a folder rule covers it). No-op without a rule/model.
     Q_INVOKABLE void tagFile(const QString& path);
     // Queue every untagged video under `dir` covered by a rule.
@@ -82,8 +92,8 @@ Q_SIGNALS:
 private:
     // Resolve a rule's model id to concrete GGUF paths under <exeDir>/models/.
     bool ResolveModel(const std::string& modelId, aitagger::ModelSpec& spec) const;
-    // Build a job for `path` from the covering rule, or return false.
-    bool BuildJob(const std::string& path, aitagger::TagJob& job) const;
+    // Build a job for `path` from the covering rule; on false, `why` says which reason.
+    bool BuildJob(const std::string& path, aitagger::TagJob& job, JobSkip& why) const;
     void PublishCompleted();
     // Folder watching for rules with watch=true.
     void ArmWatchers();

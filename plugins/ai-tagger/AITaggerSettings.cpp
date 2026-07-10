@@ -35,6 +35,8 @@ AITaggerSettings::AITaggerSettings(AITagger& owner) : owner_(owner), downloader_
             Q_EMIT modelsChanged();
         }
     );
+    // Mirror the module's live tagging progress into this page's `tagging*` properties.
+    connect(&owner_, &AITagger::progressChanged, this, &AITaggerSettings::taggingChanged);
 }
 
 AITaggerSettings::~AITaggerSettings() = default;
@@ -74,15 +76,22 @@ QVariantList AITaggerSettings::Rules() const
     for (const aitagger::TagRule& r : store->ListRules())
     {
         QStringList lines;
+        QVariantList entries;
         for (const aitagger::RuleEntry& e : r.entries)
         {
             lines << (QString::fromStdString(e.question) + " => " + QString::fromStdString(e.tag));
+            QVariantMap em;
+            em["question"] = QString::fromStdString(e.question);
+            em["tag"] = QString::fromStdString(e.tag);
+            em["threshold"] = e.threshold; // negative ⇒ use rule default
+            entries.push_back(em);
         }
         QVariantMap m;
         m["id"] = static_cast<qint64>(r.id);
         m["folder"] = QString::fromStdString(r.folder);
         m["modelId"] = QString::fromStdString(r.modelId);
-        m["questions"] = lines.join('\n');
+        m["questions"] = lines.join('\n'); // one-line summary for the rule list
+        m["entries"] = entries;
         m["threshold"] = r.threshold;
         m["frameBudget"] = r.frameBudget;
         m["watch"] = r.watch;
@@ -119,6 +128,31 @@ QString AITaggerSettings::TestStatus() const
 double AITaggerSettings::TestMsPerFrame() const
 {
     return testMs_;
+}
+
+bool AITaggerSettings::Tagging() const
+{
+    return owner_.IsRunning();
+}
+
+QString AITaggerSettings::TaggingFile() const
+{
+    return owner_.CurrentFile();
+}
+
+int AITaggerSettings::TaggingDone() const
+{
+    return owner_.FilesDone();
+}
+
+int AITaggerSettings::TaggingTotal() const
+{
+    return owner_.FilesTotal();
+}
+
+void AITaggerSettings::cancelTagging()
+{
+    owner_.cancel();
 }
 
 void AITaggerSettings::testModel(const QString& id)
@@ -251,7 +285,7 @@ void AITaggerSettings::cancelDownload()
 }
 
 void AITaggerSettings::saveRule(
-    const QString& folder, const QString& modelId, const QString& questions, double threshold, int frameBudget,
+    const QString& folder, const QString& modelId, const QVariantList& questions, double threshold, int frameBudget,
     bool watch
 )
 {
@@ -266,20 +300,22 @@ void AITaggerSettings::saveRule(
     rule.threshold = static_cast<float>(threshold);
     rule.frameBudget = frameBudget > 0 ? frameBudget : 31;
     rule.watch = watch;
-    for (const QString& raw : questions.split('\n', Qt::SkipEmptyParts))
+    for (const QVariant& row : questions)
     {
-        const int sep = raw.indexOf("=>");
-        if (sep < 0)
-        {
-            continue; // require "question => tag"
-        }
+        const QVariantMap m = row.toMap();
         aitagger::RuleEntry e;
-        e.question = raw.left(sep).trimmed().toStdString();
-        e.tag = raw.mid(sep + 2).trimmed().toStdString();
-        if (!e.question.empty() && !e.tag.empty())
+        e.question = m.value("question").toString().trimmed().toStdString();
+        e.tag = m.value("tag").toString().trimmed().toStdString();
+        if (e.question.empty() || e.tag.empty())
         {
-            rule.entries.push_back(std::move(e));
+            continue; // require both a question and the tag it produces
         }
+        // Empty/absent threshold ⇒ -1 ⇒ use the rule default at tagging time.
+        const QVariant t = m.value("threshold");
+        bool ok = false;
+        const double parsed = t.toDouble(&ok);
+        e.threshold = (ok && parsed >= 0.0) ? static_cast<float>(parsed) : -1.0f;
+        rule.entries.push_back(std::move(e));
     }
     store->UpsertRule(rule);
     owner_.OnRulesChanged();
