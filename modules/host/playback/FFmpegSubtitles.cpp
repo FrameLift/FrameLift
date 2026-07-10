@@ -1,5 +1,6 @@
 #include "FFmpegSubtitles.h"
 
+#include "DeferredSubtitlePreload.h"
 #include "FFmpegSubtitleBlend.h"
 
 #include <framelift/Log.h>
@@ -7,6 +8,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 extern "C"
 {
@@ -154,14 +156,16 @@ void FFmpegSubtitles::ProcessPacket(AVCodecContext* dec, AVPacket* pkt, int tbNu
     avsubtitle_free(&sub);
 }
 
-bool FFmpegSubtitles::SetupPreloadTrackLocked(AVFormatContext* fmt, int streamIndex, AVCodecContext*& outDec,
-                                              int& outIdx)
+bool FFmpegSubtitles::SetupPreloadTrackLocked(
+    AVFormatContext* fmt, int streamIndex, AVCodecContext*& outDec, int& outIdx
+)
 {
     const AVCodec* codec = nullptr;
     int sIdx = streamIndex;
     if (sIdx >= 0)
     {
-        if (sIdx >= static_cast<int>(fmt->nb_streams) || fmt->streams[sIdx]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE)
+        if (sIdx >= static_cast<int>(fmt->nb_streams) ||
+            fmt->streams[sIdx]->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE)
         {
             return false;
         }
@@ -231,9 +235,10 @@ bool FFmpegSubtitles::PreloadFromFormatLocked(AVFormatContext* fmt, int streamIn
                     const AVSubtitleRect* r = sub.rects[i];
                     if (r && r->type == SUBTITLE_ASS && r->ass)
                     {
-                        ass_process_chunk(track_, r->ass, static_cast<int>(std::strlen(r->ass)),
-                                          baseMs + sub.start_display_time,
-                                          static_cast<long long>(sub.end_display_time) - sub.start_display_time);
+                        ass_process_chunk(
+                            track_, r->ass, static_cast<int>(std::strlen(r->ass)), baseMs + sub.start_display_time,
+                            static_cast<long long>(sub.end_display_time) - sub.start_display_time
+                        );
                     }
                 }
                 avsubtitle_free(&sub);
@@ -306,8 +311,8 @@ void FFmpegSubtitles::RunDeferredPreload()
 {
     // Take sole ownership of the pending demuxer/decoder, then read WITHOUT the
     // lock: the render thread must never wait behind the full-container cue read.
-    // Decoded cues are buffered locally and fed to the track in one short locked
-    // section at the end.
+    // Decoded cues are buffered locally, then fed to the active track in bounded
+    // locked batches so rendering can interleave with a large preload.
     PendingPreload p;
     {
         std::lock_guard lock(mutex_);
@@ -325,6 +330,7 @@ void FFmpegSubtitles::RunDeferredPreload()
         long long startMs;
         long long durMs;
     };
+
     std::vector<Cue> cues;
 
     const AVRational tb = p.fmt->streams[p.streamIndex]->time_base;
@@ -344,8 +350,10 @@ void FFmpegSubtitles::RunDeferredPreload()
                     const AVSubtitleRect* r = sub.rects[i];
                     if (r && r->type == SUBTITLE_ASS && r->ass)
                     {
-                        cues.push_back({r->ass, baseMs + sub.start_display_time,
-                                        static_cast<long long>(sub.end_display_time) - sub.start_display_time});
+                        cues.push_back(
+                            {r->ass, baseMs + sub.start_display_time,
+                             static_cast<long long>(sub.end_display_time) - sub.start_display_time}
+                        );
                     }
                 }
                 avsubtitle_free(&sub);
@@ -362,17 +370,36 @@ void FFmpegSubtitles::RunDeferredPreload()
         return; // partial cues are worse than none — the owner is replacing the track
     }
 
-    std::lock_guard lock(mutex_);
-    if (!track_ || trackGen_ != p.gen)
+    for (std::size_t begin = 0; begin < cues.size();)
     {
-        return; // the track was replaced while reading — these cues belong to a dead one
+        if (abortPreload_.load())
+        {
+            return;
+        }
+
+        const std::size_t end = DeferredSubtitlePreload::CueBatchEnd(begin, cues.size());
+        {
+            std::lock_guard lock(mutex_);
+            if (abortPreload_.load() || !track_ || trackGen_ != p.gen)
+            {
+                return; // the preload was cancelled or its track was replaced
+            }
+            for (std::size_t i = begin; i < end; ++i)
+            {
+                const Cue& c = cues[i];
+                ass_process_chunk(
+                    track_, const_cast<char*>(c.text.c_str()), static_cast<int>(c.text.size()), c.startMs, c.durMs
+                );
+            }
+            forceNextUpdate_ = true;
+        }
+
+        begin = end;
+        if (begin < cues.size())
+        {
+            std::this_thread::yield();
+        }
     }
-    for (const Cue& c : cues)
-    {
-        ass_process_chunk(track_, const_cast<char*>(c.text.c_str()), static_cast<int>(c.text.size()), c.startMs,
-                          c.durMs);
-    }
-    forceNextUpdate_ = true;
 }
 
 void FFmpegSubtitles::AbortPreload()
@@ -486,8 +513,9 @@ void FFmpegSubtitles::ApplyStyleLocked()
     ass_set_line_spacing(renderer_, style_.lineSpacing);
 }
 
-FFmpegSubtitles::RenderResult FFmpegSubtitles::RenderOverlay(int vpW, int vpH, int storageW, int storageH,
-                                                             long long timeMs, std::vector<unsigned char>& outRgba)
+FFmpegSubtitles::RenderResult FFmpegSubtitles::RenderOverlay(
+    int vpW, int vpH, int storageW, int storageH, long long timeMs, std::vector<unsigned char>& outRgba
+)
 {
     std::lock_guard lock(mutex_);
     if (!renderer_ || !track_ || vpW <= 0 || vpH <= 0)
@@ -519,8 +547,9 @@ FFmpegSubtitles::RenderResult FFmpegSubtitles::RenderOverlay(int vpW, int vpH, i
     outRgba.assign(static_cast<size_t>(vpW) * vpH * 4, 0);
     for (; img; img = img->next)
     {
-        BlendCoverageBitmap(outRgba.data(), vpW, vpH, img->bitmap, img->w, img->h, img->stride, img->dst_x, img->dst_y,
-                            img->color);
+        BlendCoverageBitmap(
+            outRgba.data(), vpW, vpH, img->bitmap, img->w, img->h, img->stride, img->dst_x, img->dst_y, img->color
+        );
     }
     return RenderResult::Updated;
 }

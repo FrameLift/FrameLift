@@ -69,9 +69,9 @@ public:
     // synchronously — opens the separate demuxer, validates the stream, opens the
     // decoder, and replaces the track seeded with the codec header — so the caller
     // keeps its live-decode fallback on failure. On success the caller must invoke
-    // RunDeferredPreload (on any thread) exactly once to read/decode the cues; the
-    // track is only touched again in one short locked section at the end, and the
-    // feed is skipped if the track was replaced meanwhile (generation check).
+    // RunDeferredPreload (on any thread) exactly once to read/decode the cues; it
+    // then feeds them to the track in bounded locked batches. The feed stops if the
+    // preload is cancelled or the track was replaced meanwhile (generation check).
     bool BeginDeferredPreload(const char* path, int streamIndex);
     void RunDeferredPreload();
 
@@ -100,8 +100,9 @@ public:
     // packed RGBA8 image of size vpW*vpH (top row first, straight alpha) matching
     // the on-screen video rectangle. storageW/H are the native video size, used as
     // the ASS layout reference. See RenderResult for the contract.
-    RenderResult RenderOverlay(int vpW, int vpH, int storageW, int storageH, long long timeMs,
-                               std::vector<unsigned char>& outRgba);
+    RenderResult RenderOverlay(
+        int vpW, int vpH, int storageW, int storageH, long long timeMs, std::vector<unsigned char>& outRgba
+    );
 
 private:
     // Decode every subtitle packet of an opened format context (selected stream) into
@@ -132,9 +133,9 @@ private:
     ass_renderer* renderer_ = nullptr;
     ass_track* track_ = nullptr;
 
-    SubtitleStyle style_{};         // current user override (overrideEnabled gates it)
-    bool forceNextUpdate_ = false;  // make the next RenderOverlay re-rasterize once
-    PendingPreload pending_;        // guarded by mutex_ between Begin and Run
-    std::uint64_t trackGen_ = 0;    // bumped on every track replacement (guarded by mutex_)
+    SubtitleStyle style_{};        // current user override (overrideEnabled gates it)
+    bool forceNextUpdate_ = false; // make the next RenderOverlay re-rasterize once
+    PendingPreload pending_;       // guarded by mutex_ between Begin and Run
+    std::uint64_t trackGen_ = 0;   // bumped on every track replacement (guarded by mutex_)
     std::atomic<bool> abortPreload_{false};
 };
