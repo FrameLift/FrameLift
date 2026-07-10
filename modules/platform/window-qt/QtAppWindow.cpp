@@ -12,7 +12,6 @@
 #include <QtCore/QUrl>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
-#include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QScreen>
 #include <QtQml/QQmlComponent>
@@ -460,12 +459,20 @@ bool QtAppWindow::SetWindowIcon(const char* path) noexcept
     {
         return false;
     }
-    QImage img(QString::fromUtf8(path));
-    if (img.isNull())
+
+    // Keep the SVG in QIcon rather than rasterizing it through QImage first. On
+    // Windows, the QImage -> QPixmap conversion can lose the SVG alpha channel
+    // before Qt creates the native HICON, producing a black rectangle in the
+    // title bar, taskbar, and tray. QIcon retains the source and lets Qt's
+    // platform integration render an alpha-aware icon at the requested size.
+    const QIcon icon(QString::fromUtf8(path));
+    if (icon.isNull())
     {
         return false;
     }
-    window_->setIcon(QIcon(QPixmap::fromImage(img)));
+
+    QGuiApplication::setWindowIcon(icon);
+    window_->setIcon(icon);
     return true;
 }
 
