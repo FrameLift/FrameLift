@@ -304,6 +304,24 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             ENVIRONMENT "${_framelift_launch_env}"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
 
+    set(_framelift_event_pump_quit_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_TEST_QUIT_AFTER_MS=1500"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_event_pump_quit")
+    add_test(NAME framelift_launch_event_pump_quit
+            COMMAND $<TARGET_FILE:FrameLift>)
+    set_tests_properties(framelift_launch_event_pump_quit PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+            LABELS launch
+            TIMEOUT 20
+            ENVIRONMENT "${_framelift_event_pump_quit_env}"
+            PASS_REGULAR_EXPRESSION "App: module shutdown complete"
+            FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
     # Same launch on a real Vulkan device with the Khronos validation layer forced on,
     # playing a short software-decoded clip when ${CMAKE_BINARY_DIR}/test-media/smoke.mp4
     # exists (CI generates it; without it the smoke still covers init/teardown). Any

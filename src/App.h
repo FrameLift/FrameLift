@@ -64,6 +64,9 @@ private:
     // Wire the player's worker-thread wakeups to the window's queued signals (no GL).
     void SetupPlayerCallbacks();
     void ResizeToVideo() const;
+    // Broadcast the one application-shutdown sequence. Safe to call from both the
+    // quit-event path and after the Qt event loop returns.
+    void BeginShutdown();
 
     void Dispatch(const AppEvent& e);
     void DrainMediaEvents();
@@ -106,11 +109,7 @@ private:
     FFmpegPlayer* ffmpeg_ = nullptr; // alias of player_.get(), kept for readability at call sites
 
     bool pendingResize_ = false;
-
-    // Set when a media/video state change (other than a routine position tick) may have
-    // altered the video image without a freshly decoded frame — e.g. EOF → idle screen,
-    // a video reconfig, or a seek. Reserved for the Vulkan compositor; ignored by GL.
-    bool pendingVideoRedraw_ = false;
+    bool shutdownStarted_ = false;
 
     // First-frame guard: Qt's scene-graph GL context only exists once the SG initializes,
     // so the backend's context adoption + the player's renderer build are deferred to the
