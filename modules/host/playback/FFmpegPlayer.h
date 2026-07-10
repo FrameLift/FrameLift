@@ -235,13 +235,15 @@ private:
     void CloseSession(SessionContext& ctx, AVPacket*& pkt);
 
     // Per-file worker bodies (each on its own thread, spawned by PlayFile).
-    void AudioWorker(AVCodecContext* dec, AVStream* stream, double startOffset);
+    void AudioWorker(AVCodecContext* dec, AVStream* stream, double timestampOffset);
     // hw is non-null when the decoder is armed for hardware decode (downloads frames
     // to system memory before swscale); null / inactive ⇒ unchanged software path.
-    void VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, int dstH, FFmpegHwDecode* hw);
+    void VideoWorker(
+        AVCodecContext* dec, AVStream* stream, int dstW, int dstH, FFmpegHwDecode* hw, double timelineStart
+    );
     [[nodiscard]] bool TryEnableHardwareDecode(const AVCodec* codec, AVCodecContext* dec, FFmpegHwDecode& hw);
     // Decodes packets from subQ_ and feeds them to libass (embedded subtitles only).
-    void SubtitleWorker(AVCodecContext* dec, AVStream* stream);
+    void SubtitleWorker(AVCodecContext* dec, AVStream* stream, double timelineStart);
     // Reads an external audio container on its own thread, pushing its audio stream
     // into audioQ_ while the main demux loop reads the video container.
     void ExternalAudioDemux(AVFormatContext* fmt, int streamIndex);
@@ -290,7 +292,7 @@ private:
         AVStream* stream = nullptr;
         int streamIndex = -1;
         bool external = false;
-        double startOffset = 0.0; // subtracted from external-audio pts to match the 0 origin
+        double startOffset = 0.0; // external source's own 0-origin normalization offset
     };
 
     // (Re)build tracks_ from the main container's streams + externalSources_ and
@@ -307,8 +309,8 @@ private:
     // Apply subtitle selection `id` (-1 == off): open/rebuild the embedded subtitle
     // decoder (out via sDec/sStream/subIdx) or pre-load an external file into libass.
     void OpenSubtitleBinding(
-        int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, int& subIdx, AVCodecContext*& sDec,
-        AVStream*& sStream
+        int64_t id, const std::string& mediaPath, AVFormatContext* mainFmt, double timelineStart, int& subIdx,
+        AVCodecContext*& sDec, AVStream*& sStream
     );
     // Resolve a track id to its entry (copy) under tracksMutex_; returns false if absent.
     bool FindTrack(int64_t id, TrackEntry& out) const;

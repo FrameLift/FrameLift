@@ -8,6 +8,7 @@
 #include "FFmpegFilters.h"
 #include "FFmpegHwDecode.h"
 #include "FFmpegPacketQueue.h"
+#include "FFmpegTimeline.h"
 #include "SwsColorspace.h"
 #include "VideoFrameDesc.h" // shared CPU-frame layout (graphics-core)
 
@@ -30,7 +31,7 @@ using namespace ffplay_detail;
 
 // ── Decode workers ────────────────────────────────────────────────────────────
 
-void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double startOffset)
+void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double timestampOffset)
 {
     const AVRational tb = stream->time_base;
     AVPacket* pkt = av_packet_alloc();
@@ -191,7 +192,9 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
     {
         while (filter.Receive(filtered) == 0)
         {
-            const double pts = static_cast<double>(filtered->pts) * av_q2d(filter.OutputTimeBase()) - startOffset;
+            const double pts = FFmpegTimeline::ToRelative(
+                static_cast<double>(filtered->pts) * av_q2d(filter.OutputTimeBase()), timestampOffset
+            );
             deliver(filtered, pts);
             av_frame_unref(filtered);
         }
@@ -229,9 +232,10 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
             }
             else
             {
-                // Normalise external-audio timestamps to a 0 origin so they share the
-                // video container's timeline (startOffset is 0 for embedded audio).
-                const double pts = FramePtsSec(frame, tb) - startOffset;
+                // Every audio source is normalized to the player-visible 0 origin:
+                // embedded audio uses the main container's timeline start, while an
+                // external source uses its own stream start.
+                const double pts = FFmpegTimeline::ToRelative(FramePtsSec(frame, tb), timestampOffset);
                 deliver(frame, pts);
                 av_frame_unref(frame);
             }
@@ -267,7 +271,9 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double sta
     av_packet_free(&pkt);
 }
 
-void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, int dstH, FFmpegHwDecode* hw)
+void FFmpegPlayer::VideoWorker(
+    AVCodecContext* dec, AVStream* stream, int dstW, int dstH, FFmpegHwDecode* hw, double timelineStart
+)
 {
     const AVRational tb = stream->time_base;
     AVPacket* pkt = av_packet_alloc();
@@ -342,7 +348,7 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         // the exact-seek discard runs BEFORE any GPU readback: while decode-discarding
         // toward an exact-seek target, a discarded hw frame must not pay a full
         // av_hwframe_transfer_data just to be thrown away.
-        const double framePts = FramePtsSec(decoded, tb);
+        const double framePts = FFmpegTimeline::ToRelative(FramePtsSec(decoded, tb), timelineStart);
         if (framePts < seekSkipPts_) // exact-seek: discard frames before the target
         {
             return false;
@@ -701,8 +707,9 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
         // references still decode, so the target frame is unaffected. skip_frame
         // may change between send_packet calls; the decoder is worker-owned.
         const int64_t rawTs = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
-        const double pktSec = rawTs == AV_NOPTS_VALUE ? std::numeric_limits<double>::quiet_NaN()
-                                                      : static_cast<double>(rawTs) * av_q2d(tb);
+        const double pktSec = rawTs == AV_NOPTS_VALUE
+                                  ? std::numeric_limits<double>::quiet_NaN()
+                                  : FFmpegTimeline::ToRelative(static_cast<double>(rawTs) * av_q2d(tb), timelineStart);
         dec->skip_frame = DecideSeekDiscard(pktSec, seekSkipPts_, discardMargin) == SeekDiscardMode::SkipNonRef
                               ? AVDISCARD_NONREF
                               : AVDISCARD_DEFAULT;
@@ -732,13 +739,13 @@ void FFmpegPlayer::VideoWorker(AVCodecContext* dec, AVStream* stream, int dstW, 
     av_packet_free(&pkt);
 }
 
-void FFmpegPlayer::SubtitleWorker(AVCodecContext* dec, AVStream* stream)
+void FFmpegPlayer::SubtitleWorker(AVCodecContext* dec, AVStream* stream, double timelineStart)
 {
     const AVRational tb = stream->time_base;
     AVPacket* pkt = av_packet_alloc();
     while (subQ_->Pop(pkt))
     {
-        subtitles_->ProcessPacket(dec, pkt, tb.num, tb.den);
+        subtitles_->ProcessPacket(dec, pkt, tb.num, tb.den, timelineStart);
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
