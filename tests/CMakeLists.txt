@@ -64,6 +64,7 @@ endfunction()
 add_executable(framelift_tests
         unit/misc/CliTests.cpp
         unit/misc/TestMediaSpecTests.cpp
+        unit/misc/QtEnvironmentTests.cpp
         unit/host/SettingsTests.cpp
         unit/host/AppStateStoreTests.cpp
         unit/host/MediaStoreTests.cpp
