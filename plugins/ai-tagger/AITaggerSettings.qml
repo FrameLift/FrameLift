@@ -35,7 +35,8 @@ Item {
             questionModel.append({
                 question: e.question,
                 tag: e.tag,
-                threshold: e.threshold >= 0 ? Number(e.threshold).toFixed(2) : ""
+                threshold: e.threshold >= 0 ? Number(e.threshold).toFixed(2) : "",
+                analysisMode: e.analysisMode
             });
         }
     }
@@ -48,7 +49,8 @@ Item {
             out.push({
                 question: row.question,
                 tag: row.tag,
-                threshold: row.threshold.length > 0 ? Number(row.threshold) : -1
+                threshold: row.threshold.length > 0 ? Number(row.threshold) : -1,
+                analysisMode: row.analysisMode
             });
         }
         return out;
@@ -61,6 +63,24 @@ Item {
         ColumnLayout {
             width: root.width
             spacing: 12
+
+            FLSettingsGroup {
+                title: "Image analysis"
+                Layout.fillWidth: true
+
+                FLSettingRow {
+                    title: "Full-frame resolution"
+                    description: "Maximum longest side sent to the vision model. Smaller videos are not upscaled."
+                    FLSpinBox {
+                        from: 256
+                        to: 2048
+                        stepSize: 64
+                        value: root.viewModel.maxInputSide
+                        implicitWidth: 140
+                        onValueModified: root.viewModel.setMaxInputSide(value)
+                    }
+                }
+            }
 
             // ── Models ──────────────────────────────────────────────────────
             // ── Existing rules ──────────────────────────────────────────────
@@ -260,6 +280,12 @@ Item {
                                 font.pixelSize: 11
                                 Layout.preferredWidth: 70
                             }
+                            C.Label {
+                                text: "Analysis"
+                                color: FLTheme.textMuted
+                                font.pixelSize: 11
+                                Layout.preferredWidth: 130
+                            }
                             // Spacer aligning with the per-row remove button.
                             Item { Layout.preferredWidth: 28 }
                         }
@@ -272,6 +298,7 @@ Item {
                                 required property string question
                                 required property string tag
                                 required property string threshold
+                                required property int analysisMode
                                 Layout.fillWidth: true
                                 spacing: 8
 
@@ -294,6 +321,12 @@ Item {
                                     validator: DoubleValidator { bottom: 0.0; top: 1.0 }
                                     onEditingFinished: questionModel.setProperty(qrow.index, "threshold", text)
                                 }
+                                FLComboBox {
+                                    model: ["Auto", "Full frame", "Human detail"]
+                                    currentIndex: qrow.analysisMode
+                                    Layout.preferredWidth: 130
+                                    onActivated: questionModel.setProperty(qrow.index, "analysisMode", currentIndex)
+                                }
                                 FLActionButton {
                                     text: "✕"
                                     Layout.preferredWidth: 28
@@ -305,7 +338,7 @@ Item {
                         FLActionButton {
                             text: "Add question"
                             Layout.topMargin: 4
-                            onClicked: questionModel.append({ question: "", tag: "", threshold: "" })
+                            onClicked: questionModel.append({ question: "", tag: "", threshold: "", analysisMode: 0 })
                         }
                     }
                     FLSettingRow {

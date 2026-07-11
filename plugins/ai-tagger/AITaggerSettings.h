@@ -14,6 +14,7 @@ class AITaggerSettings final : public QObject
     Q_PROPERTY(QString title READ Title CONSTANT)
     Q_PROPERTY(QVariantList models READ Models NOTIFY modelsChanged)
     Q_PROPERTY(QVariantList rules READ Rules NOTIFY rulesChanged)
+    Q_PROPERTY(int maxInputSide READ MaxInputSide NOTIFY maxInputSideChanged)
     // Live folder-tagging progress, proxied from the owning AITagger module so the
     // settings page can show a status strip (the video overlay pill shows the same state).
     Q_PROPERTY(bool tagging READ Tagging NOTIFY taggingChanged)
@@ -28,6 +29,8 @@ public:
     [[nodiscard]] QString Title() const;
     [[nodiscard]] QVariantList Models() const;
     [[nodiscard]] QVariantList Rules() const;
+    [[nodiscard]] int MaxInputSide() const;
+    Q_INVOKABLE void setMaxInputSide(int value);
 
     [[nodiscard]] bool Tagging() const;
     [[nodiscard]] QString TaggingFile() const;
@@ -51,6 +54,7 @@ Q_SIGNALS:
     void modelsChanged();
     void rulesChanged();
     void taggingChanged();
+    void maxInputSideChanged();
 
 private:
     AITagger& owner_;

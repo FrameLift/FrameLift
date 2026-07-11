@@ -3,6 +3,7 @@
 #include "AIEngine.h"
 #include "AIModelCatalog.h"
 
+#include <framelift/services/IAIImageQuestionScoring.h>
 #include <framelift/services/IAIInference.h>
 #include <framelift/services/IAIModelManager.h>
 
@@ -24,7 +25,7 @@
 
 class QNetworkReply;
 
-class AIService final : public QObject, public IAIInference, public IAIModelManager
+class AIService final : public QObject, public IAIInference, public IAIImageQuestionScoring, public IAIModelManager
 {
 public:
     explicit AIService(QObject* parent = nullptr);
@@ -34,6 +35,14 @@ public:
     void DestroyClient(void* client) noexcept override;
     std::uint64_t Submit(void* client, const AIInferenceRequest* request) noexcept override;
     void Cancel(void* client, std::uint64_t jobId) noexcept override;
+
+    void* CreateScoringClient(
+        AIProgressCallback progress, AIImageQuestionCompletionCallback completion, void* userData
+    ) noexcept override;
+    void DestroyScoringClient(void* client) noexcept override;
+    std::uint64_t SubmitQuestions(void* client, const AIImageQuestionRequest* request) noexcept override;
+    void CancelScoring(void* client, std::uint64_t jobId) noexcept override;
+    int GetModelRevision(const char* modelId, char* buf, int cap) const noexcept override;
 
     void Enumerate(AIModelVisitor visitor, void* userData) const noexcept override;
     bool IsInstalled(const char* modelId) const noexcept override;

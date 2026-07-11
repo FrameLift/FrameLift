@@ -21,6 +21,7 @@
     "features": [
       "ai.inference",
       "ai.models",
+      "ai.image_question_scoring",
       "services.media_store",
       "media.frame_sampler",
       "ui.context_menu"

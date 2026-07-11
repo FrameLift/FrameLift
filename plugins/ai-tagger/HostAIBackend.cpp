@@ -1,5 +1,6 @@
 #include "HostAIBackend.h"
 
+#include <framelift/services/IAIImageQuestionScoring.h>
 #include <framelift/services/IAIInference.h>
 #include <framelift/services/IAIModelManager.h>
 
@@ -13,8 +14,13 @@ namespace
 class HostAIBackend final : public IInferenceBackend
 {
 public:
-    HostAIBackend(IAIInference* inference, IAIModelManager* models) : inference_(inference), models_(models)
+    HostAIBackend(IAIImageQuestionScoring* scoring, IAIInference* inference, IAIModelManager* models)
+        : scoring_(scoring), inference_(inference), models_(models)
     {
+        if (scoring_)
+        {
+            scoringClient_ = scoring_->CreateScoringClient(nullptr, &HostAIBackend::OnQuestionsComplete, this);
+        }
         if (inference_)
         {
             client_ = inference_->CreateClient(nullptr, &HostAIBackend::OnComplete, this);
@@ -27,11 +33,15 @@ public:
         {
             inference_->DestroyClient(client_);
         }
+        if (scoring_ && scoringClient_)
+        {
+            scoring_->DestroyScoringClient(scoringClient_);
+        }
     }
 
     bool LoadModel(const ModelSpec& spec, std::string& error) override
     {
-        if (!inference_ || !models_ || !client_)
+        if (!models_ || ((!scoring_ || !scoringClient_) && (!inference_ || !client_)))
         {
             error = "shared AI host service is unavailable";
             return false;
@@ -66,7 +76,52 @@ public:
             error = "model is not loaded";
             return false;
         }
-        static const char* candidates[] = {" yes", " no"};
+        if (scoring_ && scoringClient_)
+        {
+            std::vector<const char*> questionPtrs;
+            questionPtrs.reserve(questions.size());
+            for (const auto& question : questions)
+            {
+                questionPtrs.push_back(question.question.c_str());
+            }
+            {
+                std::lock_guard lock(mutex_);
+                done_ = false;
+                state_ = AIJobState::Failed;
+                scores_.clear();
+                error_.clear();
+            }
+            AIImageQuestionRequest request;
+            request.priority = AIRequestPriority::Background;
+            request.modelId = modelId_.c_str();
+            request.systemPrompt =
+                "Judge only visible evidence in the image. Do not infer intent or anything outside the frame.";
+            request.image = {rgba, width, height, width * 4};
+            request.questions = questionPtrs.data();
+            request.questionCount = static_cast<int>(questionPtrs.size());
+            if (scoring_->SubmitQuestions(scoringClient_, &request) == 0)
+            {
+                error = "shared multi-question scheduler rejected the request";
+                return false;
+            }
+            std::unique_lock lock(mutex_);
+            completed_.wait(
+                lock,
+                [this]
+                {
+                    return done_;
+                }
+            );
+            if (state_ != AIJobState::Completed || scores_.size() != questions.size())
+            {
+                error = error_.empty() ? "shared multi-question inference failed" : error_;
+                return false;
+            }
+            out = scores_;
+            return true;
+        }
+
+        static const char* candidates[] = {"Yes", "No"};
         for (std::size_t i = 0; i < questions.size(); ++i)
         {
             {
@@ -80,7 +135,7 @@ public:
             request.kind = AIRequestKind::ScoreCandidates;
             request.priority = AIRequestPriority::Background;
             request.modelId = modelId_.c_str();
-            request.systemPrompt = "Answer the question about the image with yes or no.";
+            request.systemPrompt = "Judge only visible evidence in the image. Answer the question with Yes or No.";
             request.prompt = questions[i].question.c_str();
             request.image = {rgba, width, height, width * 4};
             request.candidates = candidates;
@@ -124,9 +179,25 @@ private:
         self->completed_.notify_all();
     }
 
+    static void OnQuestionsComplete(const AIImageQuestionResult* result, void* userData)
+    {
+        auto* self = static_cast<HostAIBackend*>(userData);
+        std::lock_guard lock(self->mutex_);
+        self->state_ = result ? result->state : AIJobState::Failed;
+        if (result && result->yesScores && result->scoreCount > 0)
+        {
+            self->scores_.assign(result->yesScores, result->yesScores + result->scoreCount);
+        }
+        self->error_ = result && result->error ? result->error : "";
+        self->done_ = true;
+        self->completed_.notify_all();
+    }
+
+    IAIImageQuestionScoring* scoring_ = nullptr;
     IAIInference* inference_ = nullptr;
     IAIModelManager* models_ = nullptr;
     void* client_ = nullptr;
+    void* scoringClient_ = nullptr;
     std::string modelId_;
     std::mutex mutex_;
     std::condition_variable completed_;
@@ -137,8 +208,10 @@ private:
 };
 } // namespace
 
-std::unique_ptr<IInferenceBackend> CreateHostAIBackend(IAIInference* inference, IAIModelManager* models)
+std::unique_ptr<IInferenceBackend> CreateHostAIBackend(
+    IAIImageQuestionScoring* scoring, IAIInference* inference, IAIModelManager* models
+)
 {
-    return std::make_unique<HostAIBackend>(inference, models);
+    return std::make_unique<HostAIBackend>(scoring, inference, models);
 }
 } // namespace aitagger

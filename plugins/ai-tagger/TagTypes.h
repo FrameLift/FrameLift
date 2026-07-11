@@ -9,6 +9,13 @@
 namespace aitagger
 {
 
+enum class AnalysisMode : std::uint8_t
+{
+    Auto,
+    FullFrame,
+    HumanDetail
+};
+
 // One yes/no question and the tag it produces, e.g. { "Does this scene contain a
 // beach?", "beach" }. A negative per-entry threshold means "use the rule default".
 struct RuleEntry
@@ -16,6 +23,7 @@ struct RuleEntry
     std::string question;
     std::string tag;
     float threshold = -1.0f;
+    AnalysisMode analysisMode = AnalysisMode::Auto;
 };
 
 // A per-folder tagging rule: which model, which questions/tags, and run parameters.
@@ -43,6 +51,8 @@ struct TagResult
     float confidence = 0.0f;
     std::string modelId;
     bool present = false;
+    int supportCount = 0;
+    double bestTimestamp = 0.0;
 };
 
 } // namespace aitagger

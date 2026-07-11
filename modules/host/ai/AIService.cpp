@@ -12,6 +12,8 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 namespace
 {
@@ -35,6 +37,7 @@ struct AIService::Client
     bool alive = true;
     AIProgressCallback progress = nullptr;
     AICompletionCallback completion = nullptr;
+    AIImageQuestionCompletionCallback questionCompletion = nullptr;
     void* userData = nullptr;
 };
 
@@ -48,12 +51,14 @@ struct AIService::Job
     std::string systemPrompt;
     std::string prompt;
     std::vector<std::string> candidates;
+    std::vector<std::string> questions;
     std::vector<unsigned char> rgba;
     int width = 0;
     int height = 0;
     int maxTokens = 128;
     float temperature = 0.0f;
     std::atomic<bool> cancelled{false};
+    bool multiQuestion = false;
 };
 
 struct AIService::CachedModel
@@ -149,6 +154,27 @@ void* AIService::CreateClient(AIProgressCallback progress, AICompletionCallback 
     }
 }
 
+void* AIService::CreateScoringClient(
+    AIProgressCallback progress, AIImageQuestionCompletionCallback completion, void* userData
+) noexcept
+{
+    try
+    {
+        auto client = std::make_shared<Client>();
+        client->progress = progress;
+        client->questionCompletion = completion;
+        client->userData = userData;
+        void* handle = client.get();
+        std::lock_guard lock(mutex_);
+        clients_.push_back(std::move(client));
+        return handle;
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
 void AIService::DestroyClient(void* handle) noexcept
 {
     if (!handle)
@@ -182,6 +208,11 @@ void AIService::DestroyClient(void* handle) noexcept
     std::lock_guard callbackLock(client->callbackMutex);
     client->alive = false;
     wake_.notify_all();
+}
+
+void AIService::DestroyScoringClient(void* handle) noexcept
+{
+    DestroyClient(handle);
 }
 
 std::uint64_t AIService::Submit(void* handle, const AIInferenceRequest* request) noexcept
@@ -254,6 +285,71 @@ std::uint64_t AIService::Submit(void* handle, const AIInferenceRequest* request)
     }
 }
 
+std::uint64_t AIService::SubmitQuestions(void* handle, const AIImageQuestionRequest* request) noexcept
+{
+    if (!handle || !request || !request->modelId || request->modelId[0] == '\0' || !request->questions ||
+        request->questionCount <= 0)
+    {
+        return 0;
+    }
+    try
+    {
+        std::shared_ptr<Client> client;
+        auto job = std::make_shared<Job>();
+        {
+            std::lock_guard lock(mutex_);
+            const auto it = std::ranges::find_if(
+                clients_,
+                [handle](const auto& item)
+                {
+                    return item.get() == handle;
+                }
+            );
+            if (it == clients_.end() || !(*it)->questionCompletion)
+            {
+                return 0;
+            }
+            client = *it;
+        }
+        job->id = nextId_.fetch_add(1);
+        job->client = std::move(client);
+        job->priority = request->priority;
+        job->modelId = request->modelId;
+        job->systemPrompt = request->systemPrompt ? request->systemPrompt : "";
+        job->multiQuestion = true;
+        for (int i = 0; i < request->questionCount; ++i)
+        {
+            job->questions.emplace_back(request->questions[i] ? request->questions[i] : "");
+        }
+        if (request->image.rgba && request->image.width > 0 && request->image.height > 0)
+        {
+            job->width = request->image.width;
+            job->height = request->image.height;
+            const int stride = request->image.stride > 0 ? request->image.stride : job->width * 4;
+            job->rgba.resize(static_cast<std::size_t>(job->width) * job->height * 4);
+            for (int y = 0; y < job->height; ++y)
+            {
+                std::memcpy(
+                    job->rgba.data() + static_cast<std::size_t>(y) * job->width * 4,
+                    request->image.rgba + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(job->width) * 4
+                );
+            }
+        }
+        {
+            std::lock_guard lock(mutex_);
+            jobs_[job->id] = job;
+            (job->priority == AIRequestPriority::Interactive ? interactive_ : background_).push_back(job);
+        }
+        NotifyProgress(job, AIJobState::Queued, 0.0f);
+        wake_.notify_one();
+        return job->id;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
 void AIService::Cancel(void* handle, std::uint64_t jobId) noexcept
 {
     std::lock_guard lock(mutex_);
@@ -267,6 +363,11 @@ void AIService::Cancel(void* handle, std::uint64_t jobId) noexcept
         job->cancelled.store(true);
         wake_.notify_all();
     }
+}
+
+void AIService::CancelScoring(void* handle, std::uint64_t jobId) noexcept
+{
+    Cancel(handle, jobId);
 }
 
 std::shared_ptr<AIService::Job> AIService::TakeJob()
@@ -316,7 +417,14 @@ void AIService::WorkerMain()
         std::string text;
         std::vector<float> scores;
         bool ok = false;
-        if (job->kind == AIRequestKind::GenerateText)
+        if (job->multiQuestion)
+        {
+            ok = engine->ScoreQuestions(
+                job->rgba.empty() ? nullptr : job->rgba.data(), job->width, job->height, job->systemPrompt,
+                job->questions, job->cancelled, scores, error
+            );
+        }
+        else if (job->kind == AIRequestKind::GenerateText)
         {
             ok = engine->Generate(
                 job->rgba.empty() ? nullptr : job->rgba.data(), job->width, job->height, job->systemPrompt, job->prompt,
@@ -406,7 +514,14 @@ void AIService::Complete(
 {
     {
         std::lock_guard callbackLock(job->client->callbackMutex);
-        if (job->client->alive && job->client->completion)
+        if (job->client->alive && job->multiQuestion && job->client->questionCompletion)
+        {
+            const AIImageQuestionResult result{
+                job->id, state, scores.data(), static_cast<int>(scores.size()), error.c_str()
+            };
+            job->client->questionCompletion(&result, job->client->userData);
+        }
+        else if (job->client->alive && job->client->completion)
         {
             const AIInferenceResult result{
                 job->id, state, text.c_str(), scores.data(), static_cast<int>(scores.size()), error.c_str()
@@ -416,6 +531,31 @@ void AIService::Complete(
     }
     std::lock_guard lock(mutex_);
     jobs_.erase(job->id);
+}
+
+int AIService::GetModelRevision(const char* modelId, char* buf, int cap) const noexcept
+{
+    if (!modelId || !ValidModelId(modelId))
+    {
+        if (buf && cap > 0)
+        {
+            buf[0] = '\0';
+        }
+        return 0;
+    }
+    const auto modelSignature = static_cast<unsigned long long>(FileSignature(ModelPath(modelId)));
+    const auto projectorSignature = static_cast<unsigned long long>(FileSignature(ProjectorPath(modelId)));
+    const auto signature = modelSignature ^ (projectorSignature << 1);
+    std::ostringstream stream;
+    stream << std::hex << std::setw(16) << std::setfill('0') << signature;
+    const std::string revision = stream.str();
+    if (buf && cap > 0)
+    {
+        const int n = std::min(static_cast<int>(revision.size()), cap - 1);
+        std::memcpy(buf, revision.data(), static_cast<std::size_t>(n));
+        buf[n] = '\0';
+    }
+    return static_cast<int>(revision.size());
 }
 
 bool AIService::ValidModelId(const std::string& id)

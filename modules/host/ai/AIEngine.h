@@ -32,6 +32,11 @@ public:
         const std::vector<std::string>& candidates, std::atomic<bool>& cancelled, std::vector<float>& scores,
         std::string& error
     ) = 0;
+    [[nodiscard]] virtual bool ScoreQuestions(
+        const unsigned char* rgba, int width, int height, const std::string& systemPrompt,
+        const std::vector<std::string>& questions, std::atomic<bool>& cancelled, std::vector<float>& yesScores,
+        std::string& error
+    ) = 0;
 };
 
 std::unique_ptr<IAIEngine> CreateLlamaEngine();

@@ -127,12 +127,17 @@ std::vector<llama_token> Tokenize(const llama_vocab* vocab, const std::string& t
 
 std::string ApplyChatTemplate(llama_model* model, const std::string& systemPrompt, const std::string& prompt)
 {
-    std::vector<llama_chat_message> messages;
+    std::vector<std::pair<std::string, std::string>> owned;
     if (!systemPrompt.empty())
     {
-        messages.push_back({"system", systemPrompt.c_str()});
+        owned.emplace_back("system", systemPrompt);
     }
-    messages.push_back({"user", prompt.c_str()});
+    owned.emplace_back("user", prompt);
+    std::vector<llama_chat_message> messages;
+    for (const auto& [role, content] : owned)
+    {
+        messages.push_back({role.c_str(), content.c_str()});
+    }
     const char* tmpl = llama_model_chat_template(model, nullptr);
     int n = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, nullptr, 0);
     if (n <= 0)
@@ -145,6 +150,43 @@ std::string ApplyChatTemplate(llama_model* model, const std::string& systemPromp
     {
         out.resize(static_cast<std::size_t>(n));
     }
+    return out;
+}
+
+std::string ApplyQuestionTemplate(
+    llama_model* model, const std::string& systemPrompt, const std::string& imagePrompt, const std::string* question
+)
+{
+    std::vector<std::pair<std::string, std::string>> owned;
+    if (!systemPrompt.empty())
+    {
+        owned.emplace_back("system", systemPrompt);
+    }
+    owned.emplace_back("user", imagePrompt);
+    owned.emplace_back("assistant", "Ready.");
+    if (question)
+    {
+        owned.emplace_back("user", *question);
+    }
+    std::vector<llama_chat_message> messages;
+    for (const auto& [role, content] : owned)
+    {
+        messages.push_back({role.c_str(), content.c_str()});
+    }
+    const char* tmpl = llama_model_chat_template(model, nullptr);
+    const bool addAssistant = question != nullptr;
+    int n = llama_chat_apply_template(tmpl, messages.data(), messages.size(), addAssistant, nullptr, 0);
+    if (n <= 0)
+    {
+        return {};
+    }
+    std::string out(static_cast<std::size_t>(n), '\0');
+    n = llama_chat_apply_template(tmpl, messages.data(), messages.size(), addAssistant, out.data(), n);
+    if (n <= 0)
+    {
+        return {};
+    }
+    out.resize(static_cast<std::size_t>(n));
     return out;
 }
 
@@ -277,8 +319,87 @@ public:
         {
             return false;
         }
-        std::vector<double> logScores(candidates.size(), -1e30);
+        return ScoreCandidatesAt(pos, candidates, cancelled, scores, error);
+    }
+
+    bool ScoreQuestions(
+        const unsigned char* rgba, int width, int height, const std::string& systemPrompt,
+        const std::vector<std::string>& questions, std::atomic<bool>& cancelled, std::vector<float>& yesScores,
+        std::string& error
+    ) override
+    {
+        yesScores.assign(questions.size(), 0.0f);
+        if (!rgba || width <= 0 || height <= 0 || !mctx_)
+        {
+            error = "multi-question scoring requires a vision image";
+            return false;
+        }
+        const std::string imagePrompt =
+            marker_ + "\nStudy the image carefully. I will ask yes-or-no questions about visible evidence only.";
+        const std::string probeA = "A";
+        const std::string probeB = "B";
+        const std::string renderedA = ApplyQuestionTemplate(model_, systemPrompt, imagePrompt, &probeA);
+        const std::string renderedB = ApplyQuestionTemplate(model_, systemPrompt, imagePrompt, &probeB);
+        std::size_t common = 0;
+        while (common < renderedA.size() && common < renderedB.size() && renderedA[common] == renderedB[common])
+        {
+            ++common;
+        }
+        while (common > 0 && common < renderedA.size() &&
+               (static_cast<unsigned char>(renderedA[common]) & 0xc0u) == 0x80u)
+        {
+            --common;
+        }
+        const std::string base = renderedA.substr(0, common);
+        if (base.empty())
+        {
+            error = "failed to apply the model chat template";
+            return false;
+        }
+        llama_pos basePos = 0;
+        if (!EvaluateFormatted(rgba, width, height, base, basePos, error))
+        {
+            return false;
+        }
+
+        const std::vector<std::string> candidates{"Yes", "No"};
         llama_memory_t memory = llama_get_memory(ctx_);
+        for (std::size_t i = 0; i < questions.size() && !cancelled.load(); ++i)
+        {
+            const std::string full = ApplyQuestionTemplate(model_, systemPrompt, imagePrompt, &questions[i]);
+            if (!full.starts_with(base))
+            {
+                error = "model chat template does not preserve the shared image prefix";
+                return false;
+            }
+            const auto suffix = Tokenize(vocab_, full.substr(base.size()), false);
+            if (suffix.empty() || !DecodeAt(suffix, basePos))
+            {
+                error = "failed to evaluate a question suffix";
+                return false;
+            }
+            const llama_pos answerPos = basePos + static_cast<llama_pos>(suffix.size());
+            std::vector<float> candidateScores;
+            if (!ScoreCandidatesAt(answerPos, candidates, cancelled, candidateScores, error))
+            {
+                return false;
+            }
+            if (!candidateScores.empty())
+            {
+                yesScores[i] = candidateScores[0];
+            }
+            llama_memory_seq_rm(memory, 0, basePos, -1);
+        }
+        return !cancelled.load();
+    }
+
+private:
+    bool ScoreCandidatesAt(
+        llama_pos pos, const std::vector<std::string>& candidates, std::atomic<bool>& cancelled,
+        std::vector<float>& scores, std::string& error
+    )
+    {
+        scores.assign(candidates.size(), 0.0f);
         const float* initialLogits = llama_get_logits_ith(ctx_, -1);
         if (!initialLogits)
         {
@@ -287,12 +408,14 @@ public:
         }
         const int vocabularySize = llama_vocab_n_tokens(vocab_);
         const std::vector<float> baseLogits(initialLogits, initialLogits + vocabularySize);
+        std::vector<double> logScores(candidates.size(), -1e30);
+        llama_memory_t memory = llama_get_memory(ctx_);
         for (std::size_t candidateIndex = 0; candidateIndex < candidates.size() && !cancelled.load(); ++candidateIndex)
         {
             const auto tokens = Tokenize(vocab_, candidates[candidateIndex], false);
             const float* logits = baseLogits.data();
             double logProbability = 0.0;
-            bool valid = !tokens.empty() && logits;
+            bool valid = !tokens.empty();
             for (std::size_t tokenIndex = 0; valid && tokenIndex < tokens.size(); ++tokenIndex)
             {
                 logProbability += TokenLogProbability(logits, tokens[tokenIndex]);
@@ -308,6 +431,10 @@ public:
                 logScores[candidateIndex] = logProbability;
             }
             llama_memory_seq_rm(memory, 0, pos, -1);
+        }
+        if (cancelled.load())
+        {
+            return false;
         }
         const double maxScore = logScores.empty() ? 0.0 : *std::ranges::max_element(logScores);
         double total = 0.0;
@@ -326,7 +453,6 @@ public:
         return true;
     }
 
-private:
     bool EvaluatePrefix(
         const unsigned char* rgba, int width, int height, const std::string& systemPrompt, const std::string& prompt,
         llama_pos& outPos, std::string& error
@@ -337,9 +463,23 @@ private:
             error = "model is not loaded";
             return false;
         }
-        llama_memory_seq_rm(llama_get_memory(ctx_), 0, 0, -1);
         const bool hasImage = rgba && width > 0 && height > 0;
         std::string formatted = ApplyChatTemplate(model_, systemPrompt, hasImage ? marker_ + "\n" + prompt : prompt);
+        return EvaluateFormatted(rgba, width, height, formatted, outPos, error);
+    }
+
+    bool EvaluateFormatted(
+        const unsigned char* rgba, int width, int height, const std::string& formatted, llama_pos& outPos,
+        std::string& error
+    )
+    {
+        if (!ctx_ || !model_)
+        {
+            error = "model is not loaded";
+            return false;
+        }
+        llama_memory_seq_rm(llama_get_memory(ctx_), 0, 0, -1);
+        const bool hasImage = rgba && width > 0 && height > 0;
         if (!hasImage)
         {
             const auto tokens = Tokenize(vocab_, formatted, true);
