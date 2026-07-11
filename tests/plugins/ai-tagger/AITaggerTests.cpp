@@ -13,6 +13,7 @@
 
 #include <QtTest/QtTest>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -237,6 +238,17 @@ private Q_SLOTS:
         QCOMPARE(p.timestamps[0], 0.0);
     }
 
+    void AdaptiveRankingPreservesInteriorCandidateSet()
+    {
+        const SamplePlan source = BuildSamplePlan(20.0, 31);
+        std::vector<VisualSignature> signatures(source.timestamps.size());
+        const SamplePlan ranked = RankAdaptiveSamples(source.timestamps, signatures, 20.0);
+        QCOMPARE(static_cast<int>(ranked.timestamps.size()), 31);
+        QVERIFY(*std::ranges::min_element(ranked.timestamps) > 0.0);
+        QVERIFY(*std::ranges::max_element(ranked.timestamps) < 20.0);
+        QCOMPARE(ranked.generationEnd.front(), 7);
+    }
+
     // ── ConvergenceTracker ───────────────────────────────────────────────────
     void PositiveSettlesImmediately()
     {
@@ -259,6 +271,40 @@ private Q_SLOTS:
         QVERIFY(t.Settled(0)); // confident negative at 7 samples
     }
 
+    void ModeratePositiveNeedsConfirmation()
+    {
+        ConvergenceTracker t({0.6f}, {});
+        t.Observe({0.7f}, 4.0);
+        QVERIFY(!t.Settled(0));
+        QVERIFY(!t.Present(0));
+        t.Observe({0.65f}, 8.0);
+        QVERIFY(t.Settled(0));
+        QVERIFY(t.Present(0));
+        QCOMPARE(t.SupportCount(0), 2);
+        QCOMPARE(t.BestTimestamp(0), 4.0);
+    }
+
+    void ResolutionPreservesAspectAndDoesNotUpscale()
+    {
+        int w = 0;
+        int h = 0;
+        InputSize(1920, 1080, 768, w, h);
+        QCOMPARE(w, 768);
+        QCOMPARE(h, 432);
+        InputSize(640, 480, 768, w, h);
+        QCOMPARE(w, 640);
+        QCOMPARE(h, 480);
+    }
+
+    void FingerprintChangesWithResolutionAndMode()
+    {
+        std::vector<RuleEntry> entries{{"Person crouching?", "crouching", -1.0f, AnalysisMode::Auto}};
+        const auto base = BuildTaggingFingerprint("model", "rev", entries, 0.6f, 31, 768);
+        QVERIFY(base != BuildTaggingFingerprint("model", "rev", entries, 0.6f, 31, 1024));
+        entries[0].analysisMode = AnalysisMode::HumanDetail;
+        QVERIFY(base != BuildTaggingFingerprint("model", "rev", entries, 0.6f, 31, 768));
+    }
+
     // ── Worker + store integration ───────────────────────────────────────────
     void PositiveTagIsStoredPresent()
     {
@@ -278,14 +324,14 @@ private Q_SLOTS:
         QCOMPARE(QString::fromStdString(r.tag), QStringLiteral("beach"));
         QVERIFY(r.confidence > 0.85f);
         QVERIFY(ts_->HasTag("/videos/a.mp4", "beach", 0.5f));
-        QCOMPARE(sampler.readCalls, 1); // a strong positive settles after the first sample
+        QCOMPARE(sampler.readCalls, 38); // 31 thumbnails + the initial seven-frame evidence set
     }
 
-    void HostAdapterUsesSharedScoringService()
+    void HostAdapterFallsBackToSingleQuestionService()
     {
         FakeSharedInference inference;
         FakeSharedModels models;
-        auto backend = CreateHostAIBackend(&inference, &models);
+        auto backend = CreateHostAIBackend(nullptr, &inference, &models);
         ModelSpec model;
         model.modelId = "fake";
         std::string error;
@@ -312,7 +358,7 @@ private Q_SLOTS:
 
         QCOMPARE(ts_->TagCount("/videos/b.mp4"), 0);           // not present (below threshold)
         QVERIFY(ts_->HasTag("/videos/b.mp4", "beach", 0.05f)); // but the row exists at conf 0.1
-        QCOMPARE(sampler.readCalls, 7);                        // confident negative at the 7-sample boundary
+        QCOMPARE(sampler.readCalls, 38);                       // 31 thumbnails + seven full frames
     }
 
     void RuleRoundTripAndMostSpecificMatch()
@@ -326,7 +372,7 @@ private Q_SLOTS:
         TagRule narrow;
         narrow.folder = "/videos/holidays";
         narrow.modelId = "m2";
-        narrow.entries = {{"Q?", "t2", 0.8f}};
+        narrow.entries = {{"Q?", "t2", 0.8f, AnalysisMode::HumanDetail}};
         ts_->UpsertRule(narrow);
 
         TagRule got;
@@ -334,6 +380,7 @@ private Q_SLOTS:
         QCOMPARE(QString::fromStdString(got.modelId), QStringLiteral("m2"));
         QCOMPARE(static_cast<int>(got.entries.size()), 1);
         QCOMPARE(got.entries[0].threshold, 0.8f);
+        QVERIFY(got.entries[0].analysisMode == AnalysisMode::HumanDetail);
 
         QVERIFY(ts_->RuleForFile("/videos/other/y.mp4", got));
         QCOMPARE(QString::fromStdString(got.modelId), QStringLiteral("m1"));
@@ -355,11 +402,12 @@ private Q_SLOTS:
         worker.RunSync({MakeJob("/videos/c.mp4", {{"Q?", "beach", -1.0f}}, 0.6f, 31)});
 
         // Same identity (the worker recorded mtime=size=0 for a nonexistent path).
-        QVERIFY(!ts_->NeedsTagging("/videos/c.mp4", 0, 0));
+        QVERIFY(!ts_->NeedsTagging("/videos/c.mp4", 0, 0, ""));
+        QVERIFY(ts_->NeedsTagging("/videos/c.mp4", 0, 0, "changed-fingerprint"));
         // Changed size ⇒ needs re-tagging.
-        QVERIFY(ts_->NeedsTagging("/videos/c.mp4", 0, 123));
+        QVERIFY(ts_->NeedsTagging("/videos/c.mp4", 0, 123, ""));
         // Never seen ⇒ needs tagging.
-        QVERIFY(ts_->NeedsTagging("/videos/never.mp4", 1, 1));
+        QVERIFY(ts_->NeedsTagging("/videos/never.mp4", 1, 1, ""));
     }
 };
 

@@ -4,6 +4,7 @@
 // needed (IHistory) or where the host exposes a capability (settings, the plugin
 // catalogue, paths). Adding a service never bumps FRAMELIFT_ABI_VERSION.
 #pragma once
+#include <framelift/services/IAIImageQuestionScoring.h>
 #include <framelift/services/IAIInference.h>
 #include <framelift/services/IAIModelManager.h>
 #include <framelift/services/IAppPaths.h>

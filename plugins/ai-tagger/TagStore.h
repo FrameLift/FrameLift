@@ -27,7 +27,9 @@ public:
     // Insert or update the file row, returning its id (0 on failure).
     [[nodiscard]] long long UpsertFile(const std::string& path, long long mtime, long long size);
     // Open a run row, returning its id (0 on failure).
-    [[nodiscard]] long long BeginRun(long long fileId, const std::string& modelId, long long ruleId);
+    [[nodiscard]] long long BeginRun(
+        long long fileId, const std::string& modelId, long long ruleId, const std::string& fingerprint
+    );
     void FinishRun(long long runId, int framesSampled, int status);
     // Replace the tag rows this file+model produced with `results`.
     void WriteTags(
@@ -35,7 +37,9 @@ public:
     );
 
     // True if `path` is not yet tagged, or its size/mtime changed since last tagged.
-    [[nodiscard]] bool NeedsTagging(const std::string& path, long long mtime, long long size);
+    [[nodiscard]] bool NeedsTagging(
+        const std::string& path, long long mtime, long long size, const std::string& fingerprint
+    );
 
     // ── Rules (folder → model + questions) ──────────────────────────────────────
     void UpsertRule(aitagger::TagRule& rule); // fills rule.id
@@ -50,7 +54,8 @@ public:
     [[nodiscard]] bool TagAt(const std::string& path, int index, aitagger::TagResult& out);
     [[nodiscard]] bool HasTag(const std::string& path, const std::string& tag, float minConfidence);
 
-    // Create/migrate the schema (idempotent; safe to call repeatedly).
+    // Create the current pre-production schema. A version mismatch drops only the
+    // AI Tagger tables; no legacy migration is maintained before release.
     void EnsureSchema();
 
 private:

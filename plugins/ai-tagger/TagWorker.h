@@ -35,6 +35,8 @@ struct TagJob
     std::vector<RuleEntry> entries; // question → tag (+ optional per-entry threshold)
     float ruleThreshold = 0.6f;
     int frameBudget = 31;
+    int maxInputSide = 768;
+    std::string fingerprint;
 };
 
 struct TagProgress

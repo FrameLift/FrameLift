@@ -6,6 +6,8 @@
 #include <QtCore/QStringList>
 #include <QtCore/QVariantMap>
 
+#include <algorithm>
+
 AITaggerSettings::AITaggerSettings(AITagger& owner) : owner_(owner)
 {
     // Mirror the module's live tagging progress into this page's `tagging*` properties.
@@ -63,6 +65,7 @@ QVariantList AITaggerSettings::Rules() const
             em["question"] = QString::fromStdString(e.question);
             em["tag"] = QString::fromStdString(e.tag);
             em["threshold"] = e.threshold; // negative ⇒ use rule default
+            em["analysisMode"] = static_cast<int>(e.analysisMode);
             entries.push_back(em);
         }
         QVariantMap m;
@@ -77,6 +80,21 @@ QVariantList AITaggerSettings::Rules() const
         out.push_back(m);
     }
     return out;
+}
+
+int AITaggerSettings::MaxInputSide() const
+{
+    return owner_.MaxInputSide();
+}
+
+void AITaggerSettings::setMaxInputSide(int value)
+{
+    const int before = owner_.MaxInputSide();
+    owner_.SetMaxInputSide(value);
+    if (owner_.MaxInputSide() != before)
+    {
+        Q_EMIT maxInputSideChanged();
+    }
 }
 
 bool AITaggerSettings::Tagging() const
@@ -142,6 +160,7 @@ void AITaggerSettings::saveRule(
         bool ok = false;
         const double parsed = t.toDouble(&ok);
         e.threshold = (ok && parsed >= 0.0) ? static_cast<float>(parsed) : -1.0f;
+        e.analysisMode = static_cast<aitagger::AnalysisMode>(std::clamp(m.value("analysisMode").toInt(), 0, 2));
         rule.entries.push_back(std::move(e));
     }
     store->UpsertRule(rule);

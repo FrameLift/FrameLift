@@ -220,6 +220,7 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
 #if FRAMELIFT_MODULE_AI
     aiService_ = std::make_unique<AIService>();
     moduleCtx_->RegisterService<IAIInference>(aiService_.get());
+    moduleCtx_->RegisterService<IAIImageQuestionScoring>(aiService_.get());
     moduleCtx_->RegisterService<IAIModelManager>(aiService_.get());
 #endif
 #if FRAMELIFT_MODULE_FRAME_SAMPLER

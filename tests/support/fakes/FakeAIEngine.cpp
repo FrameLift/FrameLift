@@ -13,6 +13,7 @@ bool g_block = false;
 bool g_running = false;
 int g_created = 0;
 int g_threads = 0;
+int g_questionBatches = 0;
 
 class FakeEngine final : public hostai::IAIEngine
 {
@@ -56,6 +57,21 @@ public:
         scores.assign(candidates.size(), candidates.empty() ? 0.0f : 1.0f / candidates.size());
         return !cancelled.load();
     }
+
+    bool ScoreQuestions(
+        const unsigned char*, int, int, const std::string&, const std::vector<std::string>& questions,
+        std::atomic<bool>& cancelled, std::vector<float>& scores, std::string&
+    ) override
+    {
+        std::lock_guard lock(g_mutex);
+        ++g_questionBatches;
+        scores.resize(questions.size());
+        for (std::size_t i = 0; i < questions.size(); ++i)
+        {
+            scores[i] = 0.5f + static_cast<float>(i) * 0.1f;
+        }
+        return !cancelled.load();
+    }
 };
 } // namespace
 
@@ -78,6 +94,7 @@ void Reset()
     g_running = false;
     g_created = 0;
     g_threads = 0;
+    g_questionBatches = 0;
 }
 
 void BlockInference(bool block)
@@ -112,5 +129,11 @@ int LastThreadLimit()
 {
     std::lock_guard lock(g_mutex);
     return g_threads;
+}
+
+int QuestionBatches()
+{
+    std::lock_guard lock(g_mutex);
+    return g_questionBatches;
 }
 } // namespace fakeai

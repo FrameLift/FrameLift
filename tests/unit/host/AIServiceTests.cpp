@@ -19,6 +19,7 @@ struct Results
     std::condition_variable changed;
     std::vector<std::uint64_t> ids;
     std::vector<AIJobState> states;
+    std::vector<float> questionScores;
 };
 
 void OnComplete(const AIInferenceResult* result, void* ud)
@@ -27,6 +28,19 @@ void OnComplete(const AIInferenceResult* result, void* ud)
     std::lock_guard lock(results->mutex);
     results->ids.push_back(result->jobId);
     results->states.push_back(result->state);
+    results->changed.notify_all();
+}
+
+void OnQuestionsComplete(const AIImageQuestionResult* result, void* ud)
+{
+    auto* results = static_cast<Results*>(ud);
+    std::lock_guard lock(results->mutex);
+    results->ids.push_back(result->jobId);
+    results->states.push_back(result->state);
+    if (result->yesScores && result->scoreCount > 0)
+    {
+        results->questionScores.assign(result->yesScores, result->yesScores + result->scoreCount);
+    }
     results->changed.notify_all();
 }
 
@@ -143,6 +157,25 @@ private Q_SLOTS:
         QVERIFY(results.states.back() == AIJobState::Cancelled);
         QCOMPARE(fakeai::LastThreadLimit(), 1);
         service.DestroyClient(client);
+    }
+
+    void ScoresMultipleQuestionsInOneImageBatch()
+    {
+        AIService service;
+        Results results;
+        void* client = service.CreateScoringClient(nullptr, OnQuestionsComplete, &results);
+        const char* questions[] = {"Person visible?", "Person crouching?", "Outdoors?"};
+        std::vector<unsigned char> rgba(16 * 16 * 4, 255);
+        AIImageQuestionRequest request;
+        request.modelId = "test-a";
+        request.questions = questions;
+        request.questionCount = 3;
+        request.image = {rgba.data(), 16, 16, 64};
+        QVERIFY(service.SubmitQuestions(client, &request) != 0);
+        QVERIFY(WaitFor(results, 1));
+        QCOMPARE(fakeai::QuestionBatches(), 1);
+        QCOMPARE(results.questionScores, std::vector<float>({0.5f, 0.6f, 0.7f}));
+        service.DestroyScoringClient(client);
     }
 };
 

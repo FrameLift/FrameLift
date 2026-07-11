@@ -15,6 +15,7 @@ struct ModelSpec
     std::string modelPath;  // path to the model GGUF
     std::string mmprojPath; // path to the vision projector (mmproj) GGUF — required for VLMs
     std::string modelId;    // recorded on produced tags
+    std::string revision;   // installed model + projector file identity
     int nThreads = 0;       // 0 ⇒ backend default
     int nCtx = 4096;
 };

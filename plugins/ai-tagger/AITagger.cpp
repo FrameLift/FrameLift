@@ -2,17 +2,21 @@
 
 #include "AITaggerSettings.h"
 #include "HostAIBackend.h"
+#include "SampleScheduler.h"
 
 #include <framelift/ContextMenu.h>
 #include <framelift/ContextMenuHelpers.h>
 #include <framelift/Log.h>
 #include <framelift/platform/IAppWindow.h>
+#include <framelift/services/IAIImageQuestionScoring.h>
 #include <framelift/services/IFrameSampler.h>
+#include <framelift/services/ISettingsStore.h>
 
 #include <QtCore/QDir>
 #include <QtCore/QDirIterator>
 #include <QtCore/QFileInfo>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 
@@ -73,13 +77,20 @@ void AITagger::OnInstall(IModuleContext& ctx)
     store_->EnsureSchema();
     sampler_ = ctx.GetService<IFrameSampler>();
     inference_ = ctx.GetService<IAIInference>();
+    scoring_ = ctx.GetService<IAIImageQuestionScoring>();
     models_ = ctx.GetService<IAIModelManager>();
+    settingsStore_ = ctx.GetService<ISettingsStore>();
+    if (settingsStore_)
+    {
+        const int configured = settingsStore_->GetSettingInt("aitagger.maxInputSide");
+        maxInputSide_ = configured > 0 ? std::clamp(configured, 256, 2048) : 768;
+    }
 
     worker_ = std::make_unique<aitagger::TagWorker>(
         sampler_, store_.get(),
-        [inference = inference_, models = models_]
+        [scoring = scoring_, inference = inference_, models = models_]
         {
-            return aitagger::CreateHostAIBackend(inference, models);
+            return aitagger::CreateHostAIBackend(scoring, inference, models);
         }
     );
 
@@ -145,9 +156,25 @@ void AITagger::OnInstall(IModuleContext& ctx)
     {
         Log::Warn("AITagger: IFrameSampler unavailable; tagging disabled");
     }
-    if (!inference_ || !models_)
+    if ((!scoring_ && !inference_) || !models_)
     {
         Log::Warn("AITagger: shared AI host services unavailable; tagging disabled");
+    }
+}
+
+void AITagger::SetMaxInputSide(int value)
+{
+    value = std::clamp(value, 256, 2048);
+    value = ((value + 32) / 64) * 64;
+    if (maxInputSide_ == value)
+    {
+        return;
+    }
+    maxInputSide_ = value;
+    if (settingsStore_)
+    {
+        settingsStore_->CommitSettingInt("aitagger.maxInputSide", maxInputSide_);
+        settingsStore_->SaveSettings();
     }
 }
 
@@ -200,6 +227,16 @@ bool AITagger::ResolveModel(const std::string& modelId, aitagger::ModelSpec& spe
         return false;
     }
     spec.modelId = modelId;
+    if (scoring_)
+    {
+        const int length = scoring_->GetModelRevision(modelId.c_str(), nullptr, 0);
+        if (length > 0)
+        {
+            std::vector<char> revision(static_cast<std::size_t>(length) + 1);
+            scoring_->GetModelRevision(modelId.c_str(), revision.data(), static_cast<int>(revision.size()));
+            spec.revision = revision.data();
+        }
+    }
     return true;
 }
 
@@ -237,6 +274,10 @@ bool AITagger::BuildJob(const std::string& path, aitagger::TagJob& job, JobSkip&
     job.entries = rule.entries;
     job.ruleThreshold = rule.threshold;
     job.frameBudget = rule.frameBudget;
+    job.maxInputSide = maxInputSide_;
+    job.fingerprint = aitagger::BuildTaggingFingerprint(
+        job.model.modelId, job.model.revision, job.entries, job.ruleThreshold, job.frameBudget, job.maxInputSide
+    );
     return true;
 }
 
@@ -285,17 +326,18 @@ void AITagger::tagFolder(const QString& dir)
         const std::string path = file.toStdString();
         const QFileInfo fi(file);
         ++scanned;
-        if (!store_->NeedsTagging(
-                path, static_cast<long long>(fi.lastModified().toSecsSinceEpoch()), static_cast<long long>(fi.size())
-            ))
-        {
-            ++alreadyTagged;
-            continue;
-        }
         aitagger::TagJob job;
         JobSkip why = JobSkip::None;
         if (BuildJob(path, job, why))
         {
+            if (!store_->NeedsTagging(
+                    path, static_cast<long long>(fi.lastModified().toSecsSinceEpoch()),
+                    static_cast<long long>(fi.size()), job.fingerprint
+                ))
+            {
+                ++alreadyTagged;
+                continue;
+            }
             jobs.push_back(std::move(job));
             continue;
         }

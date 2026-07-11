@@ -8,7 +8,8 @@
   "provides": {
     "features": [
       "ai.inference",
-      "ai.models"
+      "ai.models",
+      "ai.image_question_scoring"
     ]
   },
   "requires": {

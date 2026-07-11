@@ -15,7 +15,9 @@
 class IFrameSampler;
 class IEventPump;
 class IAIInference;
+class IAIImageQuestionScoring;
 class IAIModelManager;
+class ISettingsStore;
 class AITaggerSettings;
 
 // AI video tagging plugin. Runs local vision-language inference on frames sampled off
@@ -72,6 +74,13 @@ public:
         return models_;
     }
 
+    [[nodiscard]] int MaxInputSide() const
+    {
+        return maxInputSide_;
+    }
+
+    void SetMaxInputSide(int value);
+
     // Test seam: inject a store + backend factory without a live IModuleContext.
     void ConfigureForTest(IMediaStore* store, IFrameSampler* sampler, aitagger::TagWorker::BackendFactory factory);
 
@@ -108,7 +117,10 @@ private:
     std::unique_ptr<AITaggerSettings> settingsPage_;
     IFrameSampler* sampler_ = nullptr;
     IAIInference* inference_ = nullptr;
+    IAIImageQuestionScoring* scoring_ = nullptr;
     IAIModelManager* models_ = nullptr;
+    ISettingsStore* settingsStore_ = nullptr;
+    int maxInputSide_ = 768;
 
     uint32_t progressEvent_ = 0;
     uint32_t doneEvent_ = 0;
