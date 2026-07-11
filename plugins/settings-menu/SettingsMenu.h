@@ -32,6 +32,56 @@ private:
 
 class SettingsMenu;
 
+class AISettingsPageModel final : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(QString title READ Title CONSTANT)
+    Q_PROPERTY(QVariantList models READ Models NOTIFY changed)
+    Q_PROPERTY(QString busyModel READ BusyModel NOTIFY changed)
+    Q_PROPERTY(double progress READ Progress NOTIFY changed)
+    Q_PROPERTY(QString status READ Status NOTIFY changed)
+    Q_PROPERTY(int loadedModelLimit READ LoadedModelLimit NOTIFY changed)
+
+public:
+    AISettingsPageModel(IAIInference* inference, IAIModelManager* models);
+    ~AISettingsPageModel() override;
+
+    [[nodiscard]] QString Title() const;
+    [[nodiscard]] QVariantList Models() const;
+    [[nodiscard]] QString BusyModel() const;
+    [[nodiscard]] double Progress() const;
+    [[nodiscard]] QString Status() const;
+    [[nodiscard]] int LoadedModelLimit() const;
+
+    Q_INVOKABLE void download(const QString& modelId);
+    Q_INVOKABLE void cancelTransfer();
+    Q_INVOKABLE void remove(const QString& modelId);
+    Q_INVOKABLE void importModel(
+        const QString& modelId, const QString& name, const QString& modelPath, const QString& projectorPath
+    );
+    Q_INVOKABLE void testModel(const QString& modelId);
+    Q_INVOKABLE void setLoadedModelLimit(int limit);
+    Q_INVOKABLE void load();
+
+Q_SIGNALS:
+    void changed();
+
+private:
+    static void TransferCallback(
+        std::uint64_t transferId, const char* modelId, float progress, bool finished, const char* error, void* userData
+    );
+    static void InferenceCallback(const AIInferenceResult* result, void* userData);
+
+    IAIInference* inference_ = nullptr;
+    IAIModelManager* models_ = nullptr;
+    void* client_ = nullptr;
+    std::uint64_t transferId_ = 0;
+    std::uint64_t testJob_ = 0;
+    QString busyModel_;
+    QString status_;
+    double progress_ = 0.0;
+};
+
 class SettingsSectionPageModel final : public QObject
 {
     Q_OBJECT

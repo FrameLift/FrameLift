@@ -19,6 +19,8 @@
   "optional": {
     "plugins": [],
     "features": [
+      "ai.inference",
+      "ai.models",
       "services.media_store",
       "media.frame_sampler",
       "ui.context_menu"

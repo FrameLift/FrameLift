@@ -109,14 +109,15 @@ jobs:
             VERSION="0.0.0"
             VERSION_DISPLAY="git-$(echo "$GITHUB_SHA" | cut -c1-8)"
           fi
-          # Manifest mode installs FFmpeg + libass (vcpkg.json) for the
-          # release-only triplet before the host build proceeds. Qt is resolved
-          # from the prebuilt MSVC package installed above.
+          # Manifest mode installs FFmpeg + libass + llama.cpp (vcpkg.json) for
+          # the release-only triplet before the host build proceeds. Qt is
+          # resolved from the prebuilt MSVC package installed above.
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
             -DVCPKG_HOST_TRIPLET="$VCPKG_TRIPLET" \
             -DQt6_DIR="$Qt6_DIR" \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR" \
             -DCMAKE_C_COMPILER=cl \
             -DCMAKE_CXX_COMPILER=cl \
             -DCMAKE_BUILD_TYPE=Release \
@@ -202,12 +203,15 @@ jobs:
           modules: qtmultimedia
       # Vulkan runtime smoke dependencies: lavapipe (software Vulkan ICD), the Khronos
       # validation layer, Xvfb for a headless X display, and ffmpeg to synthesize the
-      # software-decoded smoke clip.
-      - name: Install Vulkan smoke dependencies
+      # software-decoded smoke clip. llama.cpp + mtmd for the AI module come from the
+      # distro packages (libllama-dev pulls the private include/llama layout the
+      # top-level CMakeLists falls back to; libggml-dev provides ggml.h for llama.h).
+      - name: Install Vulkan smoke + AI dependencies
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers vulkan-validationlayers xvfb ffmpeg
+            mesa-vulkan-drivers vulkan-validationlayers xvfb ffmpeg \
+            libllama-dev libggml-dev
       - name: Build
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
@@ -271,6 +275,7 @@ jobs:
           fi
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DFRAMELIFT_MODULE_AI=OFF \
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_VERSION="$VERSION"
           cmake --install "$BUILD_DIR" --prefix "$GITHUB_WORKSPACE/sdk-stage" --component sdk

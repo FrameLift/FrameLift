@@ -39,6 +39,39 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftBuiltinModules.cmake")
 framelift_load_builtin_modules("${CMAKE_SOURCE_DIR}/modules")
 framelift_report_builtin_modules()
 
+# The shared AI runtime deliberately consumes a packaged llama.cpp installation
+# (vcpkg `llama-cpp[tools]` on Windows, distro packages on Linux). Lean builds
+# remove the dependency, host sources, and AI plugins together.
+if (FRAMELIFT_MODULE_AI)
+    find_package(llama CONFIG QUIET)
+    if (NOT llama_FOUND)
+        # Debian/Ubuntu (libllama-dev) install llama.cpp under a private prefix
+        # (include/llama, <libdir>/llama) without exporting the CMake package.
+        find_path(FRAMELIFT_LLAMA_INCLUDE_DIR NAMES llama.h PATH_SUFFIXES llama)
+        find_library(FRAMELIFT_LLAMA_LIBRARY NAMES llama PATH_SUFFIXES llama)
+        # The AI module calls ggml_log_set directly; the distro packages keep it in
+        # libggml-base (libggml-dev), which linking libllama.so does not re-export.
+        find_library(FRAMELIFT_GGML_LIBRARY NAMES ggml-base ggml)
+        if (FRAMELIFT_LLAMA_INCLUDE_DIR AND FRAMELIFT_LLAMA_LIBRARY AND FRAMELIFT_GGML_LIBRARY)
+            add_library(llama SHARED IMPORTED)
+            set_target_properties(llama PROPERTIES
+                    IMPORTED_LOCATION "${FRAMELIFT_LLAMA_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${FRAMELIFT_LLAMA_INCLUDE_DIR}"
+                    INTERFACE_LINK_LIBRARIES "${FRAMELIFT_GGML_LIBRARY}")
+            set(llama_FOUND TRUE)
+        endif ()
+    endif ()
+    find_library(FRAMELIFT_MTMD_LIBRARY NAMES mtmd PATH_SUFFIXES llama)
+    find_path(FRAMELIFT_MTMD_INCLUDE_DIR NAMES mtmd.h PATH_SUFFIXES llama)
+    if (NOT llama_FOUND OR NOT FRAMELIFT_MTMD_LIBRARY OR NOT FRAMELIFT_MTMD_INCLUDE_DIR)
+        message(FATAL_ERROR
+                "The AI module requires llama.cpp and libmtmd development files. Install them from "
+                "your package manager (Debian/Ubuntu: libllama-dev + libggml-dev; Arch: llama.cpp; "
+                "Windows: vcpkg llama-cpp[tools]) or point CMAKE_PREFIX_PATH at a llama.cpp install, "
+                "or configure a lean build with -DFRAMELIFT_MODULE_AI=OFF.")
+    endif ()
+endif ()
+
 # ── Platform media libraries (external FFmpeg + libass) ───────────────────────
 # Defines the `ffmpeg` and `libass` targets: Linux uses system dev packages
 # (libav*-dev / libass-dev); Windows resolves them from the vcpkg manifest
@@ -65,6 +98,9 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 # Sql backs the host IMediaStore service (modules/host/services/MediaStoreImpl) over
 # the bundled QSQLITE driver; plugins never link a database library themselves.
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets Sql)
+if (FRAMELIFT_MODULE_AI)
+    find_package(Qt6 REQUIRED COMPONENTS Network)
+endif ()
 
 # Guard: no Qt Multimedia playback APIs (compressed media stays on external FFmpeg).
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftMediaAudit.cmake")
@@ -174,6 +210,9 @@ target_include_directories(FrameLift PRIVATE
 target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk OpenGL::GL
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets Qt6::Sql)
+if (FRAMELIFT_MODULE_AI)
+    target_link_libraries(FrameLift PRIVATE llama ${FRAMELIFT_MTMD_LIBRARY} Qt6::Network)
+endif ()
 
 # Built-in module OBJECT libraries (defined in FrameLiftHostSources); the exe links the
 # objects + their compile usage requirements.

@@ -158,19 +158,21 @@ void TagWorker::RunJobs(const std::shared_ptr<Shared>& sh, std::vector<TagJob> j
         }
         Log::Debug("AITagger: [{}/{}] tagging {} (model {})", done + 1, total, job.path, job.model.modelId);
 
-        // (Re)load the model only when it changes across jobs.
-        if (backend && loadedModel != job.model.modelPath)
+        // (Re)select the shared model only when it changes across jobs. Production
+        // jobs carry a model id; test backends may still use a synthetic path.
+        const std::string modelKey = !job.model.modelId.empty() ? job.model.modelId : job.model.modelPath;
+        if (backend && loadedModel != modelKey)
         {
             std::string err;
             if (!backend->LoadModel(job.model, err))
             {
-                Log::Warn("AITagger: model load failed ({}): {}", job.model.modelPath, err);
+                Log::Warn("AITagger: model selection failed ({}): {}", modelKey, err);
                 loadedModel.clear();
             }
             else
             {
-                loadedModel = job.model.modelPath;
-                Log::Debug("AITagger: loaded model {}", job.model.modelPath);
+                loadedModel = modelKey;
+                Log::Debug("AITagger: selected model {}", modelKey);
             }
         }
 

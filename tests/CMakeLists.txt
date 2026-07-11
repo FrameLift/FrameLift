@@ -15,7 +15,7 @@ endif ()
 
 # JSON — backs the host JsonServiceImpl (Qt6::Core QJson), compiled into the History
 # test so its persistence round-trips exercise the real backend.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Sql)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test Sql)
 
 enable_testing()
 find_package(Threads REQUIRED)
@@ -160,6 +160,25 @@ target_link_libraries(framelift_tests_vulkan_off PRIVATE Threads::Threads Qt6::C
 framelift_apply_coverage(framelift_tests_vulkan_off)
 framelift_qt_discover_tests(framelift_tests_vulkan_off)
 
+add_executable(framelift_test_ai_service
+        unit/host/AIBackendLogTests.cpp
+        unit/host/AIServiceTests.cpp
+        support/fakes/FakeAIEngine.cpp
+        ${FRAMELIFT_QT_TEST_RUNNER}
+        "${FRAMELIFT_ROOT}/modules/host/ai/AIBackendLog.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/ai/AIModelCatalog.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/ai/AIService.cpp")
+set_target_properties(framelift_test_ai_service PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF AUTOMOC ON)
+target_include_directories(framelift_test_ai_service PRIVATE
+        "${FRAMELIFT_ROOT}/sdk/include"
+        ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
+        "${FRAMELIFT_ROOT}/tests/support"
+        "${FRAMELIFT_ROOT}/tests/support/fakes")
+target_link_libraries(framelift_test_ai_service PRIVATE Threads::Threads Qt6::Core Qt6::Network Qt6::Test)
+framelift_apply_coverage(framelift_test_ai_service)
+framelift_qt_discover_tests(framelift_test_ai_service)
+
 # ── Helper: one test exe per plugin ───────────────────────────────────────────
 # add_framelift_plugin_test(NAME [EMIT_MODULE_ENTRY] <test.cpp> <plugin.cpp> [extra .cpp]...)
 function(add_framelift_plugin_test name)
@@ -227,14 +246,14 @@ add_framelift_plugin_test(framelift_test_history
 target_link_libraries(framelift_test_history PRIVATE Qt6::Core Qt6::Sql)
 
 # AI Tagger: pure-logic core (scheduler, convergence, store, worker) exercised with a
-# fake sampler + fake backend against the real SQL-backed store. The llama.cpp backend
-# (LlamaBackend.cpp) and the QObject module (AITagger.cpp) are deliberately excluded so
-# the test build stays FFmpeg-/llama-free.
+# fake sampler + fake backend against the real SQL-backed store. The shared host llama
+# engine and the QObject module are deliberately excluded so this stays llama-free.
 add_framelift_plugin_test(framelift_test_aitagger
         plugins/ai-tagger/AITaggerTests.cpp
         "${FRAMELIFT_ROOT}/plugins/ai-tagger/SampleScheduler.cpp"
         "${FRAMELIFT_ROOT}/plugins/ai-tagger/TagStore.cpp"
         "${FRAMELIFT_ROOT}/plugins/ai-tagger/TagWorker.cpp"
+        "${FRAMELIFT_ROOT}/plugins/ai-tagger/HostAIBackend.cpp"
         "${FRAMELIFT_ROOT}/modules/host/services/MediaStoreImpl.cpp")
 target_link_libraries(framelift_test_aitagger PRIVATE Qt6::Core Qt6::Sql)
 

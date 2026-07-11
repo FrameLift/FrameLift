@@ -5,10 +5,8 @@
 #include <string>
 #include <vector>
 
-// The inference runtime abstraction. AITagger talks only to this interface; the
-// concrete llama.cpp implementation (LlamaBackend) is the sole translation unit that
-// includes llama/mtmd headers, so the pure-logic worker/store/scheduler stay testable
-// with a fake backend and the FFmpeg-/llama-free test build keeps compiling.
+// AI Tagger's narrow inference seam. Production adapts the shared host IAIInference
+// service; tests inject a fake so worker/store/scheduler logic stays llama-free.
 namespace aitagger
 {
 
@@ -47,9 +45,5 @@ public:
         std::string& err
     ) = 0;
 };
-
-// Factory for the llama.cpp backend (defined in LlamaBackend.cpp). Declared here so
-// AITagger can create one without including llama headers.
-std::unique_ptr<IInferenceBackend> CreateLlamaBackend();
 
 } // namespace aitagger
