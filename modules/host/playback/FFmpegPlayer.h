@@ -7,6 +7,7 @@
 #include "FFmpegSidecarScan.h"
 #include "FFmpegSubtitles.h"
 #include "FFmpegTrackSelect.h"
+#include "FFmpegVideoConfig.h"
 #include "IVideoRenderer.h"
 #include "PlayerEventSink.h"
 #include "ReadAheadCache.h"
@@ -398,6 +399,9 @@ private:
     // (a ref'd AVFrame released via av_frame_free, injected in the ctor).
     VideoFrameGate frameGate_;
     bool preparedOverlayActive_ = false;
+    // Survives per-seek video-worker restarts so unchanged post-seek frames do not
+    // masquerade as a video configuration change.
+    FFmpegVideoConfigTracker videoConfigTracker_;
 
     // Observable / queryable state.
     std::atomic<int64_t> displayWidth_{0};
