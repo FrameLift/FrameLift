@@ -520,19 +520,6 @@ void App::DrainMediaEvents()
             break;
         }
 
-        // A media state change other than the routine position tick should repaint
-        // promptly even while the controls are hidden (EOF → idle screen, buffering
-        // spinner, the pause icon, …). Position updates are excluded so steady playback
-        // isn't pinned to the display refresh by a redraw it doesn't need. pendingVideoRedraw_
-        // both triggers a render (it is in the gate) and refreshes the cached video layer.
-        const bool positionTick =
-            ev.type == MediaEventType::PropertyChange &&
-            (ev.property.prop == PlayerProperty::TimePos || ev.property.prop == PlayerProperty::PercentPos);
-        if (!positionTick)
-        {
-            pendingVideoRedraw_ = true;
-        }
-
         if (ev.type == MediaEventType::PropertyChange && ev.property.prop == PlayerProperty::IdleActive &&
             ev.property.type == PropertyType::Flag)
         {
@@ -597,6 +584,21 @@ void App::DrainMediaEvents()
     }
 }
 
+void App::BeginShutdown()
+{
+    if (shutdownStarted_)
+    {
+        return;
+    }
+    shutdownStarted_ = true;
+
+    AppEvent quit{};
+    quit.type = AppEventType::Quit;
+    registry_.OnEvent(quit);
+    registry_.OnShutdown();
+    Log::Debug("App: module shutdown complete");
+}
+
 void App::Dispatch(const AppEvent& e)
 {
     // Qt owns the loop and schedules repaints (QQuickWindow::update) after input and on
@@ -606,10 +608,8 @@ void App::Dispatch(const AppEvent& e)
     switch (e.type) // NOLINT(clang-diagnostic-switch-enum)
     {
     case AppEventType::Quit:
-        // Let modules handle their own Quit cleanup (e.g. Playlist::FlushCurrentPos).
-        registry_.OnEvent(e);
-        registry_.OnShutdown();
-        appWindow_->PushQuitEvent(); // QGuiApplication::quit() on the GUI thread
+        BeginShutdown();
+        appWindow_->ExitEventLoop();
         return;
     default:
         break;
@@ -648,21 +648,40 @@ void App::ScheduleTestExitIfRequested()
 {
     bool ok = false;
     int delayMs = qEnvironmentVariableIntValue("FL_TEST_EXIT_AFTER_MS", &ok);
-    if (!ok)
+    if (ok)
+    {
+        if (delayMs < 0)
+        {
+            delayMs = 0;
+        }
+
+        Log::Info("test exit requested after {} ms", delayMs);
+        QTimer::singleShot(
+            delayMs,
+            [this]
+            {
+                appWindow_->RequestClose();
+            }
+        );
+    }
+
+    bool quitOk = false;
+    int quitDelayMs = qEnvironmentVariableIntValue("FL_TEST_QUIT_AFTER_MS", &quitOk);
+    if (!quitOk)
     {
         return;
     }
-    if (delayMs < 0)
+    if (quitDelayMs < 0)
     {
-        delayMs = 0;
+        quitDelayMs = 0;
     }
 
-    Log::Info("test exit requested after {} ms", delayMs);
+    Log::Info("test event-pump quit requested after {} ms", quitDelayMs);
     QTimer::singleShot(
-        delayMs,
+        quitDelayMs,
         [this]
         {
-            appWindow_->RequestClose();
+            appWindow_->PushQuitEvent();
         }
     );
 }
@@ -730,5 +749,7 @@ int App::Run()
     // demand-driven semantics are preserved by scheduling repaints (QQuickWindow::update)
     // only on real change — input events, player worker wakeups — so the GPU idles
     // otherwise. The window paints inside the scene-graph render pass via RenderVideo().
-    return appWindow_->RunEventLoop();
+    const int exitCode = appWindow_->RunEventLoop();
+    BeginShutdown();
+    return exitCode;
 }

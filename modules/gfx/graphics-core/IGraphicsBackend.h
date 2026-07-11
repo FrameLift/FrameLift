@@ -71,15 +71,6 @@ public:
 
     // ── Backend utilities ─────────────────────────────────────────────────────
     [[nodiscard]] virtual void* GetProcAddr(const char* name) const = 0;
-
-    // Hint which logical layers changed so a layered backend can reuse cached layers
-    // instead of re-rendering them. Default no-op — the OpenGL backend draws everything
-    // directly every frame.
-    virtual void SetFrameDirty(bool videoDirty, bool uiDirty)
-    {
-        (void)videoDirty;
-        (void)uiDirty;
-    }
 };
 
 // Create the presentation backend for `api`. Phase 1 implements OpenGL only; any other

@@ -65,6 +65,8 @@ public:
     // Request a native Qt close so launch tests exercise QEvent::Close and the same
     // host shutdown route as a user closing the window.
     void RequestClose();
+    // End Qt's event loop after App has completed the plugin shutdown sequence.
+    void ExitEventLoop();
     // Show the window (created hidden) and run Qt's event loop until quit. Returns the
     // QGuiApplication::exec() exit code.
     int RunEventLoop();
@@ -90,9 +92,6 @@ public:
     int GetBasePath(char* buf, int cap) const noexcept;
     // Native Win32 HWND (as void*), or nullptr off Windows / before the window exists.
     [[nodiscard]] void* GetWin32Hwnd() const noexcept;
-    // Forward the per-frame layer-dirty hint to the graphics backend (Vulkan layered
-    // compositor; no-op on OpenGL).
-    void SetFrameDirty(bool videoDirty, bool uiDirty) noexcept;
 
 signals:
     // Emitted from player worker threads; a Qt::QueuedConnection delivers them on the GUI

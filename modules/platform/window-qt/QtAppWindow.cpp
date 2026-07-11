@@ -390,6 +390,11 @@ void QtAppWindow::RequestClose()
     }
 }
 
+void QtAppWindow::ExitEventLoop()
+{
+    QGuiApplication::quit();
+}
+
 int QtAppWindow::RunEventLoop()
 {
     if (window_)
@@ -619,20 +624,17 @@ void QtAppWindow::PushQuitEvent() noexcept
 {
     QMetaObject::invokeMethod(
         this,
-        []
+        [this]
         {
-            QGuiApplication::quit();
+            if (eventSink_)
+            {
+                AppEvent e{};
+                e.type = AppEventType::Quit;
+                eventSink_(e);
+            }
         },
         Qt::QueuedConnection
     );
-}
-
-void QtAppWindow::SetFrameDirty(bool videoDirty, bool uiDirty) noexcept
-{
-    if (backend_)
-    {
-        backend_->SetFrameDirty(videoDirty, uiDirty);
-    }
 }
 
 // ── Platform paths ──────────────────────────────────────────────────────────────
