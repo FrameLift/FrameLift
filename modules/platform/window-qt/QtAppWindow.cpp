@@ -408,7 +408,12 @@ int QtAppWindow::RunEventLoop()
 
 void QtAppWindow::ResizeToVideo(int videoW, int videoH, float maxDisplayRatio) noexcept
 {
-    if (IsFullscreen() || videoW <= 0 || videoH <= 0)
+    // Keep user-selected managed states intact. This check lives at the final resize
+    // boundary because the asynchronous display-size query may have started while the
+    // window was normal and completed after it was maximized or made fullscreen.
+    const QWindow::Visibility visibility = window_ ? window_->visibility() : QWindow::Hidden;
+    if (visibility == QWindow::Maximized || visibility == QWindow::FullScreen || visibility == QWindow::Minimized ||
+        videoW <= 0 || videoH <= 0)
     {
         return;
     }

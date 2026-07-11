@@ -287,7 +287,6 @@ void FFmpegPlayer::VideoWorker(
     int swsCoeff = -1;
     int swsSrcRange = -1;
     std::vector<uint8_t> pixelBuf; // reused CPU frame buffer (planar YUV or RGBA; sized at publish)
-    bool sentReconfig = false;
     bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
     // Routine TimePos/PercentPos ticks follow the audio-only path's 250 ms cadence
     // (see AudioWorker's deliver); primed in the past so the first frame emits.
@@ -364,15 +363,15 @@ void FFmpegPlayer::VideoWorker(
             }
         }
 
-        // Emit VideoReconfig on the first frame and whenever the decoded size
-        // changes; scale to the native size (the renderer letterboxes on draw).
-        if (!sentReconfig || f->width != dstW || f->height != dstH)
+        // Emit VideoReconfig on the first frame of a file and whenever the decoded
+        // size changes. The player-owned tracker survives worker restarts on seek,
+        // preventing an unchanged post-seek frame from resizing the window.
+        if (videoConfigTracker_.Update(f->width, f->height))
         {
             dstW = f->width;
             dstH = f->height;
             displayWidth_ = dstW;
             displayHeight_ = dstH;
-            sentReconfig = true;
             QueueEvent(MakeLifecycle(MediaEventType::VideoReconfig));
         }
 

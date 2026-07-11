@@ -88,6 +88,7 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     cache_.ResetMetrics();
     displayWidth_ = 0;
     displayHeight_ = 0;
+    videoConfigTracker_.Reset();
     seekSkipPts_ = -1e18; // no carry-over skip from a prior file's seek
     seekRefresh_ = false;
     {
