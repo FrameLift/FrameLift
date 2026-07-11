@@ -386,10 +386,11 @@ void FFmpegPlayer::VideoWorker(
             }
         }
 
-        // Baseline for the clock-stall watchdog below: how long this frame has been
-        // held and how far the master clock moved in that time.
-        const auto holdStart = std::chrono::steady_clock::now();
+        // Track continuous active time without meaningful master-clock progress.
+        // The watchdog is reset after a paused wait, so a frame decoded after a
+        // paused seek does not count the suspended interval as an audio stall.
         const double masterAtHold = GetMasterClock();
+        FrameHoldWatchdog holdWatchdog(masterAtHold, std::chrono::steady_clock::now());
         bool heldByWatchdog = false;
 
         // A post-seek refresh frame paints immediately, skipping the pacing loop:
@@ -404,10 +405,12 @@ void FFmpegPlayer::VideoWorker(
 
         while (paceThisFrame)
         {
+            bool resumedFromPause = false;
             {
                 std::unique_lock lock(mutex_);
                 // Hold while paused, but let a post-seek refresh present one frame so
                 // the seek target is shown even when paused.
+                resumedFromPause = paused_.load();
                 cv_.wait(
                     lock,
                     [this]
@@ -429,6 +432,14 @@ void FFmpegPlayer::VideoWorker(
             }
 
             const double master = GetMasterClock();
+            const auto now = std::chrono::steady_clock::now();
+            if (resumedFromPause)
+            {
+                // QAudioSink resumes asynchronously. Start a fresh active-stall
+                // window instead of immediately forcing the frame based on time
+                // deliberately spent paused after a seek.
+                holdWatchdog.Reset(master, now);
+            }
             const FrameAction action = DecideFrame(framePts, master, kDropThreshold);
             if (action == FrameAction::Drop)
             {
@@ -451,17 +462,17 @@ void FFmpegPlayer::VideoWorker(
             // the demuxer via queue backpressure — video consumption is what
             // un-parks the pipeline and restores audio delivery — so present it
             // and let the clock re-anchor when audio recovers.
-            const double heldSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
-            if (!paused_.load() && ShouldBreakFrameHold(heldSec, master - masterAtHold, kFrameHoldLimit))
+            if (!paused_.load() && holdWatchdog.ShouldBreak(master, now, kFrameHoldLimit))
             {
+                const double stalledSec = holdWatchdog.StalledFor(now);
                 mistimedFrames_.fetch_add(1);
                 if (!clockStallWarned)
                 {
                     clockStallWarned = true;
                     Log::Warn(
-                        "FFmpegPlayer: master clock stalled (held frame {}s at clock {}); presenting to "
-                        "keep the pipeline alive",
-                        heldSec, master
+                        "FFmpegPlayer: master clock stalled for {}s (frame pts {}, clock {}); presenting "
+                        "to keep the pipeline alive",
+                        stalledSec, framePts, master
                     );
                 }
                 heldByWatchdog = true;

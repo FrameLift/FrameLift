@@ -188,30 +188,61 @@ private Q_SLOTS:
         QCOMPARE(clk.Read(false, t0 + std::chrono::seconds(3)), 21.0);
     }
 
-    // ── ShouldBreakFrameHold ───────────────────────────────────────────────────
+    // ── FrameHoldWatchdog ────────────────────────────────────────────────
 
     void FrameHoldBreaksOnStalledClock()
     {
-        // Held past the limit with no clock movement: present to keep the
-        // pipeline alive (a parked demuxer can never restore the clock itself).
-        QVERIFY(ShouldBreakFrameHold(/*held*/ 0.6, /*advance*/ 0.0, /*limit*/ 0.5));
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        QVERIFY(!watchdog.ShouldBreak(10.0, t0 + std::chrono::milliseconds(499), 0.5));
+        QVERIFY(watchdog.ShouldBreak(10.0, t0 + std::chrono::milliseconds(500), 0.5));
     }
 
     void FrameHoldKeepsWaitingWhileClockAdvances()
     {
-        // The clock is moving — the frame will come due; no forced present.
-        QVERIFY(!ShouldBreakFrameHold(/*held*/ 5.0, /*advance*/ 0.2, /*limit*/ 0.5));
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        QVERIFY(!watchdog.ShouldBreak(10.2, t0 + std::chrono::seconds(5), 0.5));
+        QVERIFY(!watchdog.ShouldBreak(10.2, t0 + std::chrono::milliseconds(5499), 0.5));
     }
 
-    void FrameHoldKeepsWaitingBeforeLimit()
+    void FrameHoldResetExcludesPausedTime()
     {
-        QVERIFY(!ShouldBreakFrameHold(/*held*/ 0.4, /*advance*/ 0.0, /*limit*/ 0.5));
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        const auto resumed = t0 + std::chrono::seconds(30);
+        watchdog.Reset(10.0, resumed);
+        QVERIFY(!watchdog.ShouldBreak(10.0, resumed, 0.5));
+        QVERIFY(!watchdog.ShouldBreak(10.0, resumed + std::chrono::milliseconds(499), 0.5));
+        QVERIFY(watchdog.ShouldBreak(10.0, resumed + std::chrono::milliseconds(500), 0.5));
     }
 
-    void FrameHoldIgnoresSubMillisecondDrift()
+    void FrameHoldBreaksWhenClockStallsAfterProgress()
     {
-        // < 1 ms of movement over the whole hold is a pinned clock, not progress.
-        QVERIFY(ShouldBreakFrameHold(/*held*/ 0.5, /*advance*/ 0.0005, /*limit*/ 0.5));
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        const auto progressed = t0 + std::chrono::milliseconds(400);
+        QVERIFY(!watchdog.ShouldBreak(10.1, progressed, 0.5));
+        QVERIFY(watchdog.ShouldBreak(10.1, progressed + std::chrono::milliseconds(500), 0.5));
+    }
+
+    void FrameHoldAccumulatesSubMillisecondProgress()
+    {
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        QVERIFY(!watchdog.ShouldBreak(10.0004, t0 + std::chrono::milliseconds(200), 0.5));
+        QVERIFY(!watchdog.ShouldBreak(10.0008, t0 + std::chrono::milliseconds(400), 0.5));
+        // Cumulative progress reaches 1 ms and starts a fresh stall interval.
+        QVERIFY(!watchdog.ShouldBreak(10.0011, t0 + std::chrono::milliseconds(499), 0.5));
+        QVERIFY(!watchdog.ShouldBreak(10.0011, t0 + std::chrono::milliseconds(998), 0.5));
+        QVERIFY(watchdog.ShouldBreak(10.0011, t0 + std::chrono::milliseconds(999), 0.5));
+    }
+
+    void FrameHoldBackwardClockDoesNotPostponeRecovery()
+    {
+        const auto t0 = std::chrono::steady_clock::time_point{};
+        FrameHoldWatchdog watchdog(10.0, t0);
+        QVERIFY(watchdog.ShouldBreak(9.0, t0 + std::chrono::milliseconds(500), 0.5));
     }
 
     // ── DecideSeekDiscard ──────────────────────────────────────────────────────
