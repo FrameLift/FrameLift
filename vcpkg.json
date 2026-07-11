@@ -16,6 +16,13 @@
       ]
     },
     "libass",
+    {
+      "name": "llama-cpp",
+      "default-features": false,
+      "features": [
+        "tools"
+      ]
+    },
     "vulkan-loader"
   ]
 }

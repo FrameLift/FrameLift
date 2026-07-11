@@ -187,8 +187,11 @@ cmake --build build-lean
 CMake prints the enabled/disabled module table at configure time. Modules unsupported on the current
 platform, or marked `required`, cannot be toggled this way.
 
-The shared AI module is enabled by default and requires a prebuilt llama.cpp CMake package plus
-libmtmd. Pass `-DFRAMELIFT_MODULE_AI=OFF` to omit that dependency and all AI-dependent plugins.
+The shared AI module is enabled by default and requires llama.cpp + libmtmd development files. On
+Linux install the distro packages (Debian/Ubuntu: `libllama-dev` + `libggml-dev`; Arch: `llama.cpp`);
+on Windows the vcpkg manifest provides `llama-cpp[tools]`. A self-built llama.cpp install also works
+via `CMAKE_PREFIX_PATH`. Pass `-DFRAMELIFT_MODULE_AI=OFF` to omit the dependency and all AI-dependent
+plugins.
 
 ### Dependencies
 
@@ -200,7 +203,7 @@ their own prebuilt dependencies; selected graphics build tools are fetched when 
 | Qt 6             | vcpkg / system    | vcpkg/system  |
 | FFmpeg           | vcpkg / system    | vcpkg/system  |
 | libass           | vcpkg / system    | vcpkg/system  |
-| llama.cpp + mtmd | b9833 / compatible prebuilt | prebuilt (AI module) |
+| llama.cpp + mtmd | b8681+ (vcpkg: b9030) | vcpkg/system (AI module) |
 | Vulkan-Headers   | 1.4.354           | FetchContent  |
 | VulkanMemoryAllocator | 3.4.0        | FetchContent  |
 | glslang          | build-time, fallback | PATH / FetchContent |
