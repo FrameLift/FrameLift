@@ -143,12 +143,50 @@ struct VideoWallClockState
 // would wait forever — and holding it also parks the demuxer via queue
 // backpressure, which is what turns an audio hiccup into a permanent freeze
 // (video consumption is what un-parks the pipeline, which is what restores
-// audio). After holdLimitSec of waiting with less than 1 ms of clock movement,
-// the frame must present anyway; the clock re-anchors once audio recovers.
-inline bool ShouldBreakFrameHold(double heldSec, double clockAdvanceSec, double holdLimitSec)
+// audio).
+//
+// Track the most recent meaningful forward progress rather than total movement
+// since the frame began waiting. This catches a clock that advances and then
+// stalls, while Reset() lets callers exclude time spent deliberately paused. The
+// 1 ms threshold is cumulative from the last reset/progress point, so harmless
+// sub-millisecond sampling jitter cannot keep a pinned clock alive indefinitely.
+class FrameHoldWatchdog
 {
-    return heldSec >= holdLimitSec && clockAdvanceSec < 1e-3;
-}
+public:
+    using TimePoint = std::chrono::steady_clock::time_point;
+
+    FrameHoldWatchdog(double masterClock, TimePoint now) noexcept
+    {
+        Reset(masterClock, now);
+    }
+
+    void Reset(double masterClock, TimePoint now) noexcept
+    {
+        progressClock_ = masterClock;
+        stalledSince_ = now;
+    }
+
+    [[nodiscard]] bool ShouldBreak(double masterClock, TimePoint now, double holdLimitSec) noexcept
+    {
+        if (masterClock - progressClock_ >= kMeaningfulProgressSec)
+        {
+            Reset(masterClock, now);
+            return false;
+        }
+        return StalledFor(now) >= holdLimitSec;
+    }
+
+    [[nodiscard]] double StalledFor(TimePoint now) const noexcept
+    {
+        return std::chrono::duration<double>(now - stalledSince_).count();
+    }
+
+private:
+    static constexpr double kMeaningfulProgressSec = 1e-3;
+
+    double progressClock_ = 0.0;
+    TimePoint stalledSince_{};
+};
 
 // Post-seek audio hold. With video present, the audio worker holds its first
 // post-seek feeds until the video worker paints the target frame — otherwise an
@@ -160,7 +198,7 @@ inline bool ShouldBreakFrameHold(double heldSec, double clockAdvanceSec, double 
 //   • tearingDown   — load/stop/shutdown (caller drops it),
 //   • timeout       — video can't paint (decode errors, video stream ends before
 //     audio at the seek point): bounded silence, then audio resumes anyway — the
-//     same self-healing philosophy as ShouldBreakFrameHold.
+//     same self-healing philosophy as FrameHoldWatchdog.
 // Deadlock-free by construction: the video worker's post-seek refresh frame
 // presents UNPACED (it never waits on the audio clock this hold freezes), and the
 // demuxer park this hold can cause is bounded by the audio queue's packet cap
