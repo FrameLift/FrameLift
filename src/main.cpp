@@ -1,5 +1,6 @@
 #include "App.h"
 #include "GraphicsApi.h"
+#include "QtEnvironment.h"
 #include <framelift/Log.h>
 
 #include <QtGui/QSurfaceFormat>
@@ -10,10 +11,7 @@
 
 int main(int argc, char* argv[])
 {
-    // Force the single-threaded "basic" scene-graph render loop so all GL work — Qt's
-    // adopted context and our raw-GL video node — stays on the GUI thread (the GL video
-    // renderer / FFmpeg RenderFrame assume single-threaded main-thread GL).
-    qputenv("QSG_RENDER_LOOP", "basic");
+    ConfigureQtEnvironment();
 
     // Backend is chosen via FL_BACKEND before the Qt platform exists (see GraphicsApi.h).
     const GraphicsApi graphicsApi = GraphicsApiFromEnv();
