@@ -18,6 +18,7 @@ add_framelift_plugin(SettingsMenu
         "${CMAKE_CURRENT_SOURCE_DIR}/UISettings.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/SettingsPluginsPage.qml"
         "${CMAKE_CURRENT_SOURCE_DIR}/AdvancedSettings.qml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/AISettings.qml"
 )
 # SettingsMenu compiles the host Settings.cpp directly, so it needs the host
 # settings/src include paths (the plugin's own dir is added by add_framelift_plugin)

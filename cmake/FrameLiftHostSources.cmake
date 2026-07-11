@@ -159,6 +159,17 @@ set(_FRAMELIFT_HOST_FRAME_SAMPLER_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/host/frame-sampler/FrameSamplerService.h"
 )
 
+set(_FRAMELIFT_HOST_AI_SOURCES
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIBackendLog.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIBackendLog.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIEngine.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIModelCatalog.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIModelCatalog.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIService.cpp"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/AIService.h"
+        "${CMAKE_SOURCE_DIR}/modules/host/ai/LlamaEngine.cpp"
+)
+
 set(_FRAMELIFT_HOST_GRAPHICS_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsApi.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/graphics-core/GraphicsBackendFactory.cpp"
@@ -258,6 +269,11 @@ framelift_add_host_module(framelift_mod_playback ${_framelift_playback_sources})
 # Frame sampler: one-shot FFmpeg frame decode off the playback path (toggleable).
 if (FRAMELIFT_MODULE_FRAME_SAMPLER)
     framelift_add_host_module(framelift_mod_frame_sampler ${_FRAMELIFT_HOST_FRAME_SAMPLER_SOURCES})
+endif ()
+if (FRAMELIFT_MODULE_AI)
+    framelift_add_host_module(framelift_mod_ai ${_FRAMELIFT_HOST_AI_SOURCES})
+    target_include_directories(framelift_mod_ai PRIVATE "${FRAMELIFT_MTMD_INCLUDE_DIR}")
+    target_link_libraries(framelift_mod_ai PRIVATE llama ${FRAMELIFT_MTMD_LIBRARY} Qt6::Network)
 endif ()
 if (WIN32)
     # winmm: timeBeginPeriod/timeEndPeriod used by the video frame-pacing timer in

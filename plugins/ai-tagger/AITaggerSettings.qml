@@ -63,83 +63,6 @@ Item {
             spacing: 12
 
             // ── Models ──────────────────────────────────────────────────────
-            FLSettingsGroup {
-                title: "Models"
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 6
-
-                    Repeater {
-                        model: root.viewModel.models
-                        delegate: RowLayout {
-                            id: mrow
-                            required property var modelData
-                            Layout.fillWidth: true
-                            spacing: 10
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-                                C.Label {
-                                    text: mrow.modelData.name + (mrow.modelData.recommended ? "  ★" : "")
-                                    color: FLTheme.text
-                                    font.bold: true
-                                }
-                                C.Label {
-                                    text: mrow.modelData.installed ? "Installed"
-                                        : (mrow.modelData.downloading
-                                           ? "Downloading… " + Math.round(mrow.modelData.progress * 100) + "%"
-                                           : "Not installed")
-                                    color: FLTheme.textMuted
-                                    font.pixelSize: 12
-                                }
-                            }
-
-                            FLActionButton {
-                                visible: !mrow.modelData.installed && !mrow.modelData.downloading
-                                text: "Download"
-                                onClicked: root.viewModel.download(mrow.modelData.id)
-                            }
-                            FLActionButton {
-                                visible: mrow.modelData.downloading
-                                text: "Cancel"
-                                onClicked: root.viewModel.cancelDownload()
-                            }
-                            FLActionButton {
-                                visible: mrow.modelData.installed
-                                enabled: root.viewModel.testingId.length === 0
-                                text: "Test"
-                                onClicked: root.viewModel.testModel(mrow.modelData.id)
-                            }
-                        }
-                    }
-
-                    // Test / benchmark result (one model tested at a time).
-                    C.Label {
-                        visible: root.viewModel.testingId.length > 0 || root.viewModel.testStatus.length > 0
-                        text: root.viewModel.testStatus
-                            + (root.viewModel.testMsPerFrame > 0
-                               ? "  ·  " + Math.round(root.viewModel.testMsPerFrame) + " ms/frame"
-                               : "")
-                        color: FLTheme.textMuted
-                        font.pixelSize: 12
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-
-                    C.Label {
-                        visible: root.viewModel.lastError.length > 0
-                        text: root.viewModel.lastError
-                        color: "#e06c75"
-                        font.pixelSize: 12
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-            }
-
             // ── Existing rules ──────────────────────────────────────────────
             FLSettingsGroup {
                 title: "Folder rules"
@@ -259,7 +182,7 @@ Item {
                     }
                     FLSettingRow {
                         title: "Model"
-                        description: "Which installed model to run for this folder. Download a model above first."
+                        description: "Which installed shared AI model to run. Manage models on the core AI settings page."
                         FLComboBox {
                             id: modelCombo
                             // Only installed models are selectable — tagging needs the files present.

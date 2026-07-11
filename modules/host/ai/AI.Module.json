@@ -1,0 +1,23 @@
+{
+  "fileVersion": 1,
+  "id": "framelift.ai",
+  "name": "AI Runtime",
+  "description": "Shared local model management and scheduled llama.cpp inference for AI plugins.",
+  "enabled": true,
+  "required": false,
+  "provides": {
+    "features": [
+      "ai.inference",
+      "ai.models"
+    ]
+  },
+  "requires": {
+    "modules": [],
+    "features": []
+  },
+  "optional": {
+    "modules": [],
+    "features": []
+  },
+  "platforms": []
+}

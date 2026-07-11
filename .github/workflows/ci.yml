@@ -99,6 +99,29 @@ jobs:
           feed-url: ${{ env.FEED_URL }}
           username: ${{ env.USERNAME }}
           nuget-token: ${{ secrets.VCPKG_PAT_TOKEN }}
+      - name: Cache llama.cpp
+        id: llama-cache-windows
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llama-install
+          key: llama-b9833-windows-msvc-static
+      - name: Build preinstalled llama.cpp
+        if: steps.llama-cache-windows.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch b9833 --depth 1 https://github.com/ggml-org/llama.cpp.git "$RUNNER_TEMP/llama-src"
+          cmake -S "$RUNNER_TEMP/llama-src" -B "$RUNNER_TEMP/llama-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/llama-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DGGML_CUDA=OFF \
+            -DGGML_VULKAN=OFF \
+            -DGGML_NATIVE=OFF
+          cmake --build "$RUNNER_TEMP/llama-build" --parallel
+          cmake --install "$RUNNER_TEMP/llama-build"
       - name: Configure
         run: |
           echo "vcpkg binary sources: $VCPKG_BINARY_SOURCES"
@@ -117,6 +140,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
             -DVCPKG_HOST_TRIPLET="$VCPKG_TRIPLET" \
             -DQt6_DIR="$Qt6_DIR" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/llama-install;$Qt6_DIR" \
             -DCMAKE_C_COMPILER=cl \
             -DCMAKE_CXX_COMPILER=cl \
             -DCMAKE_BUILD_TYPE=Release \
@@ -208,6 +232,29 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-validationlayers xvfb ffmpeg
+      - name: Cache llama.cpp
+        id: llama-cache-linux
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llama-install
+          key: llama-b9833-linux-gcc-static
+      - name: Build preinstalled llama.cpp
+        if: steps.llama-cache-linux.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch b9833 --depth 1 https://github.com/ggml-org/llama.cpp.git "$RUNNER_TEMP/llama-src"
+          cmake -S "$RUNNER_TEMP/llama-src" -B "$RUNNER_TEMP/llama-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/llama-install" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DGGML_CUDA=OFF \
+            -DGGML_VULKAN=OFF \
+            -DGGML_NATIVE=OFF
+          cmake --build "$RUNNER_TEMP/llama-build" --parallel
+          cmake --install "$RUNNER_TEMP/llama-build"
       - name: Build
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
@@ -219,6 +266,7 @@ jobs:
           fi
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/llama-install" \
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_BUILD_LAUNCH_TESTS=ON \
             -DFRAMELIFT_LAUNCH_VULKAN_SMOKE=ON \
@@ -271,6 +319,7 @@ jobs:
           fi
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DFRAMELIFT_MODULE_AI=OFF \
             -DFRAMELIFT_BUILD_TESTS=OFF \
             -DFRAMELIFT_VERSION="$VERSION"
           cmake --install "$BUILD_DIR" --prefix "$GITHUB_WORKSPACE/sdk-stage" --component sdk

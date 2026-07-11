@@ -1,7 +1,7 @@
 #include "AITagger.h"
 
 #include "AITaggerSettings.h"
-#include "ModelDownloader.h"
+#include "HostAIBackend.h"
 
 #include <framelift/ContextMenu.h>
 #include <framelift/ContextMenuHelpers.h>
@@ -9,7 +9,6 @@
 #include <framelift/platform/IAppWindow.h>
 #include <framelift/services/IFrameSampler.h>
 
-#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QDirIterator>
 #include <QtCore/QFileInfo>
@@ -54,20 +53,6 @@ const char* SkipReason(AITagger::JobSkip why)
 
 AITagger::AITagger()
 {
-    // Debounced restore: only lift the throttle after a quiet period (a playlist file
-    // change is a brief EndFile→StartFile that must not un-throttle the worker).
-    throttleRestoreTimer_.setSingleShot(true);
-    throttleRestoreTimer_.setInterval(10000);
-    connect(
-        &throttleRestoreTimer_, &QTimer::timeout, this,
-        [this]
-        {
-            if (!playbackActive_ && worker_)
-            {
-                worker_->SetThrottle(0);
-            }
-        }
-    );
     connect(
         &dirWatcher_, &QFileSystemWatcher::directoryChanged, this,
         [this](const QString&)
@@ -87,12 +72,14 @@ void AITagger::OnInstall(IModuleContext& ctx)
     store_ = std::make_unique<TagStore>(ctx.GetService<IMediaStore>());
     store_->EnsureSchema();
     sampler_ = ctx.GetService<IFrameSampler>();
+    inference_ = ctx.GetService<IAIInference>();
+    models_ = ctx.GetService<IAIModelManager>();
 
     worker_ = std::make_unique<aitagger::TagWorker>(
         sampler_, store_.get(),
-        []
+        [inference = inference_, models = models_]
         {
-            return aitagger::CreateLlamaBackend();
+            return aitagger::CreateHostAIBackend(inference, models);
         }
     );
 
@@ -158,6 +145,10 @@ void AITagger::OnInstall(IModuleContext& ctx)
     {
         Log::Warn("AITagger: IFrameSampler unavailable; tagging disabled");
     }
+    if (!inference_ || !models_)
+    {
+        Log::Warn("AITagger: shared AI host services unavailable; tagging disabled");
+    }
 }
 
 void AITagger::OnRulesChanged()
@@ -189,44 +180,9 @@ void AITagger::ArmWatchers()
     }
 }
 
-void AITagger::SetPlaybackActive(bool active)
-{
-    playbackActive_ = active;
-    if (!worker_)
-    {
-        return;
-    }
-    if (active)
-    {
-        throttleRestoreTimer_.stop();
-        worker_->SetThrottle(1); // cap the background worker while playback is active
-    }
-    else
-    {
-        throttleRestoreTimer_.start(); // restore full speed only after the quiet period
-    }
-}
-
 void AITagger::HandleMediaEvent(const MediaEvent& e)
 {
-    switch (e.type)
-    {
-    case MediaEventType::StartFile:
-    case MediaEventType::PlaybackRestart:
-        SetPlaybackActive(true);
-        break;
-    case MediaEventType::EndFile:
-        SetPlaybackActive(false);
-        break;
-    case MediaEventType::PropertyChange:
-        if (e.property.prop == PlayerProperty::Pause)
-        {
-            SetPlaybackActive(e.property.value.flag == 0); // paused ⇒ inactive
-        }
-        break;
-    default:
-        break;
-    }
+    (void)e; // playback-aware throttling is centralized in the host AI scheduler
 }
 
 void AITagger::ConfigureForTest(IMediaStore* store, IFrameSampler* sampler, aitagger::TagWorker::BackendFactory factory)
@@ -239,15 +195,10 @@ void AITagger::ConfigureForTest(IMediaStore* store, IFrameSampler* sampler, aita
 
 bool AITagger::ResolveModel(const std::string& modelId, aitagger::ModelSpec& spec) const
 {
-    const QString dir = QCoreApplication::applicationDirPath() + "/models/";
-    const QString model = dir + QString::fromStdString(modelId) + ".gguf";
-    const QString mmproj = dir + QString::fromStdString(modelId) + ".mmproj.gguf";
-    if (!QFileInfo::exists(model) || !QFileInfo::exists(mmproj))
+    if (!models_ || !models_->IsInstalled(modelId.c_str()))
     {
         return false;
     }
-    spec.modelPath = model.toStdString();
-    spec.mmprojPath = mmproj.toStdString();
     spec.modelId = modelId;
     return true;
 }

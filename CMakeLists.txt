@@ -39,6 +39,19 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftBuiltinModules.cmake")
 framelift_load_builtin_modules("${CMAKE_SOURCE_DIR}/modules")
 framelift_report_builtin_modules()
 
+# The shared AI runtime deliberately consumes a prebuilt llama.cpp installation.
+# Lean builds remove the dependency, host sources, and AI plugins together.
+if (FRAMELIFT_MODULE_AI)
+    find_package(llama CONFIG QUIET)
+    find_library(FRAMELIFT_MTMD_LIBRARY NAMES mtmd)
+    find_path(FRAMELIFT_MTMD_INCLUDE_DIR NAMES mtmd.h)
+    if (NOT llama_FOUND OR NOT FRAMELIFT_MTMD_LIBRARY OR NOT FRAMELIFT_MTMD_INCLUDE_DIR)
+        message(FATAL_ERROR
+                "The AI module requires prebuilt llama.cpp and libmtmd. Install the llama CMake package "
+                "and mtmd development files, or configure a lean build with -DFRAMELIFT_MODULE_AI=OFF.")
+    endif ()
+endif ()
+
 # ── Platform media libraries (external FFmpeg + libass) ───────────────────────
 # Defines the `ffmpeg` and `libass` targets: Linux uses system dev packages
 # (libav*-dev / libass-dev); Windows resolves them from the vcpkg manifest
@@ -65,6 +78,9 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 # Sql backs the host IMediaStore service (modules/host/services/MediaStoreImpl) over
 # the bundled QSQLITE driver; plugins never link a database library themselves.
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets Sql)
+if (FRAMELIFT_MODULE_AI)
+    find_package(Qt6 REQUIRED COMPONENTS Network)
+endif ()
 
 # Guard: no Qt Multimedia playback APIs (compressed media stays on external FFmpeg).
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftMediaAudit.cmake")
@@ -174,6 +190,9 @@ target_include_directories(FrameLift PRIVATE
 target_link_libraries(FrameLift PRIVATE
         FrameLiftSdk OpenGL::GL
         Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Widgets Qt6::Sql)
+if (FRAMELIFT_MODULE_AI)
+    target_link_libraries(FrameLift PRIVATE llama ${FRAMELIFT_MTMD_LIBRARY} Qt6::Network)
+endif ()
 
 # Built-in module OBJECT libraries (defined in FrameLiftHostSources); the exe links the
 # objects + their compile usage requirements.

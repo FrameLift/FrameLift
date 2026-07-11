@@ -11,6 +11,7 @@
 #include <QtCore/Qt>
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,6 +43,7 @@ constexpr CoreBindEntry kCoreKeybinds[] = {
 
 constexpr const char* kPluginsPageQml = "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/SettingsPluginsPage.qml";
 constexpr const char* kAdvancedPageQml = "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/AdvancedSettings.qml";
+constexpr const char* kAIPageQml = "qrc:/qt/qml/FrameLift/Plugins/SettingsMenu/AISettings.qml";
 
 // Sort weight for the three nav groups so they render contiguously: core config
 // first, plugin-contributed pages next, the settings-menu's own management pages last.
@@ -57,6 +59,225 @@ int GroupRank(const QString& group)
     }
     return 1; // "plugin"
 }
+
+} // namespace
+
+AISettingsPageModel::AISettingsPageModel(IAIInference* inference, IAIModelManager* models)
+    : inference_(inference), models_(models)
+{
+    if (inference_)
+    {
+        client_ = inference_->CreateClient(nullptr, &AISettingsPageModel::InferenceCallback, this);
+    }
+}
+
+AISettingsPageModel::~AISettingsPageModel()
+{
+    if (models_ && transferId_)
+    {
+        models_->CancelTransfer(transferId_);
+    }
+    if (inference_ && client_)
+    {
+        inference_->DestroyClient(client_);
+    }
+}
+
+QString AISettingsPageModel::Title() const
+{
+    return QStringLiteral("AI");
+}
+
+QString AISettingsPageModel::BusyModel() const
+{
+    return busyModel_;
+}
+
+double AISettingsPageModel::Progress() const
+{
+    return progress_;
+}
+
+QString AISettingsPageModel::Status() const
+{
+    return status_;
+}
+
+int AISettingsPageModel::LoadedModelLimit() const
+{
+    return models_ ? models_->GetLoadedModelLimit() : 0;
+}
+
+QVariantList AISettingsPageModel::Models() const
+{
+    QVariantList result;
+    if (!models_)
+    {
+        return result;
+    }
+    models_->Enumerate(
+        [](const AIModelInfo* info, void* ud)
+        {
+            if (!info)
+            {
+                return;
+            }
+            auto* rows = static_cast<QVariantList*>(ud);
+            QVariantMap row;
+            row["id"] = QString::fromUtf8(info->id ? info->id : "");
+            row["name"] = QString::fromUtf8(info->name ? info->name : "");
+            row["quant"] = QString::fromUtf8(info->quant ? info->quant : "");
+            row["installed"] = info->installed;
+            row["recommended"] = info->recommended;
+            row["vision"] = info->supportsVision;
+            rows->push_back(row);
+        },
+        &result
+    );
+    return result;
+}
+
+void AISettingsPageModel::download(const QString& modelId)
+{
+    if (!models_ || transferId_)
+    {
+        return;
+    }
+    busyModel_ = modelId;
+    status_ = QStringLiteral("Downloading…");
+    progress_ = 0.0;
+    transferId_ = models_->Install(modelId.toUtf8().constData(), &AISettingsPageModel::TransferCallback, this);
+    if (!transferId_)
+    {
+        busyModel_.clear();
+        status_ = QStringLiteral("Unable to start download");
+    }
+    Q_EMIT changed();
+}
+
+void AISettingsPageModel::cancelTransfer()
+{
+    if (models_ && transferId_)
+    {
+        models_->CancelTransfer(transferId_);
+    }
+}
+
+void AISettingsPageModel::remove(const QString& modelId)
+{
+    if (models_)
+    {
+        status_ = models_->Remove(modelId.toUtf8().constData()) ? QStringLiteral("Model removed")
+                                                                : QStringLiteral("Model was not installed");
+        Q_EMIT changed();
+    }
+}
+
+void AISettingsPageModel::importModel(
+    const QString& modelId, const QString& name, const QString& modelPath, const QString& projectorPath
+)
+{
+    if (!models_ || transferId_)
+    {
+        return;
+    }
+    busyModel_ = modelId;
+    status_ = QStringLiteral("Importing…");
+    Q_EMIT changed();
+    transferId_ = std::numeric_limits<std::uint64_t>::max();
+    const std::uint64_t submitted = models_->Import(
+        modelId.toUtf8().constData(), name.toUtf8().constData(), modelPath.toUtf8().constData(),
+        projectorPath.toUtf8().constData(), &AISettingsPageModel::TransferCallback, this
+    );
+    if (transferId_ == std::numeric_limits<std::uint64_t>::max())
+    {
+        transferId_ = submitted;
+    }
+    if (!submitted)
+    {
+        busyModel_.clear();
+        status_ = QStringLiteral("Unable to import model");
+        Q_EMIT changed();
+    }
+}
+
+void AISettingsPageModel::testModel(const QString& modelId)
+{
+    if (!inference_ || !client_ || testJob_)
+    {
+        return;
+    }
+    AIInferenceRequest request;
+    request.kind = AIRequestKind::GenerateText;
+    request.priority = AIRequestPriority::Interactive;
+    const QByteArray id = modelId.toUtf8();
+    request.modelId = id.constData();
+    request.systemPrompt = "Answer briefly.";
+    request.prompt = "Reply with the word ready.";
+    request.maxTokens = 8;
+    busyModel_ = modelId;
+    status_ = QStringLiteral("Testing model…");
+    testJob_ = inference_->Submit(client_, &request);
+    if (!testJob_)
+    {
+        busyModel_.clear();
+        status_ = QStringLiteral("Unable to queue model test");
+    }
+    Q_EMIT changed();
+}
+
+void AISettingsPageModel::setLoadedModelLimit(int limit)
+{
+    if (models_)
+    {
+        models_->SetLoadedModelLimit(limit);
+        Q_EMIT changed();
+    }
+}
+
+void AISettingsPageModel::load()
+{
+    Q_EMIT changed();
+}
+
+void AISettingsPageModel::TransferCallback(
+    std::uint64_t transferId, const char* modelId, float progress, bool finished, const char* error, void* userData
+)
+{
+    (void)transferId;
+    auto* self = static_cast<AISettingsPageModel*>(userData);
+    self->progress_ = progress;
+    self->busyModel_ = QString::fromUtf8(modelId ? modelId : "");
+    if (finished)
+    {
+        self->transferId_ = 0;
+        self->busyModel_.clear();
+        self->status_ = error && error[0] ? QString::fromUtf8(error) : QStringLiteral("Model ready");
+    }
+    Q_EMIT self->changed();
+}
+
+void AISettingsPageModel::InferenceCallback(const AIInferenceResult* result, void* userData)
+{
+    auto* self = static_cast<AISettingsPageModel*>(userData);
+    const QString status = result && result->state == AIJobState::Completed
+                               ? QStringLiteral("Model working: ") + QString::fromUtf8(result->text ? result->text : "")
+                               : QString::fromUtf8(result && result->error ? result->error : "Model test failed");
+    QMetaObject::invokeMethod(
+        self,
+        [self, status]
+        {
+            self->testJob_ = 0;
+            self->busyModel_.clear();
+            self->status_ = status;
+            Q_EMIT self->changed();
+        },
+        Qt::QueuedConnection
+    );
+}
+
+namespace
+{
 
 const char* SettingsPageQmlForSection(const std::string& id)
 {
@@ -850,6 +1071,19 @@ void SettingsMenu::RegisterBuiltInPages()
     corePageIds_.clear();
     QSet<QString> seen;
     int order = 10;
+
+    if (auto* inference = ctx_ ? ctx_->GetService<IAIInference>() : nullptr)
+    {
+        if (auto* models = ctx_->GetService<IAIModelManager>())
+        {
+            auto model = std::make_unique<AISettingsPageModel>(inference, models);
+            QObject* modelPtr = model.get();
+            pageModels_.push_back(std::move(model));
+            registry->RegisterSettingsPage("ai", "AI", kAIPageQml, modelPtr, order);
+            corePageIds_.insert("ai");
+            order += 10;
+        }
+    }
     for (const FieldMeta& field : fields_)
     {
         if (field.moduleOwned)

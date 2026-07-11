@@ -217,6 +217,11 @@ void App::InitServices(const std::string& prefDir, const std::string& settingsPa
     // settingsPath when the pref dir could not be resolved).
     mediaStore_ = std::make_unique<MediaStoreImpl>(QString::fromStdString(prefDir + "media.db"));
     moduleCtx_->RegisterService<IMediaStore>(mediaStore_.get());
+#if FRAMELIFT_MODULE_AI
+    aiService_ = std::make_unique<AIService>();
+    moduleCtx_->RegisterService<IAIInference>(aiService_.get());
+    moduleCtx_->RegisterService<IAIModelManager>(aiService_.get());
+#endif
 #if FRAMELIFT_MODULE_FRAME_SAMPLER
     // Off-playback frame decode: opens its own demux/decode session per file, so it
     // needs no state from the player and is safe to register unconditionally here.
@@ -525,6 +530,27 @@ void App::DrainMediaEvents()
         {
             playbackControls_->SetPlayerIdle(ev.property.value.flag != 0);
         }
+
+#if FRAMELIFT_MODULE_AI
+        if (aiService_)
+        {
+            if (ev.type == MediaEventType::StartFile || ev.type == MediaEventType::PlaybackRestart)
+            {
+                aiService_->SetPlaybackActive(true);
+            }
+            else if (ev.type == MediaEventType::EndFile)
+            {
+                aiService_->SetPlaybackActive(false);
+            }
+            else if (
+                ev.type == MediaEventType::PropertyChange && ev.property.prop == PlayerProperty::Pause &&
+                ev.property.type == PropertyType::Flag
+            )
+            {
+                aiService_->SetPlaybackActive(ev.property.value.flag == 0);
+            }
+        }
+#endif
 
         // A file that ended for any reason other than clean EOF failed — tell the user
         // why. Overlay subscribes to NotificationEvent and shows the toast.

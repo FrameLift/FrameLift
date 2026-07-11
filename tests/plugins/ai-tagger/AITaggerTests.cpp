@@ -1,3 +1,4 @@
+#include "HostAIBackend.h"
 #include "InferenceBackend.h"
 #include "SampleScheduler.h"
 #include "TagStore.h"
@@ -7,6 +8,8 @@
 #include "QtTestRunner.h"
 #include "TempIni.h"
 #include "fakes/FakeFrameSampler.h"
+
+#include <framelift/services.h>
 
 #include <QtTest/QtTest>
 
@@ -71,6 +74,85 @@ public:
         }
         return true;
     }
+};
+
+class FakeSharedModels final : public IAIModelManager
+{
+public:
+    void Enumerate(AIModelVisitor, void*) const noexcept override
+    {
+    }
+
+    bool IsInstalled(const char* id) const noexcept override
+    {
+        return id && std::string(id) == "fake";
+    }
+
+    std::uint64_t Install(const char*, AIModelTransferCallback, void*) noexcept override
+    {
+        return 0;
+    }
+
+    std::uint64_t Import(
+        const char*, const char*, const char*, const char*, AIModelTransferCallback, void*
+    ) noexcept override
+    {
+        return 0;
+    }
+
+    void CancelTransfer(std::uint64_t) noexcept override
+    {
+    }
+
+    bool Remove(const char*) noexcept override
+    {
+        return false;
+    }
+
+    int GetLoadedModelLimit() const noexcept override
+    {
+        return 2;
+    }
+
+    void SetLoadedModelLimit(int) noexcept override
+    {
+    }
+};
+
+class FakeSharedInference final : public IAIInference
+{
+public:
+    struct Client
+    {
+        AICompletionCallback completion;
+        void* ud;
+    };
+
+    void* CreateClient(AIProgressCallback, AICompletionCallback completion, void* ud) noexcept override
+    {
+        client = {completion, ud};
+        return &client;
+    }
+
+    void DestroyClient(void*) noexcept override
+    {
+    }
+
+    std::uint64_t Submit(void*, const AIInferenceRequest* request) noexcept override
+    {
+        sawBackground = request && request->priority == AIRequestPriority::Background;
+        const float values[] = {0.8f, 0.2f};
+        const AIInferenceResult result{1, AIJobState::Completed, "", values, 2, ""};
+        client.completion(&result, client.ud);
+        return 1;
+    }
+
+    void Cancel(void*, std::uint64_t) noexcept override
+    {
+    }
+
+    Client client{};
+    bool sawBackground = false;
 };
 
 TagJob MakeJob(const std::string& path, std::vector<RuleEntry> entries, float threshold, int budget)
@@ -197,6 +279,23 @@ private Q_SLOTS:
         QVERIFY(r.confidence > 0.85f);
         QVERIFY(ts_->HasTag("/videos/a.mp4", "beach", 0.5f));
         QCOMPARE(sampler.readCalls, 1); // a strong positive settles after the first sample
+    }
+
+    void HostAdapterUsesSharedScoringService()
+    {
+        FakeSharedInference inference;
+        FakeSharedModels models;
+        auto backend = CreateHostAIBackend(&inference, &models);
+        ModelSpec model;
+        model.modelId = "fake";
+        std::string error;
+        QVERIFY(backend->LoadModel(model, error));
+        std::vector<std::uint8_t> rgba(4 * 4 * 4, 255);
+        std::vector<float> scores;
+        QVERIFY(backend->EvaluateFrame(rgba.data(), 4, 4, {{"Is it bright?", "bright"}}, scores, error));
+        QCOMPARE(static_cast<int>(scores.size()), 1);
+        QCOMPARE(scores.front(), 0.8f);
+        QVERIFY(inference.sawBackground);
     }
 
     void NegativeTagNotPresentButRecorded()

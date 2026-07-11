@@ -10,6 +10,7 @@ process-local: they override the current launch without requiring edits to
 | `FL_ACCEL_MODE` | `off`, `auto`, `vulkan-zero-copy`, `vulkan`, `cuda`, `d3d11va`, `dxva2`, `vaapi` | `settings.ini` | Overrides hardware decode acceleration mode for this launch. |
 | `FL_LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` | Sets the minimum host/plugin log level. |
 | `FL_LOG_PERF` | `1`, `0`, `true`, `false`, `on`, `off` | `off` | Enables performance timing logs. |
+| `FL_LOG_AI` | `1`, `0` | `off` | Enables verbose llama.cpp, ggml, and mtmd diagnostics through the FrameLift logger. |
 | `FL_VULKAN_VALIDATION` | `1`, `0` | debug builds: `1`; release builds: `0` | Forces Vulkan validation on or off. |
 | `FL_VK_HOST_COPY` | `1`, `0` | `auto` | Forces the Vulkan host-image-copy upload path on or off. |
 | `FL_VK_NO_PUSH_DESC` | `1`, `0` | `0` | Disables Vulkan push descriptors for testing. |

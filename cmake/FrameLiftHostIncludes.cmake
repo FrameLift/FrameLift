@@ -23,6 +23,7 @@ set(FRAMELIFT_HOST_MODULE_INCLUDE_DIRS
         "${FRAMELIFT_SOURCE_ROOT}/modules/host/audio"
         "${FRAMELIFT_SOURCE_ROOT}/modules/host/playback"
         "${FRAMELIFT_SOURCE_ROOT}/modules/host/frame-sampler"
+        "${FRAMELIFT_SOURCE_ROOT}/modules/host/ai"
         "${FRAMELIFT_SOURCE_ROOT}/modules/host/read-ahead"
         "${FRAMELIFT_SOURCE_ROOT}/modules/host/ui"
         "${FRAMELIFT_SOURCE_ROOT}/modules/platform/window-qt"

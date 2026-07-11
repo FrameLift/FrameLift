@@ -1,5 +1,8 @@
 #pragma once
 
+#if FRAMELIFT_MODULE_AI
+#include "AIService.h"
+#endif
 #include "FileDialogServiceImpl.h"
 #if FRAMELIFT_MODULE_FRAME_SAMPLER
 #include "FrameSamplerService.h"
@@ -123,6 +126,9 @@ private:
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
     std::unique_ptr<MediaStoreImpl> mediaStore_; // needs prefDir, so built in InitServices
+#if FRAMELIFT_MODULE_AI
+    std::unique_ptr<AIService> aiService_;
+#endif
 #if FRAMELIFT_MODULE_FRAME_SAMPLER
     // Off-playback FFmpeg frame decode for indexing/analysis plugins (IFrameSampler).
     std::unique_ptr<FrameSamplerService> frameSampler_;
