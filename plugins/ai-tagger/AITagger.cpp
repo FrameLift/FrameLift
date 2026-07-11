@@ -31,6 +31,25 @@ int CopyOut(const std::string& s, char* buf, int cap) noexcept
     }
     return len;
 }
+
+// Human-readable reason a file was not enqueued (for the "nothing to tag" logs).
+const char* SkipReason(AITagger::JobSkip why)
+{
+    switch (why)
+    {
+    case AITagger::JobSkip::NoStore:
+        return "tag store unavailable";
+    case AITagger::JobSkip::NoRule:
+        return "no folder rule covers it";
+    case AITagger::JobSkip::NoQuestions:
+        return "the matching rule has no questions";
+    case AITagger::JobSkip::ModelMissing:
+        return "the rule's model is not installed";
+    case AITagger::JobSkip::None:
+        break;
+    }
+    return "no untagged files";
+}
 } // namespace
 
 AITagger::AITagger()
@@ -233,20 +252,31 @@ bool AITagger::ResolveModel(const std::string& modelId, aitagger::ModelSpec& spe
     return true;
 }
 
-bool AITagger::BuildJob(const std::string& path, aitagger::TagJob& job) const
+bool AITagger::BuildJob(const std::string& path, aitagger::TagJob& job, JobSkip& why) const
 {
+    why = JobSkip::None;
     if (!store_)
     {
+        why = JobSkip::NoStore;
         return false;
     }
     aitagger::TagRule rule;
-    if (!store_->RuleForFile(path, rule) || rule.entries.empty())
+    if (!store_->RuleForFile(path, rule))
     {
+        why = JobSkip::NoRule;
+        Log::Debug("AITagger: no rule covers {}", path);
+        return false;
+    }
+    if (rule.entries.empty())
+    {
+        why = JobSkip::NoQuestions;
+        Log::Debug("AITagger: rule '{}' has no questions; skipping {}", rule.folder, path);
         return false;
     }
     aitagger::ModelSpec spec;
     if (!ResolveModel(rule.modelId, spec))
     {
+        why = JobSkip::ModelMissing;
         Log::Warn("AITagger: model '{}' not installed; skipping {}", rule.modelId, path);
         return false;
     }
@@ -261,50 +291,101 @@ bool AITagger::BuildJob(const std::string& path, aitagger::TagJob& job) const
 
 void AITagger::tagFile(const QString& path)
 {
+    const std::string p = path.toStdString();
+    Log::Debug("AITagger: Tag file — {}", p);
     if (!worker_)
     {
+        Log::Warn("AITagger: worker unavailable; cannot tag {}", p);
         return;
     }
     aitagger::TagJob job;
-    if (BuildJob(path.toStdString(), job))
+    JobSkip why = JobSkip::None;
+    if (BuildJob(p, job, why))
     {
+        Log::Debug("AITagger: queued {}", p);
         worker_->Start({std::move(job)});
         Q_EMIT progressChanged();
+        return;
     }
+    Log::Warn("AITagger: nothing to tag for {} ({})", p, SkipReason(why));
 }
 
 void AITagger::tagFolder(const QString& dir)
 {
+    const std::string dirStr = dir.toStdString();
+    Log::Debug("AITagger: Tag now — scanning {}", dirStr);
     if (!worker_)
     {
+        Log::Warn("AITagger: worker unavailable; cannot tag {}", dirStr);
         return;
     }
     static const QStringList kVideoGlobs = {"*.mp4", "*.mkv",  "*.avi", "*.mov", "*.wmv",
                                             "*.flv", "*.webm", "*.m4v", "*.mpg", "*.mpeg"};
     std::vector<aitagger::TagJob> jobs;
+    int scanned = 0;
+    int alreadyTagged = 0;
+    int noRule = 0;
+    int noQuestions = 0;
+    int modelMissing = 0;
     QDirIterator it(dir, kVideoGlobs, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext())
     {
         const QString file = it.next();
         const std::string path = file.toStdString();
         const QFileInfo fi(file);
+        ++scanned;
         if (!store_->NeedsTagging(
                 path, static_cast<long long>(fi.lastModified().toSecsSinceEpoch()), static_cast<long long>(fi.size())
             ))
         {
+            ++alreadyTagged;
             continue;
         }
         aitagger::TagJob job;
-        if (BuildJob(path, job))
+        JobSkip why = JobSkip::None;
+        if (BuildJob(path, job, why))
         {
             jobs.push_back(std::move(job));
+            continue;
+        }
+        switch (why)
+        {
+        case JobSkip::NoRule:
+            ++noRule;
+            break;
+        case JobSkip::NoQuestions:
+            ++noQuestions;
+            break;
+        case JobSkip::ModelMissing:
+            ++modelMissing;
+            break;
+        default:
+            break;
         }
     }
-    if (!jobs.empty())
+
+    Log::Debug(
+        "AITagger: {} — {} video(s) scanned, {} already tagged, {} no-rule, {} no-questions, {} model-missing, {} "
+        "queued",
+        dirStr, scanned, alreadyTagged, noRule, noQuestions, modelMissing, jobs.size()
+    );
+
+    if (jobs.empty())
     {
-        worker_->Start(std::move(jobs));
-        Q_EMIT progressChanged();
+        // Name the most useful reason so it's visible without debug logging.
+        const char* reason = scanned == 0               ? "no video files found under the folder"
+                             : modelMissing > 0         ? "the rule's model is not installed"
+                             : noQuestions > 0          ? "the matching rule has no questions"
+                             : noRule > 0               ? "no folder rule covers these files"
+                             : alreadyTagged == scanned ? "all files are already tagged"
+                                                        : "nothing to tag";
+        Log::Warn("AITagger: nothing queued for {} ({})", dirStr, reason);
+        return;
     }
+
+    Log::Debug("AITagger: starting run — {} file(s)", jobs.size());
+    worker_->Start(std::move(jobs));
+    Q_EMIT progressChanged();
 }
 
 void AITagger::cancel()

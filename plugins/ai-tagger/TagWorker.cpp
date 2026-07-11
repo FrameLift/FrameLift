@@ -134,12 +134,14 @@ void TagWorker::RunJobs(const std::shared_ptr<Shared>& sh, std::vector<TagJob> j
     std::unique_ptr<IInferenceBackend> backend = sh->factory();
     std::string loadedModel;
 
+    const int total = static_cast<int>(jobs.size());
     {
         std::lock_guard lk(sh->mtx);
         sh->progress = TagProgress{};
         sh->progress.running = true;
-        sh->progress.filesTotal = static_cast<int>(jobs.size());
+        sh->progress.filesTotal = total;
     }
+    Log::Debug("AITagger: tagging run started (gen {}) — {} file(s)", gen, total);
 
     int lastThrottle = -999;
     int done = 0;
@@ -154,6 +156,7 @@ void TagWorker::RunJobs(const std::shared_ptr<Shared>& sh, std::vector<TagJob> j
             std::lock_guard lk(sh->mtx);
             sh->progress.currentFile = job.path;
         }
+        Log::Debug("AITagger: [{}/{}] tagging {} (model {})", done + 1, total, job.path, job.model.modelId);
 
         // (Re)load the model only when it changes across jobs.
         if (backend && loadedModel != job.model.modelPath)
@@ -167,6 +170,7 @@ void TagWorker::RunJobs(const std::shared_ptr<Shared>& sh, std::vector<TagJob> j
             else
             {
                 loadedModel = job.model.modelPath;
+                Log::Debug("AITagger: loaded model {}", job.model.modelPath);
             }
         }
 
@@ -210,6 +214,10 @@ void TagWorker::RunJobs(const std::shared_ptr<Shared>& sh, std::vector<TagJob> j
     {
         backend->UnloadModel();
     }
+    const bool cancelled = sh->cancel.load();
+    Log::Debug(
+        "AITagger: tagging run finished (gen {}) — {}/{} file(s){}", gen, done, total, cancelled ? " (cancelled)" : ""
+    );
     {
         std::lock_guard lk(sh->mtx);
         sh->progress.running = false;
@@ -227,12 +235,14 @@ int TagWorker::TagOneFile(const std::shared_ptr<Shared>& sh, IInferenceBackend* 
     IFrameSampler* sampler = sh->sampler;
     if (!sampler)
     {
+        Log::Warn("AITagger: no frame sampler available; cannot tag {}", job.path);
         status = kStatusError;
         return 0;
     }
     void* session = sampler->Open(job.path.c_str());
     if (!session)
     {
+        Log::Warn("AITagger: failed to open {} for frame sampling", job.path);
         status = kStatusError;
         return 0;
     }
@@ -259,6 +269,10 @@ int TagWorker::TagOneFile(const std::shared_ptr<Shared>& sh, IInferenceBackend* 
 
     ConvergenceTracker tracker(thresholds, ConvergenceTracker::Params{});
     const SamplePlan plan = BuildSamplePlan(duration, job.frameBudget);
+    Log::Debug(
+        "AITagger: {} — {}x{} native, {:.1f}s, {} question(s), {} frame(s) planned (budget {})", job.path, nativeW,
+        nativeH, duration, questions.size(), plan.timestamps.size(), job.frameBudget
+    );
 
     std::vector<std::uint8_t> buf(static_cast<std::size_t>(bufW) * bufH * 4);
     std::vector<float> yesProb;
@@ -314,6 +328,7 @@ int TagWorker::TagOneFile(const std::shared_ptr<Shared>& sh, IInferenceBackend* 
         genStart = genEnd;
         if (tracker.AllSettled())
         {
+            Log::Debug("AITagger: {} converged early after {} frame(s)", job.path, framesDone);
             break;
         }
     }
@@ -330,6 +345,19 @@ int TagWorker::TagOneFile(const std::shared_ptr<Shared>& sh, IInferenceBackend* 
         r.present = r.confidence >= thresholds[q];
         results.push_back(std::move(r));
     }
+
+    int presentCount = 0;
+    for (const TagResult& r : results)
+    {
+        if (r.present)
+        {
+            ++presentCount;
+        }
+    }
+    Log::Debug(
+        "AITagger: {} done — {} frame(s) sampled, {}/{} tag(s) present", job.path, framesDone, presentCount,
+        results.size()
+    );
 
     if (sh->store)
     {
