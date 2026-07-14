@@ -16,7 +16,10 @@
 // core playback actions (Open File, Play/Pause, Fullscreen, Audio, Subtitles,
 // Quit) live in QML. Peer plugin sections are assembled lazily, so the final order is
 // host core items → plugin sections → Quit, matching the former host-built menu.
-class ContextMenuModule final : public QObject, public ModuleBase, public ContextMenu
+class ContextMenuModule final : public QObject,
+                                public ModuleBase,
+                                public ContextMenu,
+                                public IContextMenuSubmenuRegistry
 {
     Q_OBJECT
     Q_PROPERTY(QVariantList extraItems READ QmlExtraItems NOTIFY menuChanged)
@@ -47,6 +50,11 @@ public:
     }
 
     void AddSectionRaw(void (*builder)(ContextMenu&, void*), void* ud, void (*cleanup)(void*)) noexcept override;
+
+    // ── IContextMenuSubmenuRegistry service ABI ──────────────────────────────
+    void AddSubmenuSectionRaw(
+        const char* label, void (*builder)(ContextMenu&, void*), void* ud, void (*cleanup)(void*)
+    ) noexcept override;
 
     [[nodiscard]] QVariantList QmlExtraItems();
 
@@ -90,7 +98,7 @@ public:
     Q_INVOKABLE void toggleSubtitles();
     Q_INVOKABLE void selectAudioTrack(qint64 id);
     Q_INVOKABLE void selectSubtitleTrack(qint64 id);
-    Q_INVOKABLE void invokeExtra(int index);
+    Q_INVOKABLE void invokeExtra(int actionId);
     Q_INVOKABLE void quit();
 
 Q_SIGNALS:
@@ -108,6 +116,8 @@ protected:
     void HandleShutdown() override;
 
 private:
+    friend class ContextMenuTest;
+
     struct Item
     {
         std::string label;
@@ -115,12 +125,14 @@ private:
         void (*action)(void*) = nullptr;
         void* ud = nullptr;
         void (*cleanup)(void*) = nullptr;
-        std::vector<Item> children; // for static sub-menus (not used by public API)
-        bool core = false;          // host playback action (rendered by QML, excluded from extraItems)
+        std::vector<Item> children;
+        int actionId = -1; // stable QML invocation id, including nested actions
+        bool core = false; // host playback action (rendered by QML, excluded from extraItems)
     };
 
     struct Section
     {
+        std::string submenuLabel; // empty for an ordinary flat section
         void (*builder)(ContextMenu&, void*) = nullptr;
         void* ud = nullptr;
         void (*cleanup)(void*) = nullptr;
@@ -134,6 +146,10 @@ private:
     // First-frame assembly: host core items, then plugin sections, then Quit.
     void Assemble();
     void BuildCoreItems();
+    [[nodiscard]] std::vector<Item>& CurrentItems();
+    [[nodiscard]] QVariantList ProjectItems(const std::vector<Item>& items, bool topLevel) const;
+    [[nodiscard]] static Item* FindAction(std::vector<Item>& items, int actionId);
+    static void CleanupItems(std::vector<Item>& items);
 
     // ── Actions ported from the former host App::BuildContextMenu() ─────────────
     void OpenFileAction();
@@ -143,6 +159,8 @@ private:
 
     std::vector<Item> items_;
     std::vector<Section> sections_;
+    std::vector<Item>* buildingItems_ = nullptr;
+    int nextActionId_ = 0;
     Hotkeys* keys_ = nullptr;
 
     IMediaPlayback* playback_ = nullptr;    // transport (pause)

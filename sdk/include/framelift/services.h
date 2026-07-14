@@ -9,6 +9,7 @@
 #include <framelift/services/IAIModelManager.h>
 #include <framelift/services/IAppPaths.h>
 #include <framelift/services/ICommandRegistry.h>
+#include <framelift/services/IContextMenuSubmenuRegistry.h>
 #include <framelift/services/IFrameSampler.h>
 #include <framelift/services/IHistory.h>
 #include <framelift/services/IJson.h>

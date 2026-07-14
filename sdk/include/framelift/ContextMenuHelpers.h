@@ -2,6 +2,7 @@
 
 #include <framelift/ContextMenu.h>
 #include <framelift/Guard.h>
+#include <framelift/services/IContextMenuSubmenuRegistry.h>
 #include <functional>
 #include <string>
 #include <utility>
@@ -100,6 +101,33 @@ inline void AddSection(ContextMenu& menu, BuilderFn&& builder)
     };
 
     menu.AddSectionRaw(C::build, new C{std::forward<BuilderFn>(builder)}, C::cleanup);
+}
+
+template <typename BuilderFn>
+inline void AddSubmenuSection(IContextMenuSubmenuRegistry& registry, const char* label, BuilderFn&& builder)
+{
+    struct C
+    {
+        std::function<void(ContextMenu&)> fn;
+
+        static void build(ContextMenu& menu, void* ud)
+        {
+            Guard(
+                "context-menu submenu section",
+                [&]
+                {
+                    static_cast<C*>(ud)->fn(menu);
+                }
+            );
+        }
+
+        static void cleanup(void* ud)
+        {
+            delete static_cast<C*>(ud);
+        }
+    };
+
+    registry.AddSubmenuSectionRaw(label, C::build, new C{std::forward<BuilderFn>(builder)}, C::cleanup);
 }
 
 } // namespace framelift
