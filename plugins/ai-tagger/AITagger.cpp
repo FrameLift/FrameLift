@@ -121,10 +121,10 @@ void AITagger::OnInstall(IModuleContext& ctx)
         );
     }
 
-    if (auto* menu = ctx.GetService<ContextMenu>())
+    if (auto* submenus = ctx.GetService<IContextMenuSubmenuRegistry>())
     {
-        framelift::AddSection(
-            *menu,
+        framelift::AddSubmenuSection(
+            *submenus, "Tagger",
             [this](ContextMenu& m)
             {
                 framelift::AddItem(

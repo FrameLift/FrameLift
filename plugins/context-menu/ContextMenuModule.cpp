@@ -13,11 +13,21 @@
 
 // ── ContextMenu service ABI (storage) ───────────────────────────────────────────
 
+std::vector<ContextMenuModule::Item>& ContextMenuModule::CurrentItems()
+{
+    return buildingItems_ ? *buildingItems_ : items_;
+}
+
 void ContextMenuModule::AddItemRaw(const char* label, void (*action)(void*), void* ud, void (*cleanup)(void*)) noexcept
 {
-    Item item{label ? label : "", {}, action, ud, cleanup};
+    Item item;
+    item.label = label ? label : "";
+    item.action = action;
+    item.ud = ud;
+    item.cleanup = cleanup;
+    item.actionId = action ? nextActionId_++ : -1;
     item.core = buildingCore_;
-    items_.push_back(std::move(item));
+    CurrentItems().push_back(std::move(item));
     Q_EMIT menuChanged();
 }
 
@@ -25,21 +35,34 @@ void ContextMenuModule::AddItemWithHotkeyRaw(
     const char* label, const char* hotkey, void (*action)(void*), void* ud, void (*cleanup)(void*)
 ) noexcept
 {
-    Item item{label ? label : "", hotkey ? hotkey : "", action, ud, cleanup};
+    Item item;
+    item.label = label ? label : "";
+    item.hotkeyName = hotkey ? hotkey : "";
+    item.action = action;
+    item.ud = ud;
+    item.cleanup = cleanup;
+    item.actionId = action ? nextActionId_++ : -1;
     item.core = buildingCore_;
-    items_.push_back(std::move(item));
+    CurrentItems().push_back(std::move(item));
     Q_EMIT menuChanged();
 }
 
 void ContextMenuModule::AddSeparator() noexcept
 {
-    items_.push_back({}); // empty label = separator
+    CurrentItems().emplace_back(); // empty label = separator
     Q_EMIT menuChanged();
 }
 
 void ContextMenuModule::AddSectionRaw(void (*builder)(ContextMenu&, void*), void* ud, void (*cleanup)(void*)) noexcept
 {
-    sections_.push_back({builder, ud, cleanup});
+    sections_.push_back({{}, builder, ud, cleanup});
+}
+
+void ContextMenuModule::AddSubmenuSectionRaw(
+    const char* label, void (*builder)(ContextMenu&, void*), void* ud, void (*cleanup)(void*)
+) noexcept
+{
+    sections_.push_back({label ? label : "", builder, ud, cleanup});
 }
 
 void ContextMenuModule::EmitSections()
@@ -48,21 +71,40 @@ void ContextMenuModule::EmitSections()
     {
         if (section.builder)
         {
+            if (section.submenuLabel.empty())
+            {
+                section.builder(*this, section.ud);
+                continue;
+            }
+
+            Item submenu;
+            submenu.label = section.submenuLabel;
+            items_.push_back(std::move(submenu));
+
+            std::vector<Item>* previous = buildingItems_;
+            buildingItems_ = &items_.back().children;
             section.builder(*this, section.ud);
+            buildingItems_ = previous;
         }
     }
 }
 
-void ContextMenuModule::Clear() noexcept
+void ContextMenuModule::CleanupItems(std::vector<Item>& items)
 {
-    for (auto& item : items_)
+    for (auto& item : items)
     {
+        CleanupItems(item.children);
         if (item.cleanup)
         {
             item.cleanup(item.ud);
         }
     }
-    items_.clear();
+    items.clear();
+}
+
+void ContextMenuModule::Clear() noexcept
+{
+    CleanupItems(items_);
 
     for (auto& section : sections_)
     {
@@ -72,6 +114,8 @@ void ContextMenuModule::Clear() noexcept
         }
     }
     sections_.clear();
+    buildingItems_ = nullptr;
+    nextActionId_ = 0;
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────────
@@ -101,6 +145,7 @@ void ContextMenuModule::OnInstall(IModuleContext& ctx)
     // own OnInstall(). This plugin is listed first in the enabled set, so the
     // service is live before any consumer installs.
     ctx.RegisterService<ContextMenu>(this);
+    ctx.RegisterService<IContextMenuSubmenuRegistry>(this);
 
     // Invalidate the QmlExtraItems cache on every change to the menu projection.
     QObject::connect(
@@ -164,6 +209,39 @@ void ContextMenuModule::HandleMediaEvent(const MediaEvent& e)
     }
 }
 
+QVariantList ContextMenuModule::ProjectItems(const std::vector<Item>& items, const bool topLevel) const
+{
+    QVariantList result;
+    for (const Item& item : items)
+    {
+        if ((topLevel && item.core) || (!item.action && item.children.empty()))
+        {
+            continue; // core rows and separators are rendered elsewhere in QML
+        }
+
+        QVariantMap row;
+        row.insert(QStringLiteral("label"), QString::fromStdString(item.label));
+        if (!item.children.empty())
+        {
+            const QVariantList children = ProjectItems(item.children, false);
+            if (children.isEmpty())
+            {
+                continue;
+            }
+            row.insert(QStringLiteral("kind"), QStringLiteral("submenu"));
+            row.insert(QStringLiteral("children"), children);
+        }
+        else
+        {
+            row.insert(QStringLiteral("kind"), QStringLiteral("action"));
+            row.insert(QStringLiteral("hotkey"), QString::fromStdString(ShortcutFor(item.hotkeyName)));
+            row.insert(QStringLiteral("actionId"), item.actionId);
+        }
+        result.push_back(row);
+    }
+    return result;
+}
+
 QVariantList ContextMenuModule::QmlExtraItems()
 {
     // The menu is assembled once via a deferred single-shot in OnInstall(); this
@@ -172,21 +250,7 @@ QVariantList ContextMenuModule::QmlExtraItems()
     {
         return extraItemsCache_;
     }
-    QVariantList result;
-    for (int i = 0; i < static_cast<int>(items_.size()); ++i)
-    {
-        const Item& item = items_[i];
-        if (!item.action || item.core)
-        {
-            continue; // separators and host core actions are rendered by QML, not here
-        }
-        QVariantMap row;
-        row.insert(QStringLiteral("label"), QString::fromStdString(item.label));
-        row.insert(QStringLiteral("hotkey"), QString::fromStdString(ShortcutFor(item.hotkeyName)));
-        row.insert(QStringLiteral("index"), i);
-        result.push_back(row);
-    }
-    extraItemsCache_ = std::move(result);
+    extraItemsCache_ = ProjectItems(items_, true);
     extraItemsCacheDirty_ = false;
     return extraItemsCache_;
 }
@@ -308,11 +372,27 @@ void ContextMenuModule::toggleSubtitles()
     }
 }
 
-void ContextMenuModule::invokeExtra(const int index)
+ContextMenuModule::Item* ContextMenuModule::FindAction(std::vector<Item>& items, const int actionId)
 {
-    if (index >= 0 && index < static_cast<int>(items_.size()) && items_[index].action)
+    for (Item& item : items)
     {
-        items_[index].action(items_[index].ud);
+        if (item.actionId == actionId && item.action)
+        {
+            return &item;
+        }
+        if (Item* child = FindAction(item.children, actionId))
+        {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+void ContextMenuModule::invokeExtra(const int actionId)
+{
+    if (Item* item = FindAction(items_, actionId))
+    {
+        item->action(item->ud);
     }
 }
 

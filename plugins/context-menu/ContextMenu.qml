@@ -3,12 +3,14 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Qt.labs.qmlmodels
 import FrameLift.Controls
 
 Item {
     id: root
     required property var viewModel
     property var vm: viewModel
+    property var insertedSubmenus: []
     anchors.fill: parent
 
     MouseArea {
@@ -208,14 +210,58 @@ Item {
         Instantiator {
             id: extras
             model: root.vm !== null ? root.vm.extraItems : []
-            delegate: Item_ {
-                required property var modelData
-                text: modelData.label
-                shortcut: modelData.hotkey
-                onTriggered: root.vm.invokeExtra(modelData.index)
+            delegate: DelegateChooser {
+                role: "kind"
+
+                DelegateChoice {
+                    roleValue: "action"
+                    delegate: Item_ {
+                        required property var modelData
+                        text: modelData.label
+                        shortcut: modelData.hotkey
+                        onTriggered: root.vm.invokeExtra(modelData.actionId)
+                    }
+                }
+
+                DelegateChoice {
+                    roleValue: "submenu"
+                    delegate: ThemedMenu {
+                        id: dynamicMenu
+                        required property var modelData
+                        title: modelData.label
+
+                        Instantiator {
+                            model: dynamicMenu.modelData.children
+                            delegate: Item_ {
+                                required property var modelData
+                                text: modelData.label
+                                shortcut: modelData.hotkey
+                                onTriggered: root.vm.invokeExtra(modelData.actionId)
+                            }
+                            onObjectAdded: (index, object) => dynamicMenu.insertItem(index, object)
+                            onObjectRemoved: (index, object) => dynamicMenu.removeItem(object)
+                        }
+                    }
+                }
             }
-            onObjectAdded: (index, object) => menu.insertItem(root.indexOfItem(extrasAnchor) + 1 + index, object)
-            onObjectRemoved: (index, object) => menu.removeItem(object)
+            onObjectAdded: (index, object) => {
+                const position = root.indexOfItem(extrasAnchor) + 1 + index
+                if (extras.model[index].kind === "submenu") {
+                    root.insertedSubmenus.push(object)
+                    menu.insertMenu(position, object)
+                } else {
+                    menu.insertItem(position, object)
+                }
+            }
+            onObjectRemoved: (index, object) => {
+                const submenuIndex = root.insertedSubmenus.indexOf(object)
+                if (submenuIndex !== -1) {
+                    menu.removeMenu(object)
+                    root.insertedSubmenus.splice(submenuIndex, 1)
+                } else {
+                    menu.removeItem(object)
+                }
+            }
         }
     }
 }

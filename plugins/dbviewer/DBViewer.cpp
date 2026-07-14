@@ -30,24 +30,6 @@ void DBViewer::OnInstall(IModuleContext& ctx)
     {
         SetMediaStore(ctx.GetService<IMediaStore>());
     }
-
-    if (auto* menu = ctx.GetService<ContextMenu>())
-    {
-        framelift::AddSection(
-            *menu,
-            [this](ContextMenu& m)
-            {
-                m.AddSeparator();
-                framelift::AddItem(
-                    m, "Database Viewer", "toggleDbViewer",
-                    [this]
-                    {
-                        togglePanel();
-                    }
-                );
-            }
-        );
-    }
 }
 
 bool DBViewer::HandleKeyDownEvent(const AppEvent& e)
