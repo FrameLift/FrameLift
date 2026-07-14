@@ -19,7 +19,8 @@ struct QmlViewSpec
 };
 
 // Loads plugin-owned QML components into one engine and parents their root items
-// over the video scene-graph item. A broken component is isolated to its plugin.
+// to an inset viewport over the video scene-graph item. A broken component is
+// isolated to its plugin.
 class QmlCompositor final
 {
 public:
@@ -42,7 +43,10 @@ private:
     };
 
     QQuickItem* root_ = nullptr;
+    QQuickItem* viewport_ = nullptr;
     std::unique_ptr<QQmlEngine> engine_;
     std::vector<LoadedView> views_;
     qreal topInset_ = 0.0;
+
+    void SyncViewportGeometry();
 };
