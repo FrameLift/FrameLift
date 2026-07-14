@@ -300,6 +300,7 @@ add_framelift_plugin_test(framelift_test_playlist
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/SettingsService.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
+target_link_libraries(framelift_test_playlist PRIVATE Qt6::Qml)
 
 add_framelift_plugin_test(framelift_test_settingsmenu
         plugins/settings-menu/SettingsMenuTests.cpp

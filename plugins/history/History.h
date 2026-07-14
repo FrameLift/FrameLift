@@ -20,6 +20,7 @@ class History : public QObject, public ModuleBase, public IHistory
     Q_OBJECT
     Q_PROPERTY(bool open READ IsOpen NOTIFY panelStateChanged)
     Q_PROPERTY(QString search READ Search WRITE SetSearch NOTIFY historyChanged)
+    Q_PROPERTY(int totalCount READ TotalCount NOTIFY historyChanged)
     Q_PROPERTY(QVariantList entries READ QmlEntries NOTIFY historyChanged)
 
 public:
@@ -48,6 +49,12 @@ public:
     }
 
     void SetSearch(const QString& value);
+
+    [[nodiscard]] int TotalCount() const
+    {
+        return static_cast<int>(entries_.size());
+    }
+
     [[nodiscard]] QVariantList QmlEntries() const;
     Q_INVOKABLE void togglePanel();
     Q_INVOKABLE void activateIndex(int filteredIndex);
@@ -93,13 +100,13 @@ private:
         std::string playbackDate; // derived from column last_played_utc — local "%Y-%m-%d %H:%M:%S"
         // Cached display strings, recomputed only on mutation (not per frame) — the
         // panel renders every frame, so per-row path parsing/formatting would be hot.
-        std::string dir;  // parent directory of path
-        std::string meta; // "<playbackDate>  ·  <resume position>"
+        std::string dir;        // parent directory of path
+        std::string resumeText; // formatted resume position
     };
 
     // Extract the filename component of a path for use as a display label.
     static std::string FilenameOf(const std::string& path);
-    // Refresh an entry's cached display strings (dir, meta) from its path/pos/date.
+    // Refresh an entry's cached display strings from its path and resume position.
     static void FormatEntry(Entry& e);
     // Create/migrate the history_* tables (per-namespace schema versioning).
     void EnsureSchema();

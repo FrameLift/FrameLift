@@ -4,6 +4,7 @@
 
 #include "QtTestRunner.h"
 
+#include <QtCore/QVariantMap>
 #include <QtTest/QtTest>
 
 #include <filesystem>
@@ -100,6 +101,51 @@ private Q_SLOTS:
         h.AddEntry("/b.mp4");
         h.AddEntry("/a.mp4"); // dedup must preserve the saved resume position
         QCOMPARE(h.GetResumePos("/a.mp4"), 12.0);
+    }
+
+    void QmlEntriesSeparatePlayedAndResumeMetadata()
+    {
+        History h;
+        h.AddEntry("/movies/a.mp4");
+        h.UpdateResumePos("/movies/a.mp4", 65.0);
+
+        const QVariantList rows = h.QmlEntries();
+        QCOMPARE(rows.size(), 1);
+        const QVariantMap row = rows.front().toMap();
+        QCOMPARE(row.value("label").toString(), QStringLiteral("a.mp4"));
+        QCOMPARE(row.value("directory").toString(), QStringLiteral("/movies"));
+        QVERIFY(!row.value("playedAt").toString().isEmpty());
+        QCOMPARE(row.value("resumeText").toString(), QStringLiteral("1:05"));
+        QVERIFY(!row.contains("meta"));
+    }
+
+    void SearchKeepsTotalCountSeparateFromResults()
+    {
+        History h;
+        h.AddEntry("/movies/alpha.mp4");
+        h.AddEntry("/shows/beta.mkv");
+        QCOMPARE(h.TotalCount(), 2);
+
+        h.SetSearch(QStringLiteral("MOVIES"));
+        QCOMPARE(h.QmlEntries().size(), 1);
+        QCOMPARE(h.TotalCount(), 2);
+
+        h.SetSearch(QString());
+        QCOMPARE(h.QmlEntries().size(), 2);
+        QCOMPARE(h.TotalCount(), 2);
+    }
+
+    void ClearAlsoResetsSearchState()
+    {
+        History h;
+        h.AddEntry("/movies/a.mp4");
+        h.SetSearch(QStringLiteral("missing"));
+
+        h.Clear();
+
+        QCOMPARE(h.TotalCount(), 0);
+        QVERIFY(h.Search().isEmpty());
+        QVERIFY(h.QmlEntries().isEmpty());
     }
 
     void CapsAtMaxEntries()

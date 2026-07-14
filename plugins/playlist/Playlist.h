@@ -6,6 +6,7 @@
 
 #include <QtCore/QFileSystemWatcher>
 #include <QtCore/QObject>
+#include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QVariantList>
 #include <atomic>
@@ -25,7 +26,11 @@ class Playlist : public QObject, public ModuleBase
     Q_PROPERTY(bool open READ IsOpen NOTIFY panelStateChanged)
     Q_PROPERTY(bool shuffleEnabled READ IsShuffleEnabled NOTIFY playlistChanged)
     Q_PROPERTY(bool sortByName READ IsSortByName NOTIFY playlistChanged)
-    Q_PROPERTY(int currentIndex READ Current NOTIFY playlistChanged)
+    Q_PROPERTY(bool scanning READ IsScanning NOTIFY scanStateChanged)
+    Q_PROPERTY(bool manualReloadRequired READ IsManualReloadRequired NOTIFY directoryWatchStateChanged)
+    Q_PROPERTY(QString search READ Search WRITE SetSearch NOTIFY playlistChanged)
+    Q_PROPERTY(int totalCount READ Count NOTIFY playlistChanged)
+    Q_PROPERTY(int currentIndex READ QmlCurrentIndex NOTIFY playlistChanged)
     Q_PROPERTY(QVariantList entries READ QmlEntries NOTIFY playlistChanged)
 
 public:
@@ -64,6 +69,13 @@ public:
         return current_;
     }
 
+    [[nodiscard]] QString Search() const
+    {
+        return QString::fromStdString(searchQuery_);
+    }
+
+    void SetSearch(const QString& value);
+    [[nodiscard]] int QmlCurrentIndex() const;
     [[nodiscard]] QVariantList QmlEntries() const;
 
     Q_INVOKABLE void togglePanel();
@@ -107,6 +119,16 @@ public:
         return open_;
     }
 
+    [[nodiscard]] bool IsScanning() const
+    {
+        return scanning_;
+    }
+
+    [[nodiscard]] bool IsManualReloadRequired() const
+    {
+        return manualReloadRequired_;
+    }
+
     void ApplySettings(
         bool scanSubdirs, int scanMaxDepth, bool mixedPlaylist, bool imageSlideshow, float slideshowDuration,
         bool autoReload, bool sortByName
@@ -127,6 +149,8 @@ protected:
 Q_SIGNALS:
     void playlistChanged();
     void panelStateChanged();
+    void scanStateChanged();
+    void directoryWatchStateChanged();
 
 private:
     struct Entry
@@ -156,12 +180,15 @@ private:
     std::vector<Entry> entries_;
     int current_ = -1; // index of the currently playing entry, or -1 if none
 
-    // ── Header counter cache ──────────────────────────────────────────────────
-    // "<current+1> / <total>", rebuilt only when current_ or the entry count
-    // changes — the panel renders every frame, so this avoids per-frame allocs.
-    std::string counterText_;
-    int counterCur_ = -2;          // current_ the cache was built for (-2 = unset)
-    std::size_t counterTotal_ = 0; // entries_.size() the cache was built for
+    // QML exposes a filtered projection while playback/navigation retain source
+    // indices into entries_. Activation maps filtered rows back through this list.
+    std::vector<int> filteredIndices_;
+    std::string searchQuery_;
+    void RebuildFilter();
+    // Keep the filtered source indices and cached QML rows coherent before
+    // playlistChanged reaches a synchronously reevaluated QML binding.
+    void NotifyProjectionChanged();
+    void NotifyRowsChanged();
 
     // ── Shuffle ─────────────────────────────────────────────────────
     bool shuffleEnabled_ = false;
@@ -185,6 +212,7 @@ private:
     QFileSystemWatcher dirWatcher_;
     void ArmDirectoryWatcher();
     void ClearDirectoryWatcher();
+    void SetManualReloadRequired(bool value);
 
     // ── Async directory scan ───────────────────────────────────────────────────
     // OpenFile() starts playback immediately and offloads the recursive directory
@@ -199,9 +227,9 @@ private:
         std::mutex mtx;
         std::vector<std::string> files;     // scanned paths (guarded by mtx)
         std::string dir;                    // directory that was scanned
-        std::string openedPath;             // file that triggered this scan
+        std::string keepPath;               // playing file to preserve through the rebuild
         uint64_t gen = 0;                   // generation of the published result
-        std::atomic<uint64_t> latestGen{0}; // newest OpenFile() generation
+        std::atomic<uint64_t> latestGen{0}; // newest open/reload scan generation
         bool ready = false;                 // a result is waiting to be applied
         std::atomic<bool> alive{true};      // cleared in ~Playlist
         IEventPump* events = nullptr;       // host service, app-lifetime
@@ -210,7 +238,8 @@ private:
 
     std::shared_ptr<ScanShared> scanShared_ = std::make_shared<ScanShared>();
     // Build scan parameters from settings and launch the worker (UI thread).
-    void StartScan(const std::string& path);
+    void StartScan(const std::string& dir, const std::string& keepPath);
+    void SetScanning(bool value);
 
     std::string currentFile_;
     double currentTimePos_ = 0.0; // most recent time-pos for the current file
@@ -224,6 +253,8 @@ private:
     bool autoReload_ = true;
     bool sortByName_ = false;
     bool open_ = false;
+    bool scanning_ = false;
+    bool manualReloadRequired_ = false;
     std::unique_ptr<PlaylistSettings> settingsPage_;
 
     std::string togglePlaylistKey_ = "L";
@@ -236,8 +267,8 @@ private:
 
     // ── QML entries cache ──────────────────────────────────────────────────────
     // QmlEntries() is read once per delegate realization; rebuilding the whole
-    // QVariantList each time is costly for long playlists. Cache it and invalidate
-    // whenever playlistChanged fires (the NOTIFY for the `entries` property).
+    // QVariantList each time is costly for long playlists. Mutation helpers
+    // invalidate it before playlistChanged reaches QML.
     mutable QVariantList entriesCache_;
     mutable bool entriesCacheDirty_ = true;
 

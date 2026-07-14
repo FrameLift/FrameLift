@@ -85,7 +85,7 @@ void History::FormatEntry(Entry& e)
     {
         std::snprintf(posBuf, sizeof(posBuf), "%d:%02d", m, s);
     }
-    e.meta = e.playbackDate + "  \xc2\xb7  " + posBuf;
+    e.resumeText = posBuf;
 }
 
 // ── ModuleBase hooks ───────────────────────────────────────────────────────
@@ -445,7 +445,7 @@ void History::UpdateResumePos(const char* path, const double pos) noexcept
         if (e.path == path)
         {
             e.resumePos = pos;
-            FormatEntry(e); // refresh cached meta string with the new position
+            FormatEntry(e); // refresh the cached resume string with the new position
             PersistResumePos(path, pos);
             Q_EMIT historyChanged();
             return;
@@ -494,7 +494,8 @@ QVariantList History::QmlEntries() const
         QVariantMap row;
         row.insert(QStringLiteral("label"), QString::fromStdString(entry.label));
         row.insert(QStringLiteral("directory"), QString::fromStdString(entry.dir));
-        row.insert(QStringLiteral("meta"), QString::fromStdString(entry.meta));
+        row.insert(QStringLiteral("playedAt"), QString::fromStdString(entry.playbackDate));
+        row.insert(QStringLiteral("resumeText"), QString::fromStdString(entry.resumeText));
         result.push_back(row);
     }
     entriesCache_ = std::move(result);

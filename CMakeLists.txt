@@ -156,6 +156,9 @@ set(_framelift_control_qml
         qml/FrameLift/Controls/FLGlassPanel.qml
         qml/FrameLift/Controls/FLActionButton.qml
         qml/FrameLift/Controls/FLDrawer.qml
+        qml/FrameLift/Controls/FLPanelAction.qml
+        qml/FrameLift/Controls/FLPanelHeader.qml
+        qml/FrameLift/Controls/FLListState.qml
         qml/FrameLift/Controls/FLConfirmDialog.qml
         qml/FrameLift/Controls/FLSettingsGroup.qml
         qml/FrameLift/Controls/FLSettingRow.qml
