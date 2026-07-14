@@ -1,6 +1,11 @@
 #include "QtTestRunner.h"
 
+#if defined(FRAMELIFT_TEST_GUI_APPLICATION)
+#include <QtCore/qtenvironmentvariables.h>
+#include <QtGui/QGuiApplication>
+#else
 #include <QtCore/QCoreApplication>
+#endif
 #include <QtCore/QMetaMethod>
 #include <QtCore/QStringList>
 #include <QtTest/QTest>
@@ -73,7 +78,14 @@ int RunSuite(const SuiteEntry& entry, const QString* caseName, int argc, char** 
 
 int RunRegisteredQtTests(int argc, char** argv)
 {
+#if defined(FRAMELIFT_TEST_GUI_APPLICATION)
+    // Qt Quick tests need a GUI application, but discovery and CI run without a
+    // display server. Set the platform before constructing QGuiApplication.
+    qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+    QGuiApplication app(argc, argv);
+#else
     QCoreApplication app(argc, argv);
+#endif
     const auto& suites = Registry::Instance().Suites();
 
     if (argc == 2 && QString::fromLatin1(argv[1]) == QStringLiteral("--framelift-list-tests"))

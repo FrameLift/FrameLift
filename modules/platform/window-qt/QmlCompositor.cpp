@@ -38,11 +38,41 @@ private:
 
 QmlCompositor::QmlCompositor(QQuickItem* root) : root_(root), engine_(std::make_unique<QQmlEngine>())
 {
+    if (!root_)
+    {
+        return;
+    }
+
+    // Plugin roots commonly use `anchors.fill: parent`. Parent them to a dedicated
+    // viewport so those anchors resolve against the usable area below the fallback
+    // title bar instead of overriding the compositor's inset against the window root.
+    viewport_ = new QQuickItem(root_);
+    viewport_->setParent(root_);
+    viewport_->setClip(true);
+    viewport_->setZ(1.0); // above the video item; the title bar remains at z=10000
+    SyncViewportGeometry();
+
+    QObject::connect(
+        root_, &QQuickItem::widthChanged, viewport_,
+        [this]
+        {
+            SyncViewportGeometry();
+        }
+    );
+    QObject::connect(
+        root_, &QQuickItem::heightChanged, viewport_,
+        [this]
+        {
+            SyncViewportGeometry();
+        }
+    );
 }
 
 QmlCompositor::~QmlCompositor()
 {
     Clear();
+    delete viewport_;
+    viewport_ = nullptr;
 }
 
 void QmlCompositor::Clear()
@@ -69,7 +99,7 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
 
     for (const QmlViewSpec& view : views)
     {
-        if (!root_ || !view.viewModel || view.sourceUrl.isEmpty())
+        if (!viewport_ || !view.viewModel || view.sourceUrl.isEmpty())
         {
             Log::Warn(
                 "QML '{}': skipped (root={}, viewModel={}, source='{}')", view.moduleId.toStdString(),
@@ -98,29 +128,24 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
             continue;
         }
 
-        item->setParentItem(root_);
-        item->setParent(root_);
-        // Plugin surfaces span the window minus the reserved top strip (the fallback
-        // title bar), so no plugin UI can end up under the opaque bar.
-        item->setPosition(QPointF(0, topInset_));
-        item->setSize(QSizeF(root_->width(), root_->height() - topInset_));
-        // The custom VideoItem is the first child of the window content item and
-        // occupies z=0. Keep every plugin surface strictly above it while retaining
-        // the plugin render-order relationship.
+        item->setParentItem(viewport_);
+        item->setParent(viewport_);
+        item->setPosition(QPointF(0, 0));
+        item->setSize(viewport_->size());
+        // Keep the plugin render-order relationship within the shared viewport.
         item->setZ(1.0 + static_cast<qreal>(view.order));
         QObject::connect(
-            root_, &QQuickItem::widthChanged, item,
-            [root = root_, item]
+            viewport_, &QQuickItem::widthChanged, item,
+            [viewport = viewport_, item]
             {
-                item->setWidth(root->width());
+                item->setWidth(viewport->width());
             }
         );
-        // Safe to capture this: the compositor owns the items and outlives them.
         QObject::connect(
-            root_, &QQuickItem::heightChanged, item,
-            [this, root = root_, item]
+            viewport_, &QQuickItem::heightChanged, item,
+            [viewport = viewport_, item]
             {
-                item->setHeight(root->height() - topInset_);
+                item->setHeight(viewport->height());
             }
         );
 
@@ -134,14 +159,25 @@ void QmlCompositor::Load(std::vector<QmlViewSpec> views)
 
 void QmlCompositor::SetTopInset(qreal inset)
 {
-    if (inset == topInset_)
+    const qreal clampedInset = std::max<qreal>(0.0, inset);
+    if (clampedInset == topInset_)
     {
         return;
     }
-    topInset_ = inset;
-    for (const LoadedView& view : views_)
+    topInset_ = clampedInset;
+    SyncViewportGeometry();
+}
+
+void QmlCompositor::SyncViewportGeometry()
+{
+    if (!root_ || !viewport_)
     {
-        view.item->setY(topInset_);
-        view.item->setHeight(root_->height() - topInset_);
+        return;
     }
+
+    const qreal rootWidth = std::max<qreal>(0.0, root_->width());
+    const qreal rootHeight = std::max<qreal>(0.0, root_->height());
+    const qreal effectiveInset = std::min(topInset_, rootHeight);
+    viewport_->setPosition(QPointF(0, effectiveInset));
+    viewport_->setSize(QSizeF(rootWidth, rootHeight - effectiveInset));
 }

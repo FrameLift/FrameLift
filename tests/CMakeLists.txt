@@ -15,7 +15,7 @@ endif ()
 
 # JSON — backs the host JsonServiceImpl (Qt6::Core QJson), compiled into the History
 # test so its persistence round-trips exercise the real backend.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test Sql)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Qml Quick Test Sql)
 
 enable_testing()
 find_package(Threads REQUIRED)
@@ -178,6 +178,26 @@ target_include_directories(framelift_test_ai_service PRIVATE
 target_link_libraries(framelift_test_ai_service PRIVATE Threads::Threads Qt6::Core Qt6::Network Qt6::Test)
 framelift_apply_coverage(framelift_test_ai_service)
 framelift_qt_discover_tests(framelift_test_ai_service)
+
+# QmlCompositor needs a QGuiApplication and Qt Quick to exercise plugin-root
+# anchors against the host-owned inset viewport. Keep it isolated from the
+# platform-independent suites so their QCoreApplication runner stays lean.
+add_executable(framelift_test_qml_compositor
+        unit/platform/QmlCompositorTests.cpp
+        ${FRAMELIFT_QT_TEST_RUNNER}
+        "${FRAMELIFT_ROOT}/modules/platform/window-qt/QmlCompositor.cpp"
+        "${FRAMELIFT_ROOT}/sdk/src/Log.cpp")
+set_target_properties(framelift_test_qml_compositor PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF AUTOMOC ON)
+target_compile_definitions(framelift_test_qml_compositor PRIVATE FRAMELIFT_TEST_GUI_APPLICATION)
+target_include_directories(framelift_test_qml_compositor PRIVATE
+        "${FRAMELIFT_ROOT}/sdk/include"
+        ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
+        "${FRAMELIFT_ROOT}/tests/support")
+target_link_libraries(framelift_test_qml_compositor PRIVATE
+        Threads::Threads Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+framelift_apply_coverage(framelift_test_qml_compositor)
+framelift_qt_discover_tests(framelift_test_qml_compositor)
 
 # ── Helper: one test exe per plugin ───────────────────────────────────────────
 # add_framelift_plugin_test(NAME [EMIT_MODULE_ENTRY] <test.cpp> <plugin.cpp> [extra .cpp]...)
