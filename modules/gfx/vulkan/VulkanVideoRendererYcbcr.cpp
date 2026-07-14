@@ -7,6 +7,8 @@
 
 #include <framelift/Log.h>
 
+#include <limits>
+#include <utility>
 #include <vector>
 
 // Zero-copy YCbCr sampling (#18): everything that touches the decoder's pooled
@@ -353,7 +355,7 @@ const VulkanVideoRenderer::FrameTex* VulkanVideoRenderer::EnsureFrameTexture(uin
 
 bool VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily)
 {
-    VkCommandBuffer cmd = backend_->FrameOpsCmd();
+    VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
     if (cmd == VK_NULL_HANDLE)
     {
         return false;
@@ -362,12 +364,11 @@ bool VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, u
     const uint32_t gfxFamily = backend_->GraphicsQueueFamily();
     const bool ownershipXfer = srcQueueFamily != VK_QUEUE_FAMILY_IGNORED && srcQueueFamily != gfxFamily;
 
-    // Acquire half of the decode→graphics hand-off. The timeline-semaphore wait on the
-    // submit (stage: FRAGMENT_SHADER) already orders this against the decode write and
-    // makes it visible, so the barrier's src scope chains off that same stage rather
-    // than blocking the whole pipe.
+    // QRhi attaches external waits at COLOR_ATTACHMENT_OUTPUT. Starting this barrier
+    // there and ending it at FRAGMENT_SHADER forms the dependency chain that prevents
+    // this image's sample from running ahead of the decoder→ready binary bridge.
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     b.srcAccessMask = VK_ACCESS_2_NONE;
     b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
@@ -386,55 +387,17 @@ bool VulkanVideoRenderer::RecordFrameTransition(uint64_t image, int oldLayout, u
 
 bool VulkanVideoRenderer::DrawVulkanFrame(int fbX, int fbY, int fbW, int fbH)
 {
-    VulkanFrameInfo info{};
-    if (!GetVulkanFrameInfo(vkFrame_, info) || !info.valid || info.image == 0)
-    {
-        vkFrame_ = nullptr; // not a usable Vulkan frame (e.g. multi-image fallback)
-        return false;
-    }
-    // The decoder can rebuild its hw-frames pool without a format change (seeks, stream
-    // switches); the cached views then dangle over destroyed images whose handle values
-    // the driver may reuse. Drop the cache whenever the pool identity changes.
-    if (info.framesContextId != framesContextId_)
-    {
-        InvalidateFrameTextures();
-        framesContextId_ = info.framesContextId;
-    }
-    if (!EnsureYcbcr(info.vkFormat, info.colorSpace, info.colorRange))
+    if (!vkPrepared_ || !backend_->FrameBridgeInstalled())
     {
         return false;
     }
-    const FrameTex* ft = EnsureFrameTexture(info.image);
-    if (!ft)
+    const VulkanFrameInfo& info = vkInfo_;
+    const auto texture = frameTextures_.find(info.image);
+    if (texture == frameTextures_.end())
     {
         return false;
     }
-
-    // The decoder always hands us a fresh frame in its decode layout, owned by the decode queue;
-    // only WE ever leave a frame in SHADER_READ_ONLY_OPTIMAL owned by the graphics queue (step 4
-    // below). So observing that state means this is a re-present of a frame we already prepared —
-    // the display is repainting an unchanged frame (paused, or video fps < display refresh). We
-    // hold a ref on the AVVkFrame, so the decoder cannot reuse/overwrite the image meanwhile, and
-    // same-queue ordering already serialises this sample after the previous one — so there is
-    // nothing to wait on. Re-running the decode→sample wait every such present is what pegged the
-    // graphics queue: each present's TOP_OF_PIPE wait self-chains onto the previous present's
-    // signal, which FIFO paces to vblank, so the queue sat blocked for most of every frame.
-    const bool alreadyPrepared = info.layout == static_cast<int>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) &&
-                                 info.queueFamily == backend_->GraphicsQueueFamily();
-
-    const auto frameSem = reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(info.semaphore));
-    if (!alreadyPrepared)
-    {
-        // 1. Record the decode→sample layout transition (+ queue-ownership acquire) into
-        //    the frame-ops command buffer (runs before Qt's scene-graph submit) and queue
-        //    the decode semaphore as a wait on that same batched submit.
-        if (!RecordFrameTransition(info.image, info.layout, info.queueFamily))
-        {
-            Log::Error("VulkanVideoRenderer: zero-copy transition record failed");
-            return false;
-        }
-        backend_->AddFrameOpsWait(frameSem, info.semValue, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
-    }
+    const FrameTex* ft = &texture->second;
 
     // 3. Draw the YCbCr image (conversion → RGB in the sampler), letterboxed within the
     //    caller's target rect (excludes the fallback title bar strip when present).
@@ -473,15 +436,5 @@ bool VulkanVideoRenderer::DrawVulkanFrame(int fbX, int fbY, int fbW, int fbH)
     }
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
-    // 4. Publish the post-sample state so FFmpeg/next consumer observes the right layout,
-    //    timeline value and owning queue family. Only on a freshly prepared frame — a re-present
-    //    neither transitioned the image nor advanced the timeline, so its state already stands.
-    if (!alreadyPrepared)
-    {
-        backend_->QueueFrameSignal(frameSem, info.semValue + 1);
-        SetVulkanFrameState(
-            vkFrame_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, info.semValue + 1, backend_->GraphicsQueueFamily()
-        );
-    }
     return true;
 }

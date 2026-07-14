@@ -97,7 +97,10 @@ include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftDeps.cmake")
 # open-file picker.
 # Sql backs the host IMediaStore service (modules/host/services/MediaStoreImpl) over
 # the bundled QSQLITE driver; plugins never link a database library themselves.
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets Sql)
+find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia Widgets Sql)
+if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
+    find_package(Qt6 6.9 REQUIRED COMPONENTS GuiPrivate)
+endif ()
 if (FRAMELIFT_MODULE_AI)
     find_package(Qt6 REQUIRED COMPONENTS Network)
 endif ()

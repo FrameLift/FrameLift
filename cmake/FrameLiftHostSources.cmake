@@ -189,11 +189,13 @@ set(_FRAMELIFT_HOST_GRAPHICS_VULKAN_SOURCES
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanColorMapping.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanDeviceInfo.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanDeviceSelect.h"
+        "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanFrameBridgeState.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanGraphicsBackend.cpp"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanGraphicsBackend.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanQueueLock.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanRetireQueue.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanTextureRing.h"
+        "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanTimelineSignalState.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanUploadPolicy.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanUtil.h"
         "${CMAKE_SOURCE_DIR}/modules/gfx/vulkan/VulkanVideoRenderer.cpp"
@@ -294,7 +296,7 @@ if (FRAMELIFT_MODULE_GRAPHICS_VULKAN)
             ${_FRAMELIFT_HOST_GRAPHICS_VULKAN_SOURCES} "${FL_VIDEO_VERT_SPV}" "${FL_VIDEO_FRAG_SPV}" "${FL_VIDEO_YUV_FRAG_SPV}")
     target_include_directories(framelift_mod_graphics_vulkan PRIVATE "${FRAMELIFT_SHADER_GEN_DIR}")
     target_link_libraries(framelift_mod_graphics_vulkan PRIVATE
-            Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+            Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator Qt6::GuiPrivate)
 endif ()
 
 if (FRAMELIFT_MODULE_WIN_SHELL)

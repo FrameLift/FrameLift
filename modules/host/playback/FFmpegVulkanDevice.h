@@ -15,14 +15,54 @@ struct AVBufferRef;
 // to release), or nullptr on failure.
 AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info);
 
-// Read the primary image handle + timeline-sync state of a decoded Vulkan frame
-// (`avFrame` is an AVFrame* whose data[0] is an AVVkFrame). Takes the frame lock around
-// the read. Returns false if `avFrame` is not an AV_PIX_FMT_VULKAN frame. The renderer
-// uses the result to build a view, barrier the image, and register the wait with the
-// backend's queue submission.
-bool GetVulkanFrameInfo(void* avFrame, VulkanFrameInfo& out);
+// Stable identity of the underlying AVVkFrame, shared by cloned AVFrame references.
+// Used only to reject duplicate presentation of an already locked in-flight image.
+void* GetVulkanFrameIdentity(void* avFrame) noexcept;
 
-// Write back the image's post-sample state (layout / incremented timeline value / owning
-// queue family) so FFmpeg and the next consumer observe correct state. Called by the
-// renderer after it has recorded the sample and computed the signal value.
-void SetVulkanFrameState(void* avFrame, int newLayout, unsigned long long newSemValue, unsigned int newQueueFamily);
+// Movable ownership of an AVVkFrame's lock. The renderer keeps this alive from its
+// state snapshot through Qt's queue submission, preventing FFmpeg from scheduling the
+// same image's next decode/DPB use before our completion signal is queued.
+class LockedVulkanFrame
+{
+public:
+    LockedVulkanFrame() = default;
+    ~LockedVulkanFrame();
+
+    LockedVulkanFrame(const LockedVulkanFrame&) = delete;
+    LockedVulkanFrame& operator=(const LockedVulkanFrame&) = delete;
+    LockedVulkanFrame(LockedVulkanFrame&& other) noexcept;
+    LockedVulkanFrame& operator=(LockedVulkanFrame&& other) noexcept;
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return vulkanFrame_ != nullptr;
+    }
+
+    [[nodiscard]] const VulkanFrameInfo& Info() const noexcept
+    {
+        return info_;
+    }
+
+    [[nodiscard]] void* Identity() const noexcept
+    {
+        return frameIdentity_;
+    }
+
+    // Publish a state only after its matching signal has actually been submitted.
+    // Both Commit and Unlock release the AVVkFrame lock and empty this object.
+    void Commit(int newLayout, unsigned long long newSemValue, unsigned int newQueueFamily) noexcept;
+    void Unlock() noexcept;
+
+private:
+    friend bool LockVulkanFrame(void* avFrame, LockedVulkanFrame& out);
+
+    void* frameIdentity_ = nullptr;
+    void* retainedFrame_ = nullptr;
+    void* framesContext_ = nullptr;
+    void* vulkanFrame_ = nullptr;
+    VulkanFrameInfo info_{};
+};
+
+// Lock and snapshot one single-image AV_PIX_FMT_VULKAN frame. On success `out`
+// remains locked until it is committed, explicitly unlocked, or destroyed.
+bool LockVulkanFrame(void* avFrame, LockedVulkanFrame& out);

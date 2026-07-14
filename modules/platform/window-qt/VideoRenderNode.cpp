@@ -26,7 +26,13 @@ void VideoRenderNode::prepare()
     const FbRect fb = FramebufferRect();
     if (fb.w > 0 && fb.h > 0)
     {
+        // Vulkan uploads and decode-image acquire barriers are recorded into Qt's
+        // current command buffer here, before the scene graph begins its render pass.
+        // beginExternalCommands() may replace the native command-buffer handle, so the
+        // callback refreshes it only after this call.
+        window_->beginExternalCommands();
         callbacks_->Prepare(fb.x, fb.y, fb.w, fb.h);
+        window_->endExternalCommands();
     }
 }
 

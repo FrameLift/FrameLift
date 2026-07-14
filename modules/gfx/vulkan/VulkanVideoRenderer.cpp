@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <utility>
 
 // Embedded SPIR-V (generated at build time by cmake/FrameLiftShaders.cmake).
 #include "video.frag.spv.h"
@@ -66,69 +68,90 @@ VulkanVideoRenderer::~VulkanVideoRenderer()
     {
         return;
     }
-    // The host destroys the player (and this renderer) before the backend tears down
-    // the device (see App member order / destructor), so the device is still live.
-    vkDeviceWaitIdle(device_);
-
-    // Deliver any frame signals queued this frame but not yet flushed (afterFrameEnd may
-    // never fire again). The player releases its AVVkFrame refs right after this dtor;
-    // FFmpeg would otherwise wait forever on the advertised timeline values.
-    backend_->HostSignalPendingFrameSignals();
-
-    // Retired closures free sets from this renderer's pools; run them (device is idle)
-    // before those pools are destroyed below.
-    backend_->DrainRetired();
-
-    DestroyYcbcr();
-    DestroyTexture(video_);
-    DestroyTexture(overlay_);
-    for (Texture& t : videoRing_.tex)
+    // The player is destroyed before QQuickWindow. Never idle Qt's live device here:
+    // Qt may concurrently submit or present. Retain every native object until backend
+    // shutdown, where the scene graph is gone and DestroyDevice can safely wait idle.
+    RetireYcbcr();
+    std::array<Texture, 2 + HostRing::kSlots * 2> textures{};
+    size_t textureCount = 0;
+    textures[textureCount++] = std::exchange(video_, Texture{});
+    textures[textureCount++] = std::exchange(overlay_, Texture{});
+    for (Texture& texture : videoRing_.tex)
     {
-        DestroyTexture(t);
+        textures[textureCount++] = std::exchange(texture, Texture{});
     }
-    for (Texture& t : overlayRing_.tex)
+    for (Texture& texture : overlayRing_.tex)
     {
-        DestroyTexture(t);
+        textures[textureCount++] = std::exchange(texture, Texture{});
     }
-    for (StagingSlot& slot : staging_)
-    {
-        if (slot.buffer != VK_NULL_HANDLE)
+    auto staging = std::exchange(staging_, decltype(staging_){});
+    const VkPipeline pipeline = std::exchange(pipeline_, VK_NULL_HANDLE);
+    const VkPipelineLayout pipelineLayout = std::exchange(pipelineLayout_, VK_NULL_HANDLE);
+    const VkPipeline yuvPipeline = std::exchange(yuvPipeline_, VK_NULL_HANDLE);
+    const VkPipelineLayout yuvPipelineLayout = std::exchange(yuvPipelineLayout_, VK_NULL_HANDLE);
+    const VkDescriptorPool descPool = std::exchange(descPool_, VK_NULL_HANDLE);
+    const VkDescriptorSetLayout setLayout = std::exchange(setLayout_, VK_NULL_HANDLE);
+    const VkDescriptorSetLayout yuvSetLayout = std::exchange(yuvSetLayout_, VK_NULL_HANDLE);
+    const VkSampler sampler = std::exchange(sampler_, VK_NULL_HANDLE);
+    backend_->Retire(
+        [device = device_, allocator = allocator_, textures, staging, pipeline, pipelineLayout, yuvPipeline,
+         yuvPipelineLayout, descPool, setLayout, yuvSetLayout, sampler]
         {
-            vmaDestroyBuffer(allocator_, slot.buffer, slot.alloc);
+            for (const Texture& texture : textures)
+            {
+                for (int p = 0; p < 3; ++p)
+                {
+                    if (texture.view[p] != VK_NULL_HANDLE)
+                    {
+                        vkDestroyImageView(device, texture.view[p], nullptr);
+                    }
+                    if (texture.image[p] != VK_NULL_HANDLE)
+                    {
+                        vmaDestroyImage(allocator, texture.image[p], texture.alloc[p]);
+                    }
+                }
+            }
+            for (const StagingSlot& slot : staging)
+            {
+                if (slot.buffer != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(allocator, slot.buffer, slot.alloc);
+                }
+            }
+            if (pipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(device, pipeline, nullptr);
+            }
+            if (pipelineLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+            }
+            if (yuvPipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(device, yuvPipeline, nullptr);
+            }
+            if (yuvPipelineLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(device, yuvPipelineLayout, nullptr);
+            }
+            if (descPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(device, descPool, nullptr);
+            }
+            if (setLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+            }
+            if (yuvSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(device, yuvSetLayout, nullptr);
+            }
+            if (sampler != VK_NULL_HANDLE)
+            {
+                vkDestroySampler(device, sampler, nullptr);
+            }
         }
-    }
-    if (pipeline_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipeline(device_, pipeline_, nullptr);
-    }
-    if (pipelineLayout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
-    }
-    if (yuvPipeline_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipeline(device_, yuvPipeline_, nullptr);
-    }
-    if (yuvPipelineLayout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipelineLayout(device_, yuvPipelineLayout_, nullptr);
-    }
-    if (descPool_ != VK_NULL_HANDLE)
-    {
-        vkDestroyDescriptorPool(device_, descPool_, nullptr);
-    }
-    if (setLayout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyDescriptorSetLayout(device_, setLayout_, nullptr);
-    }
-    if (yuvSetLayout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyDescriptorSetLayout(device_, yuvSetLayout_, nullptr);
-    }
-    if (sampler_ != VK_NULL_HANDLE)
-    {
-        vkDestroySampler(device_, sampler_, nullptr);
-    }
+    );
 }
 
 bool VulkanVideoRenderer::Init(IGraphicsBackend* /*backend*/)
@@ -666,7 +689,7 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* data, const VideoF
         return;
     }
 
-    VkCommandBuffer cmd = backend_->FrameOpsCmd();
+    VkCommandBuffer cmd = backend_->CurrentCommandBuffer();
     if (cmd == VK_NULL_HANDLE)
     {
         return;
@@ -697,6 +720,8 @@ void VulkanVideoRenderer::UploadTo(Texture& t, const uint8_t* data, const VideoF
 void VulkanVideoRenderer::UploadFrame(const uint8_t* data, const VideoFrameDesc& desc)
 {
     vkFrame_ = nullptr; // switched (back) to the CPU-pixels path
+    vkFrameIdentity_ = nullptr;
+    vkPrepared_ = false;
 
     // Rebake the shader's push constants only when the colourimetry changes (stable
     // across a stream).
@@ -734,12 +759,73 @@ void VulkanVideoRenderer::UploadFrame(const uint8_t* data, const VideoFrameDesc&
 
 void VulkanVideoRenderer::UploadVulkanFrame(void* avFrame, int displayW, int displayH)
 {
-    // Just stash the frame; the actual transition/sample happens in Draw (the timeline
-    // wait/signal must join the per-frame submit). Called every render frame, even when
-    // the frame is unchanged (paused), so the image is re-sampled with a fresh value.
+    void* frameIdentity = GetVulkanFrameIdentity(avFrame);
+    const bool alreadyPrepared = vkPrepared_ && vkFrameIdentity_ == frameIdentity;
     vkFrame_ = avFrame;
+    vkFrameIdentity_ = frameIdentity;
+    vkPrepared_ = false;
     vkDisplayW_ = displayW;
     vkDisplayH_ = displayH;
+
+    // prepare() runs while Qt's primary command buffer is recording but before its
+    // render pass. Snapshot and lock the AVVkFrame here so the acquire/layout barrier
+    // can be part of Qt's own submission instead of a competing queue submission.
+    if (!frameIdentity || backend_->HasPendingFrameSignal(frameIdentity))
+    {
+        vkPrepared_ = alreadyPrepared && backend_->FrameBridgeInstalled();
+        return;
+    }
+
+    LockedVulkanFrame lockedFrame;
+    if (!LockVulkanFrame(avFrame, lockedFrame))
+    {
+        vkFrame_ = nullptr;
+        return;
+    }
+    const VulkanFrameInfo info = lockedFrame.Info();
+    if (!info.valid || info.image == 0 || info.semaphore == 0 || info.semValue == std::numeric_limits<uint64_t>::max())
+    {
+        Log::Error("VulkanVideoRenderer: invalid or exhausted zero-copy frame timeline");
+        vkFrame_ = nullptr;
+        return;
+    }
+
+    backend_->BeginFrameSignalPool(info.framesContextId);
+    if (info.framesContextId != framesContextId_)
+    {
+        InvalidateFrameTextures();
+        framesContextId_ = info.framesContextId;
+    }
+    if (!EnsureYcbcr(info.vkFormat, info.colorSpace, info.colorRange) || !EnsureFrameTexture(info.image))
+    {
+        Log::Error("VulkanVideoRenderer: zero-copy frame preparation failed");
+        vkFrame_ = nullptr;
+        return;
+    }
+
+    const auto semaphore = reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(info.semaphore));
+    if (!backend_->QueueFrameSignal(semaphore, info.semValue + 1, std::move(lockedFrame)))
+    {
+        Log::Error("VulkanVideoRenderer: zero-copy completion reservation failed");
+        vkFrame_ = nullptr;
+        return;
+    }
+    if (!RecordFrameTransition(info.image, info.layout, info.queueFamily))
+    {
+        backend_->CancelFrameBridge();
+        Log::Error("VulkanVideoRenderer: zero-copy image transition recording failed");
+        vkFrame_ = nullptr;
+        return;
+    }
+    if (!backend_->InstallFrameBridge())
+    {
+        backend_->CancelFrameBridge();
+        Log::Error("VulkanVideoRenderer: zero-copy Qt submission bridge installation failed");
+        vkFrame_ = nullptr;
+        return;
+    }
+    vkInfo_ = info;
+    vkPrepared_ = true;
 }
 
 void VulkanVideoRenderer::UploadOverlay(const uint8_t* rgba, int w, int h)
