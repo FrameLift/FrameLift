@@ -128,10 +128,8 @@ private:
     // the descriptor pool is exhausted.
     void InvalidateFrameTextures();
     // Record the frame image's transition (decode→sample layout, queue-ownership
-    // acquire) into the backend's per-frame frame-ops command buffer, which is submitted
-    // once — together with the accumulated timeline waits — just before Qt's scene-graph
-    // submit. It must run outside the render pass Draw records into, hence the separate
-    // command buffer; batching it there avoids a standalone submit stalling the queue.
+    // acquire) into Qt's current command buffer during QSGRenderNode::prepare(), before
+    // the scene graph begins its render pass.
     bool RecordFrameTransition(uint64_t image, int oldLayout, uint32_t srcQueueFamily);
     // Returns true when it recorded the video draw (and thus set viewport/scissor);
     // false on any early-out, so Draw() knows the overlay must set its own. Letterboxes
@@ -175,6 +173,9 @@ private:
     // The AVFrame* (void*) handed in by UploadVulkanFrame, sampled in Draw. Non-null ⇒
     // use the YCbCr path for the video; the RGBA video_ texture is then unused.
     void* vkFrame_ = nullptr;
+    void* vkFrameIdentity_ = nullptr;
+    VulkanFrameInfo vkInfo_{};
+    bool vkPrepared_ = false;
     int vkDisplayW_ = 0;
     int vkDisplayH_ = 0;
 

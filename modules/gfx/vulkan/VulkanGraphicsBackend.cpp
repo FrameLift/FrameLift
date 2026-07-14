@@ -24,6 +24,8 @@
 #include <QtQuick/QQuickGraphicsDevice>
 #include <QtQuick/QQuickWindow>
 #include <QtQuick/QSGRendererInterface>
+#include <rhi/qrhi.h>
+#include <rhi/qrhi_platform.h>
 
 #include <framelift/Log.h>
 
@@ -316,17 +318,7 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
             physicalDevice_, device_, static_cast<int>(graphicsQueueFamily_), static_cast<int>(qtGraphicsQueueIndex_)
         )
     );
-    // Frame-ops must be submitted after all recording (uploads in prepare, zero-copy
-    // transitions in render) but before Qt submits its scene-graph command buffer;
-    // afterRenderPassRecording is exactly that point. No-op on frames without ops.
-    QObject::connect(
-        window, &QQuickWindow::afterRenderPassRecording, window,
-        [this]
-        {
-            FlushFrameOps();
-        },
-        Qt::DirectConnection
-    );
+    window_ = window;
     // afterFrameEnd fires exactly once per rendered frame, making it the only safe
     // place to advance the retire counter (PrepareQtFrame runs twice per frame — node
     // prepare and render — and double ticks would halve the retire safety margin).
@@ -340,6 +332,16 @@ void VulkanGraphicsBackend::ConfigureQtWindow(QQuickWindow* window)
                                                 ? static_cast<uint32_t>(reported)
                                                 : kMaxFramesInFlight;
             retireQueue_.BeginFrame(framesInFlight);
+        },
+        Qt::DirectConnection
+    );
+    QObject::connect(
+        window, &QQuickWindow::sceneGraphInvalidated, window,
+        [this]
+        {
+            currentCmd_ = VK_NULL_HANDLE;
+            renderPass_ = VK_NULL_HANDLE;
+            window_ = nullptr;
         },
         Qt::DirectConnection
     );
@@ -436,10 +438,17 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
                 return (queue.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
             }
         );
+        bool hasDistinctVideoQueue = false;
+        for (uint32_t i = 0; i < data.queues.size(); ++i)
+        {
+            hasDistinctVideoQueue |=
+                i != data.graphicsFamily && (data.queues[i].queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
+        }
+        const bool hasIsolatedBridgeQueue = data.queues[data.graphicsFamily].queueCount >= 2 || hasDistinctVideoQueue;
         facts.videoCapable = HasExtension(data.extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
                              HasExtension(data.extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
                              hasDecodeQueue && candidateF11.samplerYcbcrConversion && candidateF12.timelineSemaphore &&
-                             candidateF13.synchronization2 && data.queues[data.graphicsFamily].queueCount >= 2;
+                             candidateF13.synchronization2 && hasIsolatedBridgeQueue;
     }
 
     const int chosenIdx = VulkanDeviceSelect::SelectDevice(candidates);
@@ -648,12 +657,11 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
     }
 
     DetectVideoDecodeQueue(chosenQueues);
-    if (qtGraphicsQueueIndex_ == 0)
+    SetupFrameBridge();
+    if (bridgeQueue_ == VK_NULL_HANDLE)
     {
         supportsVulkanVideo_ = false;
-        Log::Warn(
-            "Vulkan: graphics family exposes one queue; zero-copy disabled because Qt and FFmpeg cannot safely share it"
-        );
+        Log::Warn("Vulkan: no queue is isolated from Qt; zero-copy disabled and readback fallback retained");
     }
 
     VmaAllocatorCreateInfo allocatorInfo{};
@@ -666,27 +674,6 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         throw std::runtime_error("Vulkan memory allocator creation failed");
     }
 
-    VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = graphicsQueueFamily_;
-    if (vkCreateCommandPool(device_, &poolInfo, nullptr, &frameOpsPool_) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Vulkan frame-ops command pool creation failed");
-    }
-    VkCommandBufferAllocateInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    commandInfo.commandPool = frameOpsPool_;
-    commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    commandInfo.commandBufferCount = static_cast<uint32_t>(frameOpsCmds_.size());
-    if (vkAllocateCommandBuffers(device_, &commandInfo, frameOpsCmds_.data()) != VK_SUCCESS)
-    {
-        throw std::runtime_error("Vulkan frame-ops command buffer allocation failed");
-    }
-    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_POOL, frameOpsPool_, "FrameLift frame-ops pool");
-    for (VkCommandBuffer cmd : frameOpsCmds_)
-    {
-        VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_COMMAND_BUFFER, cmd, "FrameLift frame-ops cmd");
-    }
-
     LoadPipelineCache();
 
     Log::Debug(
@@ -697,8 +684,8 @@ void VulkanGraphicsBackend::CreateDevice(QWindow* presentProbe)
         supportsVulkanVideo_ ? "available" : "unavailable"
     );
     Log::Debug(
-        "Vulkan: Qt graphics queue family {}, index {}; FFmpeg graphics queue index 0", graphicsQueueFamily_,
-        qtGraphicsQueueIndex_
+        "Vulkan: Qt graphics queue family {}, index {}; bridge queue family {}, index {}", graphicsQueueFamily_,
+        qtGraphicsQueueIndex_, bridgeQueueFamily_, bridgeQueueIndex_
     );
 }
 
@@ -913,6 +900,45 @@ void VulkanGraphicsBackend::DetectVideoDecodeQueue(const std::vector<VkQueueFami
     }
 }
 
+void VulkanGraphicsBackend::SetupFrameBridge()
+{
+    const VulkanFrameBridge::Queue selected = VulkanFrameBridge::SelectQueue(
+        static_cast<int>(graphicsQueueFamily_), qtGraphicsQueueIndex_, videoDecodeQueueFamily_,
+        videoDecodeQueue_ != VK_NULL_HANDLE
+    );
+    if (!selected.Valid())
+    {
+        return;
+    }
+
+    bridgeQueueFamily_ = selected.family;
+    bridgeQueueIndex_ = selected.index;
+    vkGetDeviceQueue(device_, static_cast<uint32_t>(bridgeQueueFamily_), bridgeQueueIndex_, &bridgeQueue_);
+    if (bridgeQueue_ == VK_NULL_HANDLE || bridgeQueue_ == graphicsQueue_)
+    {
+        bridgeQueue_ = VK_NULL_HANDLE;
+        bridgeQueueFamily_ = -1;
+        return;
+    }
+    VulkanUtil::SetObjectName(device_, VK_OBJECT_TYPE_QUEUE, bridgeQueue_, "FrameLift semaphore bridge queue");
+
+    VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    for (FrameBridgeSlot& slot : frameBridgeSlots_)
+    {
+        if (vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &slot.ready) != VK_SUCCESS ||
+            vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &slot.done) != VK_SUCCESS ||
+            vkCreateFence(device_, &fenceInfo, nullptr, &slot.completionFence) != VK_SUCCESS)
+        {
+            Log::Warn("Vulkan: frame semaphore bridge creation failed; disabling zero-copy");
+            bridgeQueue_ = VK_NULL_HANDLE;
+            bridgeQueueFamily_ = -1;
+            break;
+        }
+    }
+}
+
 void VulkanGraphicsBackend::OnQtWindowCreated(QQuickWindow* window)
 {
     RefreshQtResources(window);
@@ -921,6 +947,7 @@ void VulkanGraphicsBackend::OnQtWindowCreated(QQuickWindow* window)
 void VulkanGraphicsBackend::PrepareQtFrame(QQuickWindow* window)
 {
     RefreshQtResources(window);
+    AcquireFrameBridgeSlot();
 }
 
 void VulkanGraphicsBackend::RefreshQtResources(QQuickWindow* window)
@@ -968,8 +995,12 @@ bool VulkanGraphicsBackend::GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noe
     out.featuresChain = &enabledFeatures2_;
     out.deviceExtensions = enabledDeviceExtPtrs_.empty() ? nullptr : enabledDeviceExtPtrs_.data();
     out.deviceExtensionCount = static_cast<int>(enabledDeviceExtPtrs_.size());
-    out.graphicsQueueFamily = static_cast<int>(graphicsQueueFamily_);
-    out.graphicsQueueFlags = graphicsQueueFlags_;
+    // FFmpeg's qf entries always refer to queue index 0. Expose the graphics
+    // family only when Qt deliberately owns index 1; with a single graphics queue
+    // Qt owns index 0 exclusively and FFmpeg must use the distinct video family.
+    const bool exposeGraphicsQueue = VulkanFrameBridge::GraphicsQueueIsIsolatedFromQt(qtGraphicsQueueIndex_);
+    out.graphicsQueueFamily = exposeGraphicsQueue ? static_cast<int>(graphicsQueueFamily_) : -1;
+    out.graphicsQueueFlags = exposeGraphicsQueue ? graphicsQueueFlags_ : 0;
     out.videoDecodeQueueFamily = videoDecodeQueueFamily_;
     out.videoDecodeQueueFlags = videoDecodeQueueFlags_;
     out.videoDecodeCaps = videoDecodeCaps_;
@@ -979,132 +1010,403 @@ bool VulkanGraphicsBackend::GetVulkanDeviceInfo(VulkanDeviceInfo& out) const noe
     return device_ != VK_NULL_HANDLE;
 }
 
-VkCommandBuffer VulkanGraphicsBackend::FrameOpsCmd()
+void VulkanGraphicsBackend::AcquireFrameBridgeSlot()
 {
-    if (device_ == VK_NULL_HANDLE)
+    if (bridgeQueue_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE)
     {
-        return VK_NULL_HANDLE;
+        activeFrameBridgeSlot_ = nullptr;
+        return;
     }
-    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+
+    FrameBridgeSlot& slot = frameBridgeSlots_[currentFrameSlot_ % frameBridgeSlots_.size()];
+    const uint64_t serial = retireQueue_.CurrentFrame();
+    if (slot.frameSerial == serial)
     {
-        VkCommandBuffer cmd = frameOpsCmds_[currentFrameSlot_ % frameOpsCmds_.size()];
-        if (cmd == VK_NULL_HANDLE)
+        activeFrameBridgeSlot_ = &slot;
+        return; // PrepareQtFrame is also called from render() in the same Qt frame
+    }
+
+    const VulkanFrameBridge::ReuseAction reuseAction = VulkanFrameBridge::ActionForReuse(slot.phase);
+    if (reuseAction == VulkanFrameBridge::ReuseAction::WaitForCompletion)
+    {
+        const VkResult wait = vkWaitForFences(device_, 1, &slot.completionFence, VK_TRUE, UINT64_MAX);
+        if (wait != VK_SUCCESS)
         {
-            return VK_NULL_HANDLE;
+            Log::Error("Vulkan: frame-bridge completion wait failed ({})", static_cast<int>(wait));
+            supportsVulkanVideo_ = false;
+            activeFrameBridgeSlot_ = nullptr;
+            return;
         }
-        // Safe to reset: Qt waited this slot's fence before beginning the frame, which
-        // covers our earlier same-queue submit that used this buffer.
-        VK_CHECK_LOG(vkResetCommandBuffer(cmd, 0), "Vulkan: frame-ops reset failed");
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_CHECK_LOG_RETURN(vkBeginCommandBuffer(cmd, &begin), "Vulkan: frame-ops begin failed", VK_NULL_HANDLE);
-        frameOpsActiveCmd_ = cmd;
+        slot.phase = VulkanFrameBridge::Phase::Available;
     }
-    return frameOpsActiveCmd_;
+    else if (reuseAction == VulkanFrameBridge::ReuseAction::HostSignalCompletedQtWork)
+    {
+        // Qt does not reuse this frame slot until its earlier submission has completed.
+        // Host-signalling here therefore represents a completed image read without ever
+        // touching Qt's queue from FrameLift.
+        CompleteFrameSignals(slot, true);
+        slot.phase = VulkanFrameBridge::Phase::Available;
+        if (!RecreateFrameBridgeBinaries(slot))
+        {
+            activeFrameBridgeSlot_ = nullptr;
+            return;
+        }
+    }
+    else if (reuseAction == VulkanFrameBridge::ReuseAction::UnlockUnsubmitted)
+    {
+        UnlockFrameSignals(slot); // the Qt submission was never installed
+        slot.phase = VulkanFrameBridge::Phase::Available;
+    }
+
+    if (slot.completionFence != VK_NULL_HANDLE)
+    {
+        const VkResult reset = vkResetFences(device_, 1, &slot.completionFence);
+        if (reset != VK_SUCCESS)
+        {
+            Log::Error("Vulkan: frame-bridge fence reset failed ({})", static_cast<int>(reset));
+            supportsVulkanVideo_ = false;
+            activeFrameBridgeSlot_ = nullptr;
+            return;
+        }
+    }
+    slot.frameSerial = serial;
+    activeFrameBridgeSlot_ = &slot;
 }
 
-void VulkanGraphicsBackend::AddFrameOpsWait(VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags2 stageMask)
+void VulkanGraphicsBackend::BeginFrameSignalPool(uint64_t framesContextId)
 {
-    if (semaphore == VK_NULL_HANDLE)
+    frameSignalStates_[framesContextId].BeginPool(framesContextId);
+}
+
+bool VulkanGraphicsBackend::HasPendingFrameSignal(void* frameIdentity) const
+{
+    if (!frameIdentity)
+    {
+        return false;
+    }
+    return std::ranges::any_of(
+        frameBridgeSlots_,
+        [frameIdentity](const FrameBridgeSlot& slot)
+        {
+            return std::ranges::any_of(
+                slot.timelineSignals,
+                [frameIdentity](const TimelineSignal& signal)
+                {
+                    return std::ranges::any_of(
+                        signal.frames,
+                        [frameIdentity](const LockedVulkanFrame& frame)
+                        {
+                            return frame.Identity() == frameIdentity;
+                        }
+                    );
+                }
+            );
+        }
+    );
+}
+
+bool VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t requestedValue, LockedVulkanFrame&& frame)
+{
+    if (!activeFrameBridgeSlot_ || bridgeQueue_ == VK_NULL_HANDLE || semaphore == VK_NULL_HANDLE || !frame ||
+        frame.Info().semaphore != static_cast<uint64_t>(reinterpret_cast<uintptr_t>(semaphore)))
+    {
+        Log::Error("Vulkan: refusing invalid zero-copy frame-signal reservation");
+        return false;
+    }
+
+    FrameBridgeSlot& slot = *activeFrameBridgeSlot_;
+    if (slot.phase != VulkanFrameBridge::Phase::Available && slot.phase != VulkanFrameBridge::Phase::Collecting)
+    {
+        Log::Error("Vulkan: refusing a frame after the Qt bridge submission was installed");
+        return false;
+    }
+
+    const uint64_t poolId = frame.Info().framesContextId;
+    VulkanTimelineSignalState& state = frameSignalStates_[poolId];
+    state.BeginPool(poolId);
+    const uint64_t semaphoreId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(semaphore));
+    const auto reservation = state.Reserve(semaphoreId, requestedValue);
+    if (!reservation)
+    {
+        Log::Error(
+            "Vulkan: zero-copy timeline exhausted or invalid (pool=0x{:x}, image=0x{:x}, semaphore=0x{:x}, "
+            "requested={})",
+            frame.Info().framesContextId, frame.Info().image, semaphoreId, requestedValue
+        );
+        return false;
+    }
+    if (reservation->adjusted)
+    {
+        Log::Debug(
+            "Vulkan: corrected non-monotonic zero-copy signal (pool=0x{:x}, image=0x{:x}, semaphore=0x{:x}, "
+            "requested={}, reserved={})",
+            frame.Info().framesContextId, frame.Info().image, semaphoreId, requestedValue, reservation->value
+        );
+    }
+
+    auto pending = std::ranges::find_if(
+        slot.timelineSignals,
+        [poolId, semaphore](const TimelineSignal& signal)
+        {
+            return signal.poolId == poolId && signal.semaphore == semaphore;
+        }
+    );
+    if (pending != slot.timelineSignals.end())
+    {
+        pending->waitValue = std::max(pending->waitValue, frame.Info().semValue);
+        pending->value = reservation->value;
+        pending->frames.push_back(std::move(frame));
+    }
+    else
+    {
+        TimelineSignal signal;
+        signal.poolId = poolId;
+        signal.semaphore = semaphore;
+        signal.waitValue = frame.Info().semValue;
+        signal.value = reservation->value;
+        signal.frames.push_back(std::move(frame));
+        slot.timelineSignals.push_back(std::move(signal));
+    }
+    slot.phase = VulkanFrameBridge::Phase::Collecting;
+    return true;
+}
+
+bool VulkanGraphicsBackend::FrameBridgeInstalled() const noexcept
+{
+    return activeFrameBridgeSlot_ && activeFrameBridgeSlot_->phase == VulkanFrameBridge::Phase::QtSubmissionInstalled;
+}
+
+void VulkanGraphicsBackend::CancelFrameBridge()
+{
+    if (!activeFrameBridgeSlot_ || activeFrameBridgeSlot_->phase != VulkanFrameBridge::Phase::Collecting)
     {
         return;
     }
-    VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    wait.semaphore = semaphore;
-    wait.value = value;
-    wait.stageMask = stageMask;
-    frameOpsWaits_.push_back(wait);
+    UnlockFrameSignals(*activeFrameBridgeSlot_);
+    activeFrameBridgeSlot_->phase = VulkanFrameBridge::Phase::Available;
 }
 
-bool VulkanGraphicsBackend::FlushFrameOps()
+bool VulkanGraphicsBackend::InstallFrameBridge()
 {
-    if (frameOpsActiveCmd_ == VK_NULL_HANDLE)
+    FrameBridgeSlot* slot = activeFrameBridgeSlot_;
+    if (!slot || slot->phase != VulkanFrameBridge::Phase::Collecting || slot->timelineSignals.empty() || !window_ ||
+        !window_->rhi())
     {
-        return true; // nothing recorded this frame
+        return false;
     }
-    VkCommandBuffer cmd = frameOpsActiveCmd_;
-    frameOpsActiveCmd_ = VK_NULL_HANDLE;
-    VK_CHECK_LOG(vkEndCommandBuffer(cmd), "Vulkan: frame-ops end failed");
 
-    VkCommandBufferSubmitInfo cmdInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmdInfo.commandBuffer = cmd;
+    frameBridgeWaitScratch_.clear();
+    frameBridgeWaitScratch_.reserve(slot->timelineSignals.size());
+    for (const TimelineSignal& signal : slot->timelineSignals)
+    {
+        VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait.semaphore = signal.semaphore;
+        wait.value = signal.waitValue;
+        wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        frameBridgeWaitScratch_.push_back(wait);
+    }
+    VkSemaphoreSubmitInfo ready{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    ready.semaphore = slot->ready;
+    ready.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.waitSemaphoreInfoCount = static_cast<uint32_t>(frameOpsWaits_.size());
-    submit.pWaitSemaphoreInfos = frameOpsWaits_.empty() ? nullptr : frameOpsWaits_.data();
-    submit.commandBufferInfoCount = 1;
-    submit.pCommandBufferInfos = &cmdInfo;
+    submit.waitSemaphoreInfoCount = static_cast<uint32_t>(frameBridgeWaitScratch_.size());
+    submit.pWaitSemaphoreInfos = frameBridgeWaitScratch_.data();
+    submit.signalSemaphoreInfoCount = 1;
+    submit.pSignalSemaphoreInfos = &ready;
 
     VkResult result = VK_SUCCESS;
     {
-        VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-        result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+        VulkanQueueGuard guard(queueLock_, static_cast<uint32_t>(bridgeQueueFamily_), bridgeQueueIndex_);
+        result = vkQueueSubmit2(bridgeQueue_, 1, &submit, VK_NULL_HANDLE);
     }
-    frameOpsWaits_.clear();
     if (result != VK_SUCCESS)
     {
-        Log::Error("Vulkan: frame-ops submit failed ({})", static_cast<int>(result));
+        Log::Error("Vulkan: decoder-to-Qt semaphore bridge submit failed ({})", static_cast<int>(result));
+        UnlockFrameSignals(*slot);
+        slot->phase = VulkanFrameBridge::Phase::Available;
+        return false;
+    }
+
+    VkSemaphore qtWait = slot->ready;
+    VkSemaphore qtSignal = slot->done;
+    QRhiVulkanQueueSubmitParams params{};
+    params.waitSemaphoreCount = 1;
+    params.waitSemaphores = &qtWait;
+    params.signalSemaphoreCount = 1;
+    params.signalSemaphores = &qtSignal;
+    params.presentWaitSemaphoreCount = 0;
+    params.presentWaitSemaphores = nullptr;
+    window_->rhi()->setQueueSubmitParams(&params);
+    return VulkanFrameBridge::TryMarkQtSubmissionInstalled(slot->phase);
+}
+
+bool VulkanGraphicsBackend::RecreateFrameBridgeBinaries(FrameBridgeSlot& slot)
+{
+    if (slot.ready != VK_NULL_HANDLE)
+    {
+        vkDestroySemaphore(device_, slot.ready, nullptr);
+        slot.ready = VK_NULL_HANDLE;
+    }
+    if (slot.done != VK_NULL_HANDLE)
+    {
+        vkDestroySemaphore(device_, slot.done, nullptr);
+        slot.done = VK_NULL_HANDLE;
+    }
+
+    VkSemaphoreCreateInfo createInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    if (vkCreateSemaphore(device_, &createInfo, nullptr, &slot.ready) != VK_SUCCESS ||
+        vkCreateSemaphore(device_, &createInfo, nullptr, &slot.done) != VK_SUCCESS)
+    {
+        if (slot.ready != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device_, slot.ready, nullptr);
+            slot.ready = VK_NULL_HANDLE;
+        }
+        if (slot.done != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device_, slot.done, nullptr);
+            slot.done = VK_NULL_HANDLE;
+        }
+        bridgeQueue_ = VK_NULL_HANDLE;
+        bridgeQueueFamily_ = -1;
+        supportsVulkanVideo_ = false;
+        Log::Warn("Vulkan: failed to recycle frame-bridge semaphores; disabling zero-copy");
         return false;
     }
     return true;
 }
 
-void VulkanGraphicsBackend::QueueFrameSignal(VkSemaphore semaphore, uint64_t value)
+void VulkanGraphicsBackend::CompleteFrameSignals(FrameBridgeSlot& slot, bool hostSignal)
 {
-    if (semaphore != VK_NULL_HANDLE)
+    for (TimelineSignal& signal : slot.timelineSignals)
     {
-        pendingFrameSignals_.push_back({semaphore, value});
+        bool delivered = !hostSignal;
+        if (hostSignal)
+        {
+            VkSemaphoreSignalInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            si.semaphore = signal.semaphore;
+            si.value = signal.value;
+            const VkResult result = vkSignalSemaphore(device_, &si);
+            delivered = result == VK_SUCCESS;
+            if (!delivered)
+            {
+                Log::Error("Vulkan: host signal of completed frame failed ({})", static_cast<int>(result));
+            }
+        }
+
+        const uint64_t semaphoreId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(signal.semaphore));
+        auto state = frameSignalStates_.find(signal.poolId);
+        const bool publish =
+            delivered && state != frameSignalStates_.end() && state->second.MarkDelivered(semaphoreId, signal.value);
+        if (delivered && !publish)
+        {
+            Log::Error("Vulkan: refused out-of-order AVVkFrame state publication");
+        }
+        for (LockedVulkanFrame& frame : signal.frames)
+        {
+            if (publish)
+            {
+                frame.Commit(
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, signal.value,
+                    static_cast<unsigned int>(graphicsQueueFamily_)
+                );
+            }
+            else
+            {
+                // Never expose a value that was not delivered. Unlocking leaves the
+                // decoder's previous state intact so teardown/recovery can proceed.
+                frame.Unlock();
+            }
+        }
     }
+    slot.timelineSignals.clear();
 }
 
-void VulkanGraphicsBackend::HostSignalPendingFrameSignals()
+void VulkanGraphicsBackend::UnlockFrameSignals(FrameBridgeSlot& slot)
 {
-    if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
+    for (TimelineSignal& signal : slot.timelineSignals)
     {
-        return;
+        for (LockedVulkanFrame& frame : signal.frames)
+        {
+            frame.Unlock();
+        }
     }
-    vkDeviceWaitIdle(device_);
-    // Queue order is chronological, so per-semaphore values are signalled in
-    // increasing order as vkSignalSemaphore requires.
-    for (const TimelineSignal& signal : pendingFrameSignals_)
-    {
-        VkSemaphoreSignalInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-        si.semaphore = signal.semaphore;
-        si.value = signal.value;
-        VK_CHECK_LOG(vkSignalSemaphore(device_, &si), "Vulkan: host signal of pending frame semaphore failed");
-    }
-    pendingFrameSignals_.clear();
+    slot.timelineSignals.clear();
 }
 
 void VulkanGraphicsBackend::FlushFrameSignals()
 {
-    if (pendingFrameSignals_.empty() || device_ == VK_NULL_HANDLE)
+    FrameBridgeSlot* slot = activeFrameBridgeSlot_;
+    activeFrameBridgeSlot_ = nullptr;
+    if (!slot || slot->phase == VulkanFrameBridge::Phase::Available || device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    if (slot->phase == VulkanFrameBridge::Phase::Collecting)
+    {
+        UnlockFrameSignals(*slot);
+        slot->phase = VulkanFrameBridge::Phase::Available;
+        return;
+    }
+    if (slot->phase != VulkanFrameBridge::Phase::QtSubmissionInstalled)
     {
         return;
     }
 
-    frameSignalScratch_.clear();
-    frameSignalScratch_.reserve(pendingFrameSignals_.size());
-    for (const TimelineSignal& signal : pendingFrameSignals_)
+    frameBridgeSignalScratch_.clear();
+    frameBridgeSignalScratch_.reserve(slot->timelineSignals.size());
+    for (const TimelineSignal& signal : slot->timelineSignals)
     {
         VkSemaphoreSubmitInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
         si.semaphore = signal.semaphore;
         si.value = signal.value;
         si.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        frameSignalScratch_.push_back(si);
+        frameBridgeSignalScratch_.push_back(si);
     }
 
+    VkSemaphoreSubmitInfo done{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+    done.semaphore = slot->done;
+    done.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    submit.signalSemaphoreInfoCount = static_cast<uint32_t>(frameSignalScratch_.size());
-    submit.pSignalSemaphoreInfos = frameSignalScratch_.data();
+    submit.waitSemaphoreInfoCount = 1;
+    submit.pWaitSemaphoreInfos = &done;
+    submit.signalSemaphoreInfoCount = static_cast<uint32_t>(frameBridgeSignalScratch_.size());
+    submit.pSignalSemaphoreInfos = frameBridgeSignalScratch_.data();
 
-    VulkanQueueGuard guard(queueLock_, graphicsQueueFamily_, qtGraphicsQueueIndex_);
-    const VkResult result = vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+    VkResult result = VK_SUCCESS;
+    {
+        VulkanQueueGuard guard(queueLock_, static_cast<uint32_t>(bridgeQueueFamily_), bridgeQueueIndex_);
+        result = vkQueueSubmit2(bridgeQueue_, 1, &submit, slot->completionFence);
+    }
     if (result != VK_SUCCESS)
     {
         Log::Error("Vulkan: zero-copy completion signal submit failed ({})", static_cast<int>(result));
+        slot->phase = VulkanFrameBridge::Phase::HostFallbackPending;
+        return;
     }
-    pendingFrameSignals_.clear();
+    // The completion wait and timeline signals now exist on an isolated queue. FFmpeg
+    // can safely observe the reserved values and enqueue its next use behind them.
+    CompleteFrameSignals(*slot, false);
+    slot->phase = VulkanFrameBridge::Phase::CompletionInFlight;
+}
+
+void VulkanGraphicsBackend::DrainFrameBridgeAfterQtStopped()
+{
+    for (FrameBridgeSlot& slot : frameBridgeSlots_)
+    {
+        if (slot.phase == VulkanFrameBridge::Phase::Collecting)
+        {
+            UnlockFrameSignals(slot);
+        }
+        else if (!slot.timelineSignals.empty())
+        {
+            // DestroyDevice has already made every queue idle, so all Qt image reads
+            // are complete and a host timeline signal is now semantically correct.
+            CompleteFrameSignals(slot, true);
+        }
+        slot.phase = VulkanFrameBridge::Phase::Available;
+    }
 }
 
 void VulkanGraphicsBackend::DestroyDevice()
@@ -1113,6 +1415,7 @@ void VulkanGraphicsBackend::DestroyDevice()
     {
         vkDeviceWaitIdle(device_);
     }
+    DrainFrameBridgeAfterQtStopped();
     retireQueue_.Drain(); // device idle; free retired objects before their pools/allocator go
     SavePipelineCache();
     if (pipelineCache_ != VK_NULL_HANDLE)
@@ -1120,14 +1423,25 @@ void VulkanGraphicsBackend::DestroyDevice()
         vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
         pipelineCache_ = VK_NULL_HANDLE;
     }
-    if (frameOpsPool_ != VK_NULL_HANDLE)
+    for (FrameBridgeSlot& slot : frameBridgeSlots_)
     {
-        vkDestroyCommandPool(device_, frameOpsPool_, nullptr);
-        frameOpsPool_ = VK_NULL_HANDLE;
-        frameOpsCmds_.fill(VK_NULL_HANDLE);
-        frameOpsActiveCmd_ = VK_NULL_HANDLE;
+        if (slot.ready != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device_, slot.ready, nullptr);
+            slot.ready = VK_NULL_HANDLE;
+        }
+        if (slot.done != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device_, slot.done, nullptr);
+            slot.done = VK_NULL_HANDLE;
+        }
+        if (slot.completionFence != VK_NULL_HANDLE)
+        {
+            vkDestroyFence(device_, slot.completionFence, nullptr);
+            slot.completionFence = VK_NULL_HANDLE;
+        }
     }
-    frameOpsWaits_.clear();
+    frameSignalStates_.clear();
     if (allocator_)
     {
         vmaDestroyAllocator(allocator_);
@@ -1143,6 +1457,8 @@ void VulkanGraphicsBackend::DestroyDevice()
     copyMemoryToImageFn_ = nullptr;
     pushDescriptors_ = false;
     pushDescriptorSetFn_ = nullptr;
+    bridgeQueue_ = VK_NULL_HANDLE;
+    bridgeQueueFamily_ = -1;
 }
 
 void VulkanGraphicsBackend::Shutdown()
@@ -1154,7 +1470,7 @@ void VulkanGraphicsBackend::Shutdown()
     shutdown_ = true;
     currentCmd_ = VK_NULL_HANDLE;
     renderPass_ = VK_NULL_HANDLE;
-    HostSignalPendingFrameSignals();
+    window_ = nullptr;
     DestroyDevice();
     if (debugMessenger_ != VK_NULL_HANDLE && destroyDebugMessengerFn_)
     {

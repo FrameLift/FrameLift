@@ -21,12 +21,16 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "FFmpegVulkanDevice.h"
 #include "IGraphicsBackend.h"
 #include "VulkanDeviceInfo.h"
+#include "VulkanFrameBridgeState.h"
 #include "VulkanQueueLock.h"
 #include "VulkanRetireQueue.h"
+#include "VulkanTimelineSignalState.h"
 
 typedef struct VmaAllocator_T* VmaAllocator;
 
@@ -139,30 +143,27 @@ public:
         return queueLock_;
     }
 
-    // ── Per-frame batched GPU work ("frame ops") ────────────────────────────────
-    // One command buffer per Qt frame slot collects everything that must execute
-    // before Qt's scene-graph submit this frame: staging copies and zero-copy
-    // layout/ownership transitions. Timeline waits accumulate alongside and the whole
-    // batch goes out as a single vkQueueSubmit2 at afterRenderPassRecording — ahead of
-    // Qt's own submit in queue submission order, which is what lets the recorded
-    // barriers' src scopes reach prior frames' work and Qt's per-slot fence cover ours.
-    // CPU reuse of a slot's command buffer is safe for the same reason the retire queue
-    // is: Qt waits the slot fence before reusing the slot.
-    VkCommandBuffer FrameOpsCmd();
-    void AddFrameOpsWait(VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags2 stageMask);
-    bool FlushFrameOps();
+    // Start tracking a decoder frames pool. Timeline histories are kept independently
+    // while an older pool still has a bridge slot in flight.
+    void BeginFrameSignalPool(uint64_t framesContextId);
 
-    void QueueFrameSignal(VkSemaphore semaphore, uint64_t value);
+    // True while the frame is locked awaiting Qt's submission callback. Used to make
+    // repeated render-node calls in one Qt frame a no-op instead of a recursive lock.
+    [[nodiscard]] bool HasPendingFrameSignal(void* frameIdentity) const;
 
-    // Last-resort delivery of queued-but-unsubmitted frame signals: waits for the device
-    // to go idle, then host-signals each pending timeline value (vkSignalSemaphore).
-    // The renderer already published value+1 into the AVVkFrame via SetVulkanFrameState,
-    // so dropping a pending signal would leave FFmpeg waiting on it forever when it frees
-    // or reuses the frame. Idle-first makes the host signal semantically correct: all GPU
-    // reads of the frame have completed. Called from ~VulkanVideoRenderer (while the
-    // AVVkFrame semaphores are still alive — the player destroys the renderer before
-    // releasing its frame refs) and from Shutdown().
-    void HostSignalPendingFrameSignals();
+    // Reserve and queue the frame's next timeline value while taking ownership of its
+    // lock. The decoder wait is converted to a binary semaphore on the isolated bridge
+    // queue; Qt consumes that binary in its own graphics submission.
+    bool QueueFrameSignal(VkSemaphore semaphore, uint64_t requestedValue, LockedVulkanFrame&& frame);
+
+    // Install the binary wait/signal pair on the current QRhi submission. Called from
+    // QSGRenderNode::prepare(), after all native barriers have been recorded.
+    bool InstallFrameBridge();
+
+    // Abandon a reservation before Qt's queue submit parameters are installed.
+    void CancelFrameBridge();
+
+    [[nodiscard]] bool FrameBridgeInstalled() const noexcept;
 
     // Frame counter driving the retire queue; also used by per-slot staging arenas to
     // detect their first use in a new frame.
@@ -219,14 +220,22 @@ public:
     }
 
 private:
+    struct FrameBridgeSlot;
+
     void CreateInstance();
     void SetupDebugUtils();
     void CreateDevice(QWindow* presentProbe);
     [[nodiscard]] bool HostTransferFormatSupported() const;
     void SetupHostImageCopy(bool selected);
     void DetectVideoDecodeQueue(const std::vector<VkQueueFamilyProperties>& queueProperties);
+    void SetupFrameBridge();
     void RefreshQtResources(QQuickWindow* window);
+    void AcquireFrameBridgeSlot();
     void FlushFrameSignals();
+    void CompleteFrameSignals(FrameBridgeSlot& slot, bool hostSignal);
+    void UnlockFrameSignals(FrameBridgeSlot& slot);
+    bool RecreateFrameBridgeBinaries(FrameBridgeSlot& slot);
+    void DrainFrameBridgeAfterQtStopped();
     void DestroyDevice();
 
     VkInstance instance_ = VK_NULL_HANDLE;
@@ -234,9 +243,12 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue graphicsQueue_ = VK_NULL_HANDLE;
     VkQueue videoDecodeQueue_ = VK_NULL_HANDLE;
+    VkQueue bridgeQueue_ = VK_NULL_HANDLE;
     uint32_t graphicsQueueFamily_ = 0;
     uint32_t qtGraphicsQueueIndex_ = 0;
     int videoDecodeQueueFamily_ = -1;
+    int bridgeQueueFamily_ = -1;
+    uint32_t bridgeQueueIndex_ = 0;
     uint32_t graphicsQueueFlags_ = 0;
     uint32_t videoDecodeQueueFlags_ = 0;
     uint32_t videoDecodeCaps_ = 0;
@@ -267,11 +279,7 @@ private:
     VmaAllocator allocator_ = nullptr;
     VulkanQueueLock queueLock_;
     VulkanRetireQueue retireQueue_;
-
-    VkCommandPool frameOpsPool_ = VK_NULL_HANDLE;
-    std::array<VkCommandBuffer, kMaxFramesInFlight> frameOpsCmds_{};
-    VkCommandBuffer frameOpsActiveCmd_ = VK_NULL_HANDLE; // recording this frame; null between flushes
-    std::vector<VkSemaphoreSubmitInfo> frameOpsWaits_;
+    QQuickWindow* window_ = nullptr; // non-owning; cleared when the scene graph stops
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;    // Qt-owned, current frame
     VkCommandBuffer currentCmd_ = VK_NULL_HANDLE; // Qt-owned, current frame
@@ -280,12 +288,28 @@ private:
 
     struct TimelineSignal
     {
+        uint64_t poolId = 0;
         VkSemaphore semaphore = VK_NULL_HANDLE;
+        uint64_t waitValue = 0;
         uint64_t value = 0;
+        std::vector<LockedVulkanFrame> frames;
     };
 
-    std::vector<TimelineSignal> pendingFrameSignals_;
-    std::vector<VkSemaphoreSubmitInfo> frameSignalScratch_; // reused per flush, avoids per-frame allocation
+    struct FrameBridgeSlot
+    {
+        VulkanFrameBridge::Phase phase = VulkanFrameBridge::Phase::Available;
+        uint64_t frameSerial = UINT64_MAX;
+        VkSemaphore ready = VK_NULL_HANDLE;
+        VkSemaphore done = VK_NULL_HANDLE;
+        VkFence completionFence = VK_NULL_HANDLE;
+        std::vector<TimelineSignal> timelineSignals;
+    };
+
+    std::unordered_map<uint64_t, VulkanTimelineSignalState> frameSignalStates_;
+    std::array<FrameBridgeSlot, kMaxFramesInFlight> frameBridgeSlots_{};
+    FrameBridgeSlot* activeFrameBridgeSlot_ = nullptr;
+    std::vector<VkSemaphoreSubmitInfo> frameBridgeWaitScratch_;
+    std::vector<VkSemaphoreSubmitInfo> frameBridgeSignalScratch_;
 
     std::vector<std::string> instanceExtNames_;
     std::vector<std::string> enabledDeviceExtNames_;

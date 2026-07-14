@@ -24,16 +24,16 @@ struct VulkanDeviceInfo
     const char* const* deviceExtensions = nullptr; // enabled device-extension names (lifetime: backend)
     int deviceExtensionCount = 0;
 
-    int graphicsQueueFamily = -1;
-    uint32_t graphicsQueueFlags = 0; // VkQueueFlagBits of the graphics family
-    int videoDecodeQueueFamily = -1; // -1 when the device has no video-decode queue
+    int graphicsQueueFamily = -1;       // -1 when Qt owns the family's only queue
+    uint32_t graphicsQueueFlags = 0;    // VkQueueFlagBits of the isolated graphics family
+    int videoDecodeQueueFamily = -1;    // -1 when the device has no video-decode queue
     uint32_t videoDecodeQueueFlags = 0; // VkQueueFlagBits of the decode family
-    uint32_t videoDecodeCaps = 0;    // VkVideoCodecOperationFlagBitsKHR bits of the decode family
+    uint32_t videoDecodeCaps = 0;       // VkVideoCodecOperationFlagBitsKHR bits of the decode family
     bool supportsVideoDecode = false;
 
     // VulkanQueueLock* (lifetime: backend). The bridge wires it into the hwdevice's
     // lock_queue/unlock_queue callbacks so FFmpeg's decode-thread queue submits are
-    // serialized against the render thread's. void* to keep this header Vulkan/FFmpeg-free.
+    // serialized with FrameLift's bridge submits. Qt's queue is never exposed here.
     void* queueLock = nullptr;
 
     // True when the device's queues were created with VK_KHR_internally_synchronized_queues
@@ -54,14 +54,14 @@ struct VulkanFrameInfo
     // the driver may reuse their handle values, so the cache must be invalidated on any
     // change of this id, not only on format changes.
     uint64_t framesContextId = 0;
-    uint64_t image = 0;     // VkImage  (AVVkFrame::img[0]; multiplanar single image)
-    uint64_t semaphore = 0; // VkSemaphore (AVVkFrame::sem[0]; timeline)
-    uint64_t semValue = 0;  // value to wait on before sampling (AVVkFrame::sem_value[0])
-    int layout = 0;         // VkImageLayout the decode left the image in (AVVkFrame::layout[0])
+    uint64_t image = 0;       // VkImage  (AVVkFrame::img[0]; multiplanar single image)
+    uint64_t semaphore = 0;   // VkSemaphore (AVVkFrame::sem[0]; timeline)
+    uint64_t semValue = 0;    // value to wait on before sampling (AVVkFrame::sem_value[0])
+    int layout = 0;           // VkImageLayout the decode left the image in (AVVkFrame::layout[0])
     uint32_t queueFamily = 0; // current owning family (AVVkFrame::queue_family[0])
-    int vkFormat = 0;       // VkFormat of the multiplanar image (for the YCbCr conversion)
-    int colorSpace = 0;     // AVColorSpace (BT.601/709/...) -> VkSamplerYcbcrModelConversion
-    int colorRange = 0;     // AVColorRange (MPEG/JPEG) -> VkSamplerYcbcrRange
+    int vkFormat = 0;         // VkFormat of the multiplanar image (for the YCbCr conversion)
+    int colorSpace = 0;       // AVColorSpace (BT.601/709/...) -> VkSamplerYcbcrModelConversion
+    int colorRange = 0;       // AVColorRange (MPEG/JPEG) -> VkSamplerYcbcrRange
     int width = 0;
     int height = 0;
     bool valid = false;

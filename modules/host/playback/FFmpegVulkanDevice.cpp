@@ -5,6 +5,7 @@
 #include <framelift/Log.h>
 
 #include <cstdint>
+#include <utility>
 
 extern "C"
 {
@@ -63,16 +64,15 @@ AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info)
     auto* devCtx = reinterpret_cast<AVHWDeviceContext*>(ref->data);
     auto* vk = static_cast<AVVulkanDeviceContext*>(devCtx->hwctx);
 
-    // Serialize FFmpeg's queue submits against the renderer's: both touch the same,
-    // non-thread-safe VkQueue. Without this, decode-thread submits race the render
-    // thread's and hang the driver (issue #26). user_opaque carries the shared lock to
-    // the callbacks; it is the user's field and untouched by av_hwdevice_ctx_init.
+    // Serialize FFmpeg's queue submits against FrameLift's binary/timeline bridge.
+    // Qt's graphics queue is deliberately absent from qf and never uses this lock.
+    // user_opaque is the user's field and untouched by av_hwdevice_ctx_init.
     devCtx->user_opaque = info.queueLock;
     if (info.queueLock && !info.internalQueueSync)
     {
         // Fallback path (no VK_KHR_internally_synchronized_queues support): FFmpeg's
         // lock_queue/unlock_queue are deprecated, but they are the only portable way to
-        // make FFmpeg's decode-thread submits share the renderer's VulkanQueueLock when
+        // make FFmpeg's decode-thread submits share the bridge's VulkanQueueLock when
         // both touch the same VkQueue (issue #26). When the device's queues are internally
         // synchronized the driver handles this, so these callbacks are left unset and no
         // deprecated field is touched at all. This is the ONLY deprecated use in the TU.
@@ -132,66 +132,122 @@ AVBufferRef* CreateVulkanHwDevice(const VulkanDeviceInfo& info)
     return ref;
 }
 
-bool GetVulkanFrameInfo(void* avFrame, VulkanFrameInfo& out)
+void* GetVulkanFrameIdentity(void* avFrame) noexcept
 {
     auto* frame = static_cast<AVFrame*>(avFrame);
-    if (!frame || frame->format != AV_PIX_FMT_VULKAN || !frame->hw_frames_ctx)
-    {
-        return false;
-    }
-    auto* vkf = reinterpret_cast<AVVkFrame*>(frame->data[0]);
-    if (!vkf)
-    {
-        return false;
-    }
-    auto* fc = reinterpret_cast<AVHWFramesContext*>(frame->hw_frames_ctx->data);
-    auto* vfc = static_cast<AVVulkanFramesContext*>(fc->hwctx);
-
-    out.framesContextId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fc));
-    vfc->lock_frame(fc, vkf);
-    out.image = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->img[0]));
-    out.semaphore = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->sem[0]));
-    out.semValue = vkf->sem_value[0];
-    out.layout = static_cast<int>(vkf->layout[0]);
-    out.queueFamily = vkf->queue_family[0];
-    vfc->unlock_frame(fc, vkf);
-
-    out.vkFormat = static_cast<int>(vfc->format[0]);
-    out.colorSpace = static_cast<int>(frame->colorspace);
-    out.colorRange = static_cast<int>(frame->color_range);
-    out.width = frame->width;
-    out.height = frame->height;
-    out.valid = true;
-
-    // Multiplane single-image is required for the YCbCr sampler path; a second image
-    // means the driver fell back to per-plane images, which we don't sample here.
-    if (vkf->img[1] != VK_NULL_HANDLE)
-    {
-        out.valid = false;
-        return false;
-    }
-    return true;
+    return frame && frame->format == AV_PIX_FMT_VULKAN ? frame->data[0] : nullptr;
 }
 
-void SetVulkanFrameState(void* avFrame, int newLayout, unsigned long long newSemValue, unsigned int newQueueFamily)
+LockedVulkanFrame::~LockedVulkanFrame()
 {
-    auto* frame = static_cast<AVFrame*>(avFrame);
-    if (!frame || frame->format != AV_PIX_FMT_VULKAN || !frame->hw_frames_ctx)
-    {
-        return;
-    }
-    auto* vkf = reinterpret_cast<AVVkFrame*>(frame->data[0]);
-    if (!vkf)
-    {
-        return;
-    }
-    auto* fc = reinterpret_cast<AVHWFramesContext*>(frame->hw_frames_ctx->data);
-    auto* vfc = static_cast<AVVulkanFramesContext*>(fc->hwctx);
+    Unlock();
+}
 
-    vfc->lock_frame(fc, vkf);
+LockedVulkanFrame::LockedVulkanFrame(LockedVulkanFrame&& other) noexcept
+{
+    *this = std::move(other);
+}
+
+LockedVulkanFrame& LockedVulkanFrame::operator=(LockedVulkanFrame&& other) noexcept
+{
+    if (this == &other)
+    {
+        return *this;
+    }
+    Unlock();
+    frameIdentity_ = std::exchange(other.frameIdentity_, nullptr);
+    retainedFrame_ = std::exchange(other.retainedFrame_, nullptr);
+    framesContext_ = std::exchange(other.framesContext_, nullptr);
+    vulkanFrame_ = std::exchange(other.vulkanFrame_, nullptr);
+    info_ = other.info_;
+    other.info_ = {};
+    return *this;
+}
+
+void LockedVulkanFrame::Commit(int newLayout, unsigned long long newSemValue, unsigned int newQueueFamily) noexcept
+{
+    if (!vulkanFrame_ || !framesContext_)
+    {
+        return;
+    }
+    auto* vkf = static_cast<AVVkFrame*>(vulkanFrame_);
     vkf->layout[0] = static_cast<VkImageLayout>(newLayout);
     vkf->access[0] = VK_ACCESS_SHADER_READ_BIT;
     vkf->sem_value[0] = newSemValue;
     vkf->queue_family[0] = newQueueFamily;
-    vfc->unlock_frame(fc, vkf);
+    Unlock();
+}
+
+void LockedVulkanFrame::Unlock() noexcept
+{
+    if (vulkanFrame_ && framesContext_)
+    {
+        auto* fc = static_cast<AVHWFramesContext*>(framesContext_);
+        auto* vfc = static_cast<AVVulkanFramesContext*>(fc->hwctx);
+        vfc->unlock_frame(fc, static_cast<AVVkFrame*>(vulkanFrame_));
+    }
+    if (retainedFrame_)
+    {
+        auto* retained = static_cast<AVFrame*>(retainedFrame_);
+        av_frame_free(&retained);
+    }
+    frameIdentity_ = nullptr;
+    retainedFrame_ = nullptr;
+    framesContext_ = nullptr;
+    vulkanFrame_ = nullptr;
+    info_ = {};
+}
+
+bool LockVulkanFrame(void* avFrame, LockedVulkanFrame& out)
+{
+    out.Unlock();
+    auto* frame = static_cast<AVFrame*>(avFrame);
+    if (!frame || frame->format != AV_PIX_FMT_VULKAN || !frame->hw_frames_ctx)
+    {
+        return false;
+    }
+    AVFrame* retained = av_frame_clone(frame);
+    if (!retained)
+    {
+        return false;
+    }
+    auto* vkf = reinterpret_cast<AVVkFrame*>(retained->data[0]);
+    if (!vkf)
+    {
+        av_frame_free(&retained);
+        return false;
+    }
+    auto* fc = reinterpret_cast<AVHWFramesContext*>(retained->hw_frames_ctx->data);
+    auto* vfc = static_cast<AVVulkanFramesContext*>(fc->hwctx);
+
+    vfc->lock_frame(fc, vkf);
+    VulkanFrameInfo info{};
+    info.framesContextId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fc));
+    info.image = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->img[0]));
+    info.semaphore = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vkf->sem[0]));
+    info.semValue = vkf->sem_value[0];
+    info.layout = static_cast<int>(vkf->layout[0]);
+    info.queueFamily = vkf->queue_family[0];
+    info.vkFormat = static_cast<int>(vfc->format[0]);
+    info.colorSpace = static_cast<int>(frame->colorspace);
+    info.colorRange = static_cast<int>(frame->color_range);
+    info.width = frame->width;
+    info.height = frame->height;
+    info.valid = true;
+
+    // Multiplane single-image is required for the YCbCr sampler path; a second image
+    // means the driver fell back to per-plane images, which we don't sample here.
+    if (vkf->img[1] != VK_NULL_HANDLE || vkf->img[0] == VK_NULL_HANDLE || vkf->sem[0] == VK_NULL_HANDLE)
+    {
+        vfc->unlock_frame(fc, vkf);
+        av_frame_free(&retained);
+        return false;
+    }
+
+    out.frameIdentity_ = vkf;
+    out.retainedFrame_ = retained;
+    out.framesContext_ = fc;
+    out.vulkanFrame_ = vkf;
+    out.info_ = info;
+    return true;
 }

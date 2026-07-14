@@ -48,7 +48,7 @@ AVHWDeviceType ToDeviceType(HwBackend backend)
 // decode writes via DECODE_DST/DPB, the renderer only samples, and the pool binds
 // one multiplane image per frame (nothing aliases memory). Everything else
 // (avcodec_get_hw_frames_parameters) is exactly what avcodec would have set up —
-// including the multiplane layout GetVulkanFrameInfo depends on. Returns false on
+// including the multiplane layout the zero-copy frame bridge depends on. Returns false on
 // any failure, in which case the caller leaves hw_frames_ctx unset and avcodec
 // allocates the pool itself (today's behavior, validation warts and all).
 bool SetupVulkanFramesPool(AVCodecContext* ctx)
