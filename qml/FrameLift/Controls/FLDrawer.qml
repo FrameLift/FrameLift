@@ -5,6 +5,19 @@ FLGlassPanel {
     property bool open: false
     property bool rightSide: false
     property real drawerWidth: 340
+    // Set drawerWidthRatio to opt into responsive sizing. A zero ratio preserves
+    // the historical fixed-width behaviour for existing drawers.
+    property real drawerWidthRatio: 0
+    property real minimumDrawerWidth: drawerWidth
+    property real maximumDrawerWidth: drawerWidth
+    readonly property real effectiveDrawerWidth: {
+        if (drawerWidthRatio <= 0 || !parent)
+            return drawerWidth
+        const responsiveWidth = parent.width * drawerWidthRatio
+        const clampedWidth = Math.max(minimumDrawerWidth,
+                                      Math.min(maximumDrawerWidth, responsiveWidth))
+        return Math.min(parent.width, clampedWidth)
+    }
     signal visibleWidthChangedByAnimation(real width)
 
     // Overdraw 1px past every edge so the panel covers the sub-pixel seam that
@@ -18,11 +31,11 @@ FLGlassPanel {
     property bool _ready: false
     onXChanged: if (!_ready && parent && parent.width > 0) _ready = true
 
-    width: drawerWidth + drawer._bleed * 2
+    width: effectiveDrawerWidth + drawer._bleed * 2
     height: (parent ? parent.height : 0) + drawer._bleed * 2
     y: -drawer._bleed
     x: rightSide
-       ? (parent ? parent.width : 0) - (open ? drawerWidth + drawer._bleed : -drawer._bleed)
+       ? (parent ? parent.width : 0) - (open ? effectiveDrawerWidth + drawer._bleed : -drawer._bleed)
        : (open ? -drawer._bleed : -width)
     radius: 0
 

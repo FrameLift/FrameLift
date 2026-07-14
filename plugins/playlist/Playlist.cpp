@@ -98,17 +98,7 @@ static void CollectWatchDirectories(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-Playlist::Playlist()
-{
-    // Invalidate the QmlEntries cache on every change to the entries projection.
-    QObject::connect(
-        this, &Playlist::playlistChanged, this,
-        [this]
-        {
-            entriesCacheDirty_ = true;
-        }
-    );
-}
+Playlist::Playlist() = default;
 
 Playlist::~Playlist()
 {
@@ -256,8 +246,7 @@ void Playlist::OnInstall(IModuleContext& ctx)
             ctx,
             [this](const MediaTagsUpdatedEvent&)
             {
-                entriesCacheDirty_ = true;
-                Q_EMIT playlistChanged();
+                NotifyRowsChanged();
             }
         );
     }
@@ -344,8 +333,11 @@ void Playlist::ApplySettings(
     }
     else
     {
-        Q_EMIT playlistChanged();
+        NotifyRowsChanged();
     }
+
+    // scanSubdirs, scanMaxDepth, and autoReload all affect watcher coverage.
+    ArmDirectoryWatcher();
 }
 
 // ── IModule ──────────────────────────────────────────────────────────────────
@@ -504,22 +496,24 @@ void Playlist::OpenFile(const char* path) noexcept
     // directory listing is scanned on a background thread and swapped in by
     // ApplyScanResult() — so a large/nested folder never blocks the start of
     // playback or the UI thread (see ScanShared in the header).
+    ClearDirectoryWatcher();
+    watchedDir_.clear();
+    SetManualReloadRequired(false);
     Clear();
     AddFile(pathStr, "/");
-    current_ = 0;
-    LoadFile(pathStr.c_str());
+    Activate(0);
 
-    StartScan(pathStr);
+    StartScan(std::filesystem::path(pathStr).parent_path().string(), pathStr);
 }
 
-void Playlist::StartScan(const std::string& path)
+void Playlist::StartScan(const std::string& dirPath, const std::string& keepPath)
 {
     if (!scanShared_)
     {
         return;
     }
 
-    const auto dir = std::filesystem::path(path).parent_path();
+    const auto dir = std::filesystem::path(dirPath);
     const std::string videoExt =
         ReadStringSetting(ctx_, "files.videoExtensions", "mp4;mkv;avi;mov;wmv;flv;webm;m4v;mpg;mpeg");
     const std::string imageExt = ReadStringSetting(ctx_, "files.imageExtensions", "png;jpg;jpeg;gif;bmp;webp");
@@ -530,7 +524,7 @@ void Playlist::StartScan(const std::string& path)
     {
         scanExt = videoExt + ";" + imageExt;
     }
-    else if (IsVideoFile(std::filesystem::path(path), imageExt))
+    else if (!keepPath.empty() && IsVideoFile(std::filesystem::path(keepPath), imageExt))
     {
         scanExt = imageExt;
     }
@@ -539,12 +533,13 @@ void Playlist::StartScan(const std::string& path)
         scanExt = videoExt;
     }
 
-    // Claim a generation so a later OpenFile() supersedes this scan's result.
+    // Claim a generation so a later open/reload supersedes this scan's result.
     const uint64_t gen = scanShared_->latestGen.fetch_add(1) + 1;
+    SetScanning(true);
 
     // Runs the directory walk and publishes into the shared slot; returns false if
     // a newer open superseded us in the meantime. Heavy work happens here.
-    auto scan = [shared = scanShared_, dir, scanExt, maxDepth, gen, path]
+    auto scan = [shared = scanShared_, dir, scanExt, maxDepth, gen, keepPath]
     {
         std::vector<std::string> files;
         ScanVideos(dir, 0, maxDepth, scanExt, files);
@@ -556,7 +551,7 @@ void Playlist::StartScan(const std::string& path)
         }
         shared->files = std::move(files);
         shared->dir = dir.string();
-        shared->openedPath = path;
+        shared->keepPath = keepPath;
         shared->gen = gen;
         shared->ready = true;
         return true;
@@ -595,7 +590,7 @@ void Playlist::ApplyScanResult()
 
     std::vector<std::string> files;
     std::string dir;
-    std::string openedPath;
+    std::string keepPath;
     {
         std::lock_guard<std::mutex> lk(scanShared_->mtx);
         if (!scanShared_->ready || scanShared_->gen != scanShared_->latestGen.load())
@@ -604,18 +599,29 @@ void Playlist::ApplyScanResult()
         }
         files = std::move(scanShared_->files);
         dir = std::move(scanShared_->dir);
-        openedPath = std::move(scanShared_->openedPath);
+        keepPath = std::move(scanShared_->keepPath);
         scanShared_->ready = false;
     }
 
     // Keep whatever is currently playing selected, without restarting playback.
-    const std::string keepPath =
-        current_ >= 0 && current_ < static_cast<int>(entries_.size()) ? entries_[current_].path : openedPath;
-    RebuildEntries(files, keepPath, dir);
+    const std::string currentPath =
+        current_ >= 0 && current_ < static_cast<int>(entries_.size()) ? entries_[current_].path : keepPath;
+    RebuildEntries(files, currentPath, dir);
 
     // (Re)arm the directory watcher for the now-listed directory.
     watchedDir_ = dir;
     ArmDirectoryWatcher();
+    SetScanning(false);
+}
+
+void Playlist::SetScanning(const bool value)
+{
+    if (scanning_ == value)
+    {
+        return;
+    }
+    scanning_ = value;
+    Q_EMIT scanStateChanged();
 }
 
 // ── Entry management ──────────────────────────────────────────────────────────
@@ -624,14 +630,14 @@ void Playlist::AddFile(std::string path, std::string subfolder)
 {
     auto label = FilenameOf(path);
     entries_.emplace_back(std::move(path), std::move(label), std::move(subfolder));
-    Q_EMIT playlistChanged();
+    NotifyProjectionChanged();
 }
 
 void Playlist::Clear()
 {
     entries_.clear();
     current_ = -1;
-    Q_EMIT playlistChanged();
+    NotifyProjectionChanged();
 }
 
 void Playlist::Activate(const int index)
@@ -642,7 +648,7 @@ void Playlist::Activate(const int index)
     }
     current_ = index;
     LoadFile(entries_[current_].path.c_str());
-    Q_EMIT playlistChanged();
+    NotifyRowsChanged();
 }
 
 void Playlist::Next()
@@ -696,29 +702,7 @@ void Playlist::Reload()
     const std::string currentPath =
         current_ >= 0 && current_ < static_cast<int>(entries_.size()) ? entries_[current_].path : std::string{};
 
-    const std::string videoExt =
-        ReadStringSetting(ctx_, "files.videoExtensions", "mp4;mkv;avi;mov;wmv;flv;webm;m4v;mpg;mpeg");
-    const std::string imageExt = ReadStringSetting(ctx_, "files.imageExtensions", "png;jpg;jpeg;gif;bmp;webp");
-    const int maxDepth = scanSubdirs_ ? scanMaxDepth_ : 0;
-
-    std::string scanExt;
-    if (mixedPlaylist_)
-    {
-        scanExt = videoExt + ";" + imageExt;
-    }
-    else if (!currentPath.empty() && IsVideoFile(std::filesystem::path(currentPath), imageExt))
-    {
-        scanExt = imageExt;
-    }
-    else
-    {
-        scanExt = videoExt;
-    }
-
-    std::vector<std::string> files;
-    ScanVideos(std::filesystem::path(watchedDir_), 0, maxDepth, scanExt, files);
-    RebuildEntries(files, currentPath, watchedDir_);
-    ArmDirectoryWatcher();
+    StartScan(watchedDir_, currentPath);
 }
 
 void Playlist::ArmDirectoryWatcher()
@@ -726,19 +710,33 @@ void Playlist::ArmDirectoryWatcher()
     ClearDirectoryWatcher();
     if (watchedDir_.empty())
     {
+        SetManualReloadRequired(false);
         return;
     }
-    if (dirChangedEventType_ == 0 || !scanShared_ || !scanShared_->events)
+    if (!autoReload_ || dirChangedEventType_ == 0 || !scanShared_ || !scanShared_->events)
     {
+        SetManualReloadRequired(true);
         return;
     }
 
     QStringList paths;
     CollectWatchDirectories(std::filesystem::path(watchedDir_), 0, scanSubdirs_ ? scanMaxDepth_ : 0, paths);
-    if (!paths.empty())
+    if (paths.empty())
     {
-        dirWatcher_.addPaths(paths);
+        SetManualReloadRequired(true);
+        return;
     }
+
+    const QStringList failedPaths = dirWatcher_.addPaths(paths);
+    const QStringList registeredPaths = dirWatcher_.directories();
+    const bool completeCoverage = failedPaths.empty() && std::ranges::all_of(
+                                                             paths,
+                                                             [&](const QString& path)
+                                                             {
+                                                                 return registeredPaths.contains(path);
+                                                             }
+                                                         );
+    SetManualReloadRequired(!completeCoverage);
 }
 
 void Playlist::ClearDirectoryWatcher()
@@ -748,6 +746,16 @@ void Playlist::ClearDirectoryWatcher()
     {
         dirWatcher_.removePaths(dirs);
     }
+}
+
+void Playlist::SetManualReloadRequired(const bool value)
+{
+    if (manualReloadRequired_ == value)
+    {
+        return;
+    }
+    manualReloadRequired_ = value;
+    Q_EMIT directoryWatchStateChanged();
 }
 
 void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string& keepPath, const std::string& baseDir)
@@ -792,7 +800,7 @@ void Playlist::RebuildEntries(std::vector<std::string>& files, const std::string
         sortedEntries_ = entries_; // refresh backup with the newly scanned sorted list
         ApplyShuffleToEntries();
     }
-    Q_EMIT playlistChanged();
+    NotifyProjectionChanged();
 }
 
 void Playlist::SortEntries(std::vector<Entry>& entries) const
@@ -858,7 +866,7 @@ void Playlist::Resort()
             }
         }
     }
-    Q_EMIT playlistChanged();
+    NotifyProjectionChanged();
 }
 
 void Playlist::toggleSortByName()
@@ -893,7 +901,7 @@ void Playlist::ToggleShuffle()
             }
         }
     }
-    Q_EMIT playlistChanged();
+    NotifyProjectionChanged();
 }
 
 void Playlist::ApplyShuffleToEntries()
@@ -934,20 +942,70 @@ QVariantList Playlist::QmlEntries() const
         return entriesCache_;
     }
     QVariantList result;
-    result.reserve(static_cast<qsizetype>(entries_.size()));
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i)
+    result.reserve(static_cast<qsizetype>(filteredIndices_.size()));
+    for (const int sourceIndex : filteredIndices_)
     {
+        if (sourceIndex < 0 || sourceIndex >= static_cast<int>(entries_.size()))
+        {
+            continue;
+        }
+        const Entry& entry = entries_[sourceIndex];
         QVariantMap row;
-        row.insert(QStringLiteral("label"), QString::fromStdString(entries_[i].label));
-        row.insert(QStringLiteral("subfolder"), QString::fromStdString(entries_[i].subfolder));
-        row.insert(QStringLiteral("path"), QString::fromStdString(entries_[i].path));
-        row.insert(QStringLiteral("current"), i == current_);
-        row.insert(QStringLiteral("tags"), TagsFor(entries_[i].path));
+        row.insert(QStringLiteral("label"), QString::fromStdString(entry.label));
+        row.insert(QStringLiteral("subfolder"), QString::fromStdString(entry.subfolder));
+        row.insert(QStringLiteral("path"), QString::fromStdString(entry.path));
+        row.insert(QStringLiteral("current"), sourceIndex == current_);
+        row.insert(QStringLiteral("tags"), TagsFor(entry.path));
         result.push_back(row);
     }
     entriesCache_ = std::move(result);
     entriesCacheDirty_ = false;
     return entriesCache_;
+}
+
+void Playlist::SetSearch(const QString& value)
+{
+    const std::string next = value.toStdString();
+    if (next == searchQuery_)
+    {
+        return;
+    }
+    searchQuery_ = next;
+    NotifyProjectionChanged();
+}
+
+int Playlist::QmlCurrentIndex() const
+{
+    const auto it = std::ranges::find(filteredIndices_, current_);
+    return it == filteredIndices_.end() ? -1 : static_cast<int>(std::distance(filteredIndices_.begin(), it));
+}
+
+void Playlist::RebuildFilter()
+{
+    filteredIndices_.clear();
+    const QString query = QString::fromStdString(searchQuery_);
+    for (int i = 0; i < static_cast<int>(entries_.size()); ++i)
+    {
+        const Entry& entry = entries_[i];
+        if (query.isEmpty() || QString::fromStdString(entry.label).contains(query, Qt::CaseInsensitive) ||
+            QString::fromStdString(entry.path).contains(query, Qt::CaseInsensitive) ||
+            QString::fromStdString(entry.subfolder).contains(query, Qt::CaseInsensitive))
+        {
+            filteredIndices_.push_back(i);
+        }
+    }
+}
+
+void Playlist::NotifyProjectionChanged()
+{
+    RebuildFilter();
+    NotifyRowsChanged();
+}
+
+void Playlist::NotifyRowsChanged()
+{
+    entriesCacheDirty_ = true;
+    Q_EMIT playlistChanged();
 }
 
 QStringList Playlist::TagsFor(const std::string& path) const
@@ -975,12 +1033,20 @@ QStringList Playlist::TagsFor(const std::string& path) const
 void Playlist::togglePanel()
 {
     SetOpen(!open_);
-    Q_EMIT panelStateChanged();
 }
 
 void Playlist::activateIndex(const int index)
 {
-    Activate(index);
+    if (index < 0 || index >= static_cast<int>(filteredIndices_.size()))
+    {
+        return;
+    }
+    const int sourceIndex = filteredIndices_[index];
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(entries_.size()))
+    {
+        return;
+    }
+    Activate(sourceIndex);
 }
 
 void Playlist::publishVisibleWidth(const qreal width)
@@ -1002,5 +1068,5 @@ void Playlist::SetOpen(const bool value)
     {
         ctx_->Publish<PanelLayoutEvent>({0, 0.f});
     }
-    Q_EMIT playlistChanged();
+    Q_EMIT panelStateChanged();
 }

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 // ListView for plugin panels. Up/Down/Return are handled natively by Qt's
 // ListView whenever the list has keyboard focus, including its built-in,
@@ -9,9 +10,13 @@ import QtQuick
 ListView {
     id: list
     clip: true
-    spacing: 2
+    spacing: 1
     keyNavigationEnabled: true
     property bool active: false
+
+    ScrollBar.vertical: ScrollBar {
+        policy: ScrollBar.AsNeeded
+    }
 
     // Native navigation keeps the current row visible on its own; we only need
     // to re-assert it when the viewport is resized, and only when the row is

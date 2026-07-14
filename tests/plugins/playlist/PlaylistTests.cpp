@@ -12,9 +12,13 @@
 #include <filesystem>
 #include <fstream>
 
+#include <QtQml/QQmlComponent>
+#include <QtQml/QQmlContext>
+#include <QtQml/QQmlEngine>
 #include <QtTest/QtTest>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -41,6 +45,26 @@ struct TempDir
         std::error_code ec;
         std::filesystem::remove_all(path, ec);
     }
+};
+
+class FakeEventPump final : public IEventPump
+{
+public:
+    [[nodiscard]] uint32_t RegisterCustomEventType() noexcept override
+    {
+        return nextEventType_++;
+    }
+
+    void PushCustomEvent(uint32_t, void*) noexcept override
+    {
+    }
+
+    void PushQuitEvent() noexcept override
+    {
+    }
+
+private:
+    uint32_t nextEventType_ = 1;
 };
 
 // Minimal IMediaTags: returns a fixed tag list for one path, nothing for others.
@@ -111,6 +135,15 @@ QStringList RowTags(const QVariantList& rows, const QString& path)
     }
     return {};
 }
+
+QString RowPath(const QVariantList& rows, const int index)
+{
+    if (index < 0 || index >= rows.size())
+    {
+        return {};
+    }
+    return rows[index].toMap().value("path").toString();
+}
 } // namespace
 
 // ── Navigation: needs no context (LoadFile no-ops when ctx_ is null) ──────────
@@ -160,6 +193,38 @@ private Q_SLOTS:
         QVERIFY((pl.Current()) == (-1));
     }
 
+    void QmlBindingRemainsSafeWhenOpenFileClearsTheProjection()
+    {
+        Playlist pl;
+        for (int i = 0; i < 114; ++i)
+        {
+            pl.AddFile("/old/" + std::to_string(i) + ".mp4", "/old");
+        }
+
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("playlistModel"), &pl);
+        QQmlComponent component(&engine);
+        component.setData(
+            R"(
+                import QtQml
+                QtObject {
+                    property int observedCount: playlistModel.entries.length
+                }
+            )",
+            QUrl()
+        );
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> binding(component.create());
+        QVERIFY(binding != nullptr);
+        QCOMPARE(binding->property("observedCount").toInt(), 114);
+
+        const TempDir dir({"new-a.mp4", "new-b.mkv"});
+        pl.OpenFile((dir.path / "new-a.mp4").string().c_str());
+
+        QCOMPARE(pl.Count(), 2);
+        QCOMPARE(binding->property("observedCount").toInt(), 2);
+    }
+
     // Rows carry AI tags from IMediaTags when the service is present; rows for untagged
     // files carry an empty list.
     void QmlEntriesCarryMediaTags()
@@ -192,17 +257,132 @@ private Q_SLOTS:
         QVERIFY(RowTags(rows, "/a.mp4").isEmpty());
     }
 
+    void SearchFiltersFilenamePathAndSubfolderCaseInsensitively()
+    {
+        Playlist pl;
+        pl.AddFile("/Movies/Alpha.mp4", "/Movies");
+        pl.AddFile("/Shows/Beta.mkv", "/Shows");
+        QCOMPARE(pl.Count(), 2);
+
+        pl.SetSearch(QStringLiteral("movies"));
+        QCOMPARE(pl.QmlEntries().size(), 1);
+        QCOMPARE(RowPath(pl.QmlEntries(), 0), QStringLiteral("/Movies/Alpha.mp4"));
+
+        pl.SetSearch(QStringLiteral("BETA"));
+        QCOMPARE(pl.QmlEntries().size(), 1);
+        QCOMPARE(RowPath(pl.QmlEntries(), 0), QStringLiteral("/Shows/Beta.mkv"));
+
+        pl.SetSearch(QStringLiteral("missing"));
+        QVERIFY(pl.QmlEntries().isEmpty());
+        QCOMPARE(pl.Count(), 2);
+
+        pl.SetSearch(QString());
+        QCOMPARE(pl.QmlEntries().size(), 2);
+        QVERIFY(pl.Search().isEmpty());
+    }
+
+    void FilteredActivationMapsBackToTheSourcePlaylist()
+    {
+        Playlist pl;
+        pl.AddFile("/a.mp4", "/");
+        pl.AddFile("/b.mp4", "/");
+        pl.AddFile("/c.mp4", "/");
+        pl.Next();
+        QCOMPARE(pl.Current(), 0);
+
+        pl.SetSearch(QStringLiteral("c.mp4"));
+        QCOMPARE(pl.QmlEntries().size(), 1);
+        QCOMPARE(pl.QmlCurrentIndex(), -1);
+
+        pl.activateIndex(0);
+        QCOMPARE(pl.Current(), 2);
+        QCOMPARE(pl.QmlCurrentIndex(), 0);
+        QVERIFY(pl.QmlEntries().front().toMap().value("current").toBool());
+    }
+
+    void SearchProjectionSurvivesSortAndShuffle()
+    {
+        Playlist pl;
+        pl.AddFile("/z/match-one.mp4", "/z");
+        pl.AddFile("/a/other.mp4", "/a");
+        pl.AddFile("/b/match-two.mp4", "/b");
+        pl.SetSearch(QStringLiteral("match"));
+        QCOMPARE(pl.QmlEntries().size(), 2);
+
+        pl.toggleSortByName();
+        QCOMPARE(pl.QmlEntries().size(), 2);
+
+        pl.ToggleShuffle();
+        QCOMPARE(pl.QmlEntries().size(), 2);
+        pl.activateIndex(0);
+        QVERIFY(pl.QmlCurrentIndex() >= 0);
+        QVERIFY(pl.QmlEntries()[pl.QmlCurrentIndex()].toMap().value("current").toBool());
+    }
+
     void OpenFileScansDirectoryForVideosOnly()
     {
         const TempDir dir({"a.mp4", "b.mkv", "c.txt", "readme"});
 
         Playlist pl; // no ctx -> uses default extension lists; watcher arming is skipped
+        QSignalSpy scanSpy(&pl, &Playlist::scanStateChanged);
+        QVERIFY(!pl.IsScanning());
         pl.OpenFile((dir.path / "a.mp4").string().c_str());
 
         // Non-mixed playlist: only the two video files are picked up (.txt/readme excluded).
         // With no event pump available, OpenFile scans synchronously and applies inline.
         QVERIFY((pl.Count()) == (2));
         QVERIFY((pl.Current()) >= (0)); // the opened file is selected after the scan applies
+        QVERIFY(!pl.IsScanning());
+        QCOMPARE(scanSpy.count(), 2);         // false -> true -> false
+        QVERIFY(pl.IsManualReloadRequired()); // no event pump means no automatic watcher
+    }
+
+    void ManualReloadTracksDirectoryWatcherAvailability()
+    {
+        const TempDir dir({"a.mp4"});
+        Playlist pl;
+        pl.OpenFile((dir.path / "a.mp4").string().c_str());
+        QVERIFY(pl.IsManualReloadRequired());
+
+        Settings settings;
+        const TempFile ini;
+        ModuleContext ctx("pref/", &settings, ini.str());
+        FakeEventPump eventPump;
+        ctx.RegisterService<IEventPump>(&eventPump);
+        pl.Install(ctx);
+
+        pl.ApplySettings(true, 5, false, false, 5.0f, true, false);
+        QVERIFY(!pl.IsManualReloadRequired());
+
+        pl.ApplySettings(true, 5, false, false, 5.0f, false, false);
+        QVERIFY(pl.IsManualReloadRequired());
+
+        pl.ApplySettings(true, 5, false, false, 5.0f, true, false);
+        QVERIFY(!pl.IsManualReloadRequired());
+        std::error_code ec;
+        std::filesystem::remove_all(dir.path, ec);
+        pl.ApplySettings(true, 5, false, false, 5.0f, true, false);
+        QVERIFY(pl.IsManualReloadRequired());
+    }
+
+    void ReloadUsesTheScanLifecycle()
+    {
+        const TempDir dir({"a.mp4"});
+
+        Playlist pl;
+        pl.OpenFile((dir.path / "a.mp4").string().c_str());
+        pl.SetSearch(QStringLiteral("b.mkv"));
+        QVERIFY(pl.QmlEntries().isEmpty());
+
+        QSignalSpy scanSpy(&pl, &Playlist::scanStateChanged);
+        std::ofstream(dir.path / "b.mkv") << "x";
+        pl.Reload();
+
+        QCOMPARE(pl.Count(), 2);
+        QCOMPARE(pl.QmlEntries().size(), 1);
+        QCOMPARE(RowPath(pl.QmlEntries(), 0), QString::fromStdString((dir.path / "b.mkv").string()));
+        QVERIFY(!pl.IsScanning());
+        QCOMPARE(scanSpy.count(), 2);
     }
 
     // ── LoadFile drives the media player + publishes FileOpenedEvent (with ctx) ────

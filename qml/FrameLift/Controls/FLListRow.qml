@@ -17,15 +17,28 @@ Rectangle {
     color: rowRoot.current ? FLTheme.accentSoft
           : rowRoot.selected ? FLTheme.accentFaint
           : rowMouse.containsMouse ? FLTheme.hover : "transparent"
-    border.width: rowRoot.selected && !rowRoot.current ? 1 : 0
+    border.width: rowRoot.selected && rowRoot.ListView.view
+                  && rowRoot.ListView.view.activeFocus ? 1 : 0
     border.color: FLTheme.accent
 
     Item { id: holder; anchors.fill: parent }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.leftMargin: 2
+        anchors.verticalCenter: parent.verticalCenter
+        width: 3
+        height: Math.max(14, parent.height - 12)
+        radius: 2
+        color: FLTheme.accent
+        visible: rowRoot.current
+    }
 
     MouseArea {
         id: rowMouse
         anchors.fill: parent
         hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
         onClicked: rowRoot.selectRequested()
         onDoubleClicked: rowRoot.activateRequested()
     }
