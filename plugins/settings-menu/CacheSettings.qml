@@ -17,6 +17,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     ColumnLayout {
         width: root.availableWidth
@@ -30,7 +32,7 @@ ScrollView {
                 description: "Buffer upcoming data while playing."
                 keyName: "cache.readAheadEnabled"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("cache.readAheadEnabled"))
+                    checked: root.field(root.rev, "cache.readAheadEnabled")
                     onToggled: root.vm.setFieldValue("cache.readAheadEnabled", checked)
                 }
             }
@@ -40,7 +42,7 @@ ScrollView {
                 keyName: "cache.readAheadSizeMB"
                 FLSpinBox {
                     from: 1; to: 4096; stepSize: 16
-                    value: (root.rev, root.vm.fieldValue("cache.readAheadSizeMB"))
+                    value: root.field(root.rev, "cache.readAheadSizeMB")
                     onValueModified: root.vm.setFieldValue("cache.readAheadSizeMB", value)
                 }
             }

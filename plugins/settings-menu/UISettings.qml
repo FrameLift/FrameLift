@@ -17,6 +17,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     ColumnLayout {
         width: root.availableWidth
@@ -32,7 +34,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 120.0; top: 1200.0 }
-                    text: Number((root.rev, root.vm.fieldValue("ui.panelWidth"))).toFixed(0)
+                    text: Number(root.field(root.rev, "ui.panelWidth")).toFixed(0)
                     onEditingFinished: root.vm.setFieldValue("ui.panelWidth", Number(text))
                 }
             }
@@ -43,7 +45,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 1.0; top: 100.0 }
-                    text: Number((root.rev, root.vm.fieldValue("ui.slideSpeed"))).toFixed(0)
+                    text: Number(root.field(root.rev, "ui.slideSpeed")).toFixed(0)
                     onEditingFinished: root.vm.setFieldValue("ui.slideSpeed", Number(text))
                 }
             }

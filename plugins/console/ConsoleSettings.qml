@@ -3,7 +3,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import FrameLift.Controls
-import FrameLift.Plugins.SettingsMenu
 
 Item {
     id: root
@@ -22,6 +21,7 @@ Item {
                 { "label": "Performance only", "prop": "perfOnly" }
             ]
             delegate: FLSettingRow {
+                id: row
                 required property var modelData
                 title: modelData.label
                 description: modelData.prop === "perfOnly"
@@ -29,8 +29,8 @@ Item {
                              : "Include this log level in the console output."
                 keyName: "console." + modelData.prop
                 FLSwitch {
-                    checked: root.viewModel[modelData.prop]
-                    onToggled: root.viewModel[modelData.prop] = checked
+                    checked: root.viewModel[row.modelData.prop]
+                    onToggled: root.viewModel[row.modelData.prop] = checked
                 }
             }
         }

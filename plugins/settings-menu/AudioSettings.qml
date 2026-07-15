@@ -18,6 +18,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     ColumnLayout {
         width: root.availableWidth
@@ -34,11 +36,11 @@ ScrollView {
                     spacing: 10
                     FLSlider {
                         from: 0; to: 100; stepSize: 1
-                        value: (root.rev, root.vm.fieldValue("audio.defaultVolume"))
+                        value: root.field(root.rev, "audio.defaultVolume")
                         onMoved: root.vm.setFieldValue("audio.defaultVolume", Math.round(value))
                     }
                     Text {
-                        text: Math.round((root.rev, root.vm.fieldValue("audio.defaultVolume")))
+                        text: Math.round(root.field(root.rev, "audio.defaultVolume"))
                         color: FLTheme.textMuted
                         font.pixelSize: 13
                         Layout.preferredWidth: 28
@@ -52,7 +54,7 @@ ScrollView {
                 keyName: "audio.channelMode"
                 FLComboBox {
                     model: ["Auto", "Mono", "Stereo", "Surround"]
-                    currentIndex: (root.rev, root.vm.fieldValue("audio.channelMode"))
+                    currentIndex: root.field(root.rev, "audio.channelMode")
                     onActivated: root.vm.setFieldValue("audio.channelMode", currentIndex)
                 }
             }
@@ -62,7 +64,7 @@ ScrollView {
                 keyName: "audio.outputDevice"
                 FLTextField {
                     implicitWidth: 220
-                    text: (root.rev, root.vm.fieldValue("audio.outputDevice"))
+                    text: root.field(root.rev, "audio.outputDevice")
                     placeholderText: "System default"
                     onEditingFinished: root.vm.setFieldValue("audio.outputDevice", text)
                 }
@@ -73,7 +75,7 @@ ScrollView {
                 keyName: "audio.defaultLanguage"
                 FLTextField {
                     implicitWidth: 120
-                    text: (root.rev, root.vm.fieldValue("audio.defaultLanguage"))
+                    text: root.field(root.rev, "audio.defaultLanguage")
                     onEditingFinished: root.vm.setFieldValue("audio.defaultLanguage", text)
                 }
             }
@@ -83,7 +85,7 @@ ScrollView {
                 keyName: "audio.syncOffsetMs"
                 FLSpinBox {
                     from: -5000; to: 5000; stepSize: 10
-                    value: (root.rev, root.vm.fieldValue("audio.syncOffsetMs"))
+                    value: root.field(root.rev, "audio.syncOffsetMs")
                     onValueModified: root.vm.setFieldValue("audio.syncOffsetMs", value)
                 }
             }
@@ -97,7 +99,7 @@ ScrollView {
                 description: "Reduce playback volume while app-owned transient audio is active."
                 keyName: "audio.duckingEnabled"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("audio.duckingEnabled"))
+                    checked: root.field(root.rev, "audio.duckingEnabled")
                     onToggled: root.vm.setFieldValue("audio.duckingEnabled", checked)
                 }
             }
@@ -109,11 +111,11 @@ ScrollView {
                     spacing: 10
                     FLSlider {
                         from: 0; to: 100; stepSize: 1
-                        value: (root.rev, root.vm.fieldValue("audio.duckingLevel"))
+                        value: root.field(root.rev, "audio.duckingLevel")
                         onMoved: root.vm.setFieldValue("audio.duckingLevel", Math.round(value))
                     }
                     Text {
-                        text: Math.round((root.rev, root.vm.fieldValue("audio.duckingLevel")))
+                        text: Math.round(root.field(root.rev, "audio.duckingLevel"))
                         color: FLTheme.textMuted
                         font.pixelSize: 13
                         Layout.preferredWidth: 28
@@ -131,7 +133,7 @@ ScrollView {
                 description: "Enable dynamic audio normalization by default."
                 keyName: "audio.normalizeEnabled"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("audio.normalizeEnabled"))
+                    checked: root.field(root.rev, "audio.normalizeEnabled")
                     onToggled: root.vm.setFieldValue("audio.normalizeEnabled", checked)
                 }
             }
@@ -141,125 +143,125 @@ ScrollView {
                 keyName: "audio.normalizeMode"
                 FLComboBox {
                     model: ["limiter", "dynaudnorm"]
-                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("audio.normalizeMode"))))
+                    currentIndex: Math.max(0, model.indexOf(root.field(root.rev, "audio.normalizeMode")))
                     onActivated: root.vm.setFieldValue("audio.normalizeMode", model[currentIndex])
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                visible: root.field(root.rev, "audio.normalizeMode") === "limiter"
                 title: "Input gain"
                 description: "Gain applied before lookahead limiting."
                 keyName: "audio.limiterLevelIn"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.015625; top: 64.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLevelIn"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.limiterLevelIn")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.limiterLevelIn", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                visible: root.field(root.rev, "audio.normalizeMode") === "limiter"
                 title: "Output gain"
                 description: "Gain applied after lookahead limiting."
                 keyName: "audio.limiterLevelOut"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.015625; top: 64.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLevelOut"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.limiterLevelOut")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.limiterLevelOut", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                visible: root.field(root.rev, "audio.normalizeMode") === "limiter"
                 title: "Peak limit"
                 description: "Maximum output signal magnitude."
                 keyName: "audio.limiterLimit"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.0625; top: 1.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.limiterLimit"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.limiterLimit")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.limiterLimit", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                visible: root.field(root.rev, "audio.normalizeMode") === "limiter"
                 title: "Attack (ms)"
                 description: "How quickly limiting begins when a peak arrives."
                 keyName: "audio.limiterAttack"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.1; top: 80.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.limiterAttack"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.limiterAttack")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.limiterAttack", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "limiter"
+                visible: root.field(root.rev, "audio.normalizeMode") === "limiter"
                 title: "Release (ms)"
                 description: "How long gain reduction takes to recover."
                 keyName: "audio.limiterRelease"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 1.0; top: 8000.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.limiterRelease"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.limiterRelease")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.limiterRelease", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                visible: root.field(root.rev, "audio.normalizeMode") === "dynaudnorm"
                 title: "Frame length (ms)"
                 description: "Filter frame length in milliseconds."
                 keyName: "audio.dynaudnormFrameLen"
                 FLSpinBox {
                     from: 10; to: 8000; stepSize: 10
-                    value: (root.rev, root.vm.fieldValue("audio.dynaudnormFrameLen"))
+                    value: root.field(root.rev, "audio.dynaudnormFrameLen")
                     onValueModified: root.vm.setFieldValue("audio.dynaudnormFrameLen", value)
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                visible: root.field(root.rev, "audio.normalizeMode") === "dynaudnorm"
                 title: "Gaussian window"
                 description: "Gaussian filter window size (odd number)."
                 keyName: "audio.dynaudnormGaussSize"
                 FLSpinBox {
                     from: 3; to: 301; stepSize: 2
-                    value: (root.rev, root.vm.fieldValue("audio.dynaudnormGaussSize"))
+                    value: root.field(root.rev, "audio.dynaudnormGaussSize")
                     onValueModified: root.vm.setFieldValue("audio.dynaudnormGaussSize", value)
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                visible: root.field(root.rev, "audio.normalizeMode") === "dynaudnorm"
                 title: "Target peak"
                 description: "Target peak magnitude (0.0-1.0)."
                 keyName: "audio.dynaudnormPeak"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.0; top: 1.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.dynaudnormPeak"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.dynaudnormPeak")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.dynaudnormPeak", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                visible: root.field(root.rev, "audio.normalizeMode") === "dynaudnorm"
                 title: "Max gain"
                 description: "Maximum gain factor."
                 keyName: "audio.dynaudnormMaxGain"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 1.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.dynaudnormMaxGain"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.dynaudnormMaxGain")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.dynaudnormMaxGain", Number(text))
                 }
             }
             FLSettingRow {
-                visible: (root.rev, root.vm.fieldValue("audio.normalizeMode")) === "dynaudnorm"
+                visible: root.field(root.rev, "audio.normalizeMode") === "dynaudnorm"
                 title: "Post-normalization gain"
                 description: "Output gain applied after dynamic normalization."
                 keyName: "audio.dynaudnormVolume"
                 FLTextField {
                     implicitWidth: 100
                     validator: DoubleValidator { bottom: 0.0 }
-                    text: Number((root.rev, root.vm.fieldValue("audio.dynaudnormVolume"))).toFixed(2)
+                    text: Number(root.field(root.rev, "audio.dynaudnormVolume")).toFixed(2)
                     onEditingFinished: root.vm.setFieldValue("audio.dynaudnormVolume", Number(text))
                 }
             }

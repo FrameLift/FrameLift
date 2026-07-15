@@ -26,7 +26,8 @@ Item {
                 model: root.vm !== null ? root.vm.sections : []
                 delegate: Column {
                     id: section
-                    property var entry: modelData
+                    required property var modelData
+                    readonly property var entry: section.modelData
                     spacing: 1
 
                     Text {

@@ -17,6 +17,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     ColumnLayout {
         width: root.availableWidth
@@ -31,7 +33,7 @@ ScrollView {
                 keyName: "theme.preset"
                 FLComboBox {
                     model: ["dark", "light", "classic"]
-                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("theme.preset"))))
+                    currentIndex: Math.max(0, model.indexOf(root.field(root.rev, "theme.preset")))
                     onActivated: root.vm.setFieldValue("theme.preset", currentText)
                 }
             }
@@ -42,16 +44,16 @@ ScrollView {
                 RowLayout {
                     spacing: 8
                     Rectangle {
-                        width: 24; height: 24; radius: 6
+                        implicitWidth: 24; implicitHeight: 24; radius: 6
                         border.color: FLTheme.border; border.width: 1
                         color: {
-                            const v = (root.rev, root.vm.fieldValue("theme.accentColor"))
+                            const v = root.field(root.rev, "theme.accentColor")
                             return /^#([0-9a-fA-F]{6})$/.test(v) ? v : "transparent"
                         }
                     }
                     FLTextField {
                         implicitWidth: 110
-                        text: (root.rev, root.vm.fieldValue("theme.accentColor"))
+                        text: root.field(root.rev, "theme.accentColor")
                         onEditingFinished: root.vm.setFieldValue("theme.accentColor", text)
                     }
                 }
