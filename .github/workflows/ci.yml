@@ -309,3 +309,14 @@ jobs:
             artifacts/FrameLift-win64/FrameLift-win64.zip
             artifacts/FrameLift-linux/FrameLift-linux-x64.tar.gz
             artifacts/FrameLift-sdk/FrameLift-sdk-*.zip
+      # Kick the FrameLift-Examples CI against the SDK zip this release just
+      # published (its self-containment proof). Runs after the release is
+      # created so the asset is downloadable. Needs a PAT with write access to
+      # FrameLift-Examples; the default GITHUB_TOKEN cannot dispatch cross-repo.
+      - name: Trigger FrameLift-Examples CI
+        env:
+          GH_TOKEN: ${{ secrets.EXAMPLES_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/FrameLift/FrameLift-Examples/dispatches \
+            -f event_type=framelift-release \
+            -f "client_payload[sdk_tag]=$GITHUB_REF_NAME"
