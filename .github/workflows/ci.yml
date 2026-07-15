@@ -13,6 +13,10 @@ permissions:
 
 env:
   DEBIAN_FRONTEND: noninteractive
+  # Qt tools (rcc/moc/qmllint) warn and switch to C.UTF-8 on every invocation when the
+  # locale is the container default "C"; set it up front to keep build logs readable.
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
   BUILD_DIR: build
   CMAKE_VERSION: "4.3.0"
   QT_VERSION: "6.11.1"

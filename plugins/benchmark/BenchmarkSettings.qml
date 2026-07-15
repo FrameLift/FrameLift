@@ -3,7 +3,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import FrameLift.Controls
-import FrameLift.Plugins.SettingsMenu
 
 Item {
     id: root

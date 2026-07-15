@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 
 // Reusable modal confirmation dialog, centered over the whole plugin surface.

@@ -13,7 +13,6 @@
 class QQuickWindow;
 class QQuickItem;
 class QQmlEngine;
-class QQmlContext;
 class QEvent;
 class VideoItem;
 class WindowChrome;
@@ -118,7 +117,6 @@ private:
     qreal chromeInset_ = 0.0; // video top inset: barHeight_ windowed, 0 in fullscreen
     std::unique_ptr<WindowChrome> chrome_;
     std::unique_ptr<QQmlEngine> chromeEngine_;
-    std::unique_ptr<QQmlContext> chromeContext_;
     QQuickItem* chromeItem_ = nullptr; // child of window_->contentItem()
 
     std::function<void(const AppEvent&)> eventSink_;

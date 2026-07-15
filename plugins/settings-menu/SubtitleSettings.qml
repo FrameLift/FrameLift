@@ -17,6 +17,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     // Reusable colour row: hex text field with a live swatch.
     component ColorRow: FLSettingRow {
@@ -26,16 +28,16 @@ ScrollView {
         RowLayout {
             spacing: 8
             Rectangle {
-                width: 24; height: 24; radius: 6
+                implicitWidth: 24; implicitHeight: 24; radius: 6
                 border.color: FLTheme.border; border.width: 1
                 color: {
-                    const v = (root.rev, root.vm.fieldValue(colorRow.settingKey))
+                    const v = root.field(root.rev, colorRow.settingKey)
                     return /^#([0-9a-fA-F]{6})$/.test(v) ? v : "transparent"
                 }
             }
             FLTextField {
                 implicitWidth: 110
-                text: (root.rev, root.vm.fieldValue(colorRow.settingKey))
+                text: root.field(root.rev, colorRow.settingKey)
                 onEditingFinished: root.vm.setFieldValue(colorRow.settingKey, text)
             }
         }
@@ -54,7 +56,7 @@ ScrollView {
                 keyName: "subtitles.defaultLanguage"
                 FLTextField {
                     implicitWidth: 120
-                    text: (root.rev, root.vm.fieldValue("subtitles.defaultLanguage"))
+                    text: root.field(root.rev, "subtitles.defaultLanguage")
                     onEditingFinished: root.vm.setFieldValue("subtitles.defaultLanguage", text)
                 }
             }
@@ -63,7 +65,7 @@ ScrollView {
                 description: "Auto-select forced subtitle tracks when present."
                 keyName: "subtitles.preferForced"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("subtitles.preferForced"))
+                    checked: root.field(root.rev, "subtitles.preferForced")
                     onToggled: root.vm.setFieldValue("subtitles.preferForced", checked)
                 }
             }
@@ -72,7 +74,7 @@ ScrollView {
                 description: "Apply the style settings below instead of the file's own styling."
                 keyName: "subtitles.overrideStyle"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("subtitles.overrideStyle"))
+                    checked: root.field(root.rev, "subtitles.overrideStyle")
                     onToggled: root.vm.setFieldValue("subtitles.overrideStyle", checked)
                 }
             }
@@ -87,7 +89,7 @@ ScrollView {
                 keyName: "subtitles.fontFamily"
                 FLTextField {
                     implicitWidth: 200
-                    text: (root.rev, root.vm.fieldValue("subtitles.fontFamily"))
+                    text: root.field(root.rev, "subtitles.fontFamily")
                     placeholderText: "File default"
                     onEditingFinished: root.vm.setFieldValue("subtitles.fontFamily", text)
                 }
@@ -100,11 +102,11 @@ ScrollView {
                     spacing: 10
                     FLSlider {
                         from: 0.25; to: 4.0; stepSize: 0.05
-                        value: (root.rev, root.vm.fieldValue("subtitles.fontScale"))
+                        value: root.field(root.rev, "subtitles.fontScale")
                         onMoved: root.vm.setFieldValue("subtitles.fontScale", value)
                     }
                     Text {
-                        text: Number((root.rev, root.vm.fieldValue("subtitles.fontScale"))).toFixed(2) + "×"
+                        text: Number(root.field(root.rev, "subtitles.fontScale")).toFixed(2) + "×"
                         color: FLTheme.textMuted
                         font.pixelSize: 13
                         Layout.preferredWidth: 44
@@ -119,7 +121,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator {}
-                    text: Number((root.rev, root.vm.fieldValue("subtitles.lineSpacing"))).toFixed(1)
+                    text: Number(root.field(root.rev, "subtitles.lineSpacing")).toFixed(1)
                     onEditingFinished: root.vm.setFieldValue("subtitles.lineSpacing", Number(text))
                 }
             }
@@ -130,7 +132,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator {}
-                    text: Number((root.rev, root.vm.fieldValue("subtitles.letterSpacing"))).toFixed(1)
+                    text: Number(root.field(root.rev, "subtitles.letterSpacing")).toFixed(1)
                     onEditingFinished: root.vm.setFieldValue("subtitles.letterSpacing", Number(text))
                 }
             }
@@ -148,7 +150,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator { bottom: 0.0 }
-                    text: Number((root.rev, root.vm.fieldValue("subtitles.outlineWidth"))).toFixed(1)
+                    text: Number(root.field(root.rev, "subtitles.outlineWidth")).toFixed(1)
                     onEditingFinished: root.vm.setFieldValue("subtitles.outlineWidth", Number(text))
                 }
             }
@@ -161,11 +163,11 @@ ScrollView {
                     spacing: 10
                     FLSlider {
                         from: 0.0; to: 1.0; stepSize: 0.01
-                        value: (root.rev, root.vm.fieldValue("subtitles.backOpacity"))
+                        value: root.field(root.rev, "subtitles.backOpacity")
                         onMoved: root.vm.setFieldValue("subtitles.backOpacity", value)
                     }
                     Text {
-                        text: Math.round((root.rev, root.vm.fieldValue("subtitles.backOpacity")) * 100) + "%"
+                        text: Math.round(root.field(root.rev, "subtitles.backOpacity") * 100) + "%"
                         color: FLTheme.textMuted
                         font.pixelSize: 13
                         Layout.preferredWidth: 44
@@ -180,7 +182,7 @@ ScrollView {
                 FLTextField {
                     implicitWidth: 90
                     validator: DoubleValidator { bottom: 0.0 }
-                    text: Number((root.rev, root.vm.fieldValue("subtitles.shadowDepth"))).toFixed(1)
+                    text: Number(root.field(root.rev, "subtitles.shadowDepth")).toFixed(1)
                     onEditingFinished: root.vm.setFieldValue("subtitles.shadowDepth", Number(text))
                 }
             }
@@ -190,7 +192,7 @@ ScrollView {
                 keyName: "subtitles.edgeStyle"
                 FLComboBox {
                     model: ["None", "Outline", "Drop shadow", "Opaque box"]
-                    currentIndex: (root.rev, root.vm.fieldValue("subtitles.edgeStyle"))
+                    currentIndex: root.field(root.rev, "subtitles.edgeStyle")
                     onActivated: root.vm.setFieldValue("subtitles.edgeStyle", currentIndex)
                 }
             }
@@ -203,7 +205,7 @@ ScrollView {
                     model: ["Keep", "Bottom left", "Bottom centre", "Bottom right",
                             "Middle left", "Centre", "Middle right",
                             "Top left", "Top centre", "Top right"]
-                    currentIndex: (root.rev, root.vm.fieldValue("subtitles.alignment"))
+                    currentIndex: root.field(root.rev, "subtitles.alignment")
                     onActivated: root.vm.setFieldValue("subtitles.alignment", currentIndex)
                 }
             }

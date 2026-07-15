@@ -15,7 +15,6 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QScreen>
 #include <QtQml/QQmlComponent>
-#include <QtQml/QQmlContext>
 #include <QtQml/QQmlEngine>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
@@ -299,11 +298,10 @@ void QtAppWindow::SetupCustomChrome()
     chrome_->SetTitle(QString::fromUtf8(title_.c_str()));
 
     chromeEngine_ = std::make_unique<QQmlEngine>();
-    chromeContext_ = std::make_unique<QQmlContext>(chromeEngine_->rootContext());
-    chromeContext_->setContextProperty(QStringLiteral("chrome"), chrome_.get());
 
     QQmlComponent component(chromeEngine_.get(), QUrl(QStringLiteral("qrc:/qt/qml/FrameLift/Controls/FLTitleBar.qml")));
-    QObject* object = component.create(chromeContext_.get());
+    QObject* object =
+        component.createWithInitialProperties({{QStringLiteral("chrome"), QVariant::fromValue(chrome_.get())}});
     chromeItem_ = qobject_cast<QQuickItem*>(object);
     if (!chromeItem_)
     {

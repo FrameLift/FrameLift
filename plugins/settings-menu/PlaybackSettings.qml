@@ -17,6 +17,8 @@ ScrollView {
         target: root.vm
         function onChanged() { root.rev++ }
     }
+    // Bind as root.field(root.rev, key): the rev argument makes the binding depend on rev.
+    function field(rev, key) { return vm.fieldValue(key) }
 
     ColumnLayout {
         width: root.availableWidth
@@ -34,7 +36,7 @@ ScrollView {
                     // Only the acceleration modes this machine can actually use
                     // (host-probed), so incompatible backends aren't offered.
                     model: root.vm.availableHwdecModes()
-                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("playback.hwdecMode"))))
+                    currentIndex: Math.max(0, model.indexOf(root.field(root.rev, "playback.hwdecMode")))
                     onActivated: root.vm.setFieldValue("playback.hwdecMode", currentText)
                 }
             }
@@ -45,7 +47,7 @@ ScrollView {
                 FLComboBox {
                     implicitWidth: 180
                     model: ["smart", "exact", "keyframe"]
-                    currentIndex: Math.max(0, model.indexOf((root.rev, root.vm.fieldValue("playback.seekMode"))))
+                    currentIndex: Math.max(0, model.indexOf(root.field(root.rev, "playback.seekMode")))
                     onActivated: root.vm.setFieldValue("playback.seekMode", currentText)
                 }
             }
@@ -54,7 +56,7 @@ ScrollView {
                 description: "Speed up file opening by limiting stream probing. Unusual containers (TS/AVI) may misdetect tracks — leave off if tracks go missing."
                 keyName: "playback.fastProbe"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("playback.fastProbe"))
+                    checked: root.field(root.rev, "playback.fastProbe")
                     onToggled: root.vm.setFieldValue("playback.fastProbe", checked)
                 }
             }
@@ -68,7 +70,7 @@ ScrollView {
                 description: "Auto-load subtitle files matching the opened media."
                 keyName: "playback.subAutoLoad"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("playback.subAutoLoad"))
+                    checked: root.field(root.rev, "playback.subAutoLoad")
                     onToggled: root.vm.setFieldValue("playback.subAutoLoad", checked)
                 }
             }
@@ -77,7 +79,7 @@ ScrollView {
                 description: "Auto-load external audio tracks matching the opened media."
                 keyName: "playback.audioFileAutoLoad"
                 FLSwitch {
-                    checked: (root.rev, root.vm.fieldValue("playback.audioFileAutoLoad"))
+                    checked: root.field(root.rev, "playback.audioFileAutoLoad")
                     onToggled: root.vm.setFieldValue("playback.audioFileAutoLoad", checked)
                 }
             }

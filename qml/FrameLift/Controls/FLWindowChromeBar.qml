@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 
 // Presentational fallback window chrome: a top title-bar strip (title + minimize /

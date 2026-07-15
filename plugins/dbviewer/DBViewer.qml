@@ -174,6 +174,7 @@ Item {
                         Repeater {
                             model: root.vm !== null ? root.vm.columns : []
                             delegate: Rectangle {
+                                id: headerCell
                                 required property var modelData
                                 width: root.cellWidth
                                 height: root.cellHeight
@@ -184,7 +185,7 @@ Item {
                                     anchors.fill: parent
                                     anchors.leftMargin: 6
                                     verticalAlignment: Text.AlignVCenter
-                                    text: modelData
+                                    text: headerCell.modelData
                                     color: FLTheme.text
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
@@ -210,6 +211,7 @@ Item {
                             Repeater {
                                 model: dataRow.modelData
                                 delegate: Rectangle {
+                                    id: cell
                                     required property var modelData
                                     width: root.cellWidth
                                     height: root.cellHeight
@@ -220,9 +222,9 @@ Item {
                                         anchors.fill: parent
                                         anchors.leftMargin: 6
                                         verticalAlignment: Text.AlignVCenter
-                                        text: modelData === undefined ? "NULL" : modelData
-                                        color: modelData === undefined ? FLTheme.textMuted : FLTheme.text
-                                        font.italic: modelData === undefined
+                                        text: cell.modelData === undefined ? "NULL" : cell.modelData
+                                        color: cell.modelData === undefined ? FLTheme.textMuted : FLTheme.text
+                                        font.italic: cell.modelData === undefined
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
                                     }
