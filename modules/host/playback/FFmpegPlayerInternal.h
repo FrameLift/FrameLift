@@ -28,8 +28,10 @@ extern "C"
 #ifndef NOMINMAX
 #define NOMINMAX // keep std::min/std::max usable in the including TU
 #endif
-#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm); needs windows.h types first
+// clang-format off
 #include <windows.h>
+#include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm); needs windows.h types first
+// clang-format on
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002 // Win10 1803+; define for older SDK headers
 #endif
