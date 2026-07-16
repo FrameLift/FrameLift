@@ -54,7 +54,7 @@ public:
     // Resample one decoded frame and queue it for playback; the audio clock then
     // advances to the end of this frame. ptsSec is the frame's start timestamp in
     // seconds. No-op when not open.
-    void Feed(const AVFrame* frame, double ptsSec);
+    [[nodiscard]] bool Feed(const AVFrame* frame, double ptsSec, std::uint64_t generation);
 
     // Timestamp (seconds) of the audio currently audible — the master clock.
     [[nodiscard]] double MasterClock() const;
@@ -77,7 +77,14 @@ public:
     void PulseDuck();
     void EnumerateDevices(void (*visit)(const AudioOutputDevice* device, void* ud), void* ud) const;
 
-    void Flush(); // drop queued audio and reset the clock baseline (seek / restart)
+    // Cut old audio synchronously when a seek is requested. Feed stays blocked
+    // until ResumeGeneration() commits the matching demux generation.
+    void InterruptForSeek(std::uint64_t generation);
+    // Reset resampler delay and admit PCM for generation. If a newer seek already
+    // interrupted the output, this older completion is ignored.
+    void ResumeGeneration(std::uint64_t generation);
+    // Drop queued audio and reset the clock for non-seek binding restarts.
+    void Flush();
     void Close();
 
 private:
@@ -96,6 +103,8 @@ private:
     int dstChannels_ = 2;
     int dstRate_ = 0;
     double lastQueuedPts_ = 0.0; // pts (s) at the END of the last queued chunk
+    std::uint64_t generation_ = 0;
+    bool feedInterrupted_ = false;
 
     int volume_ = 100; // 0–100, mirrors the player's canonical value
     bool muted_ = false;

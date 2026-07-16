@@ -1,6 +1,6 @@
 #pragma once
-#include <functional>
 #include <framelift/Hotkeys.h>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +24,13 @@ public:
     void Clear() noexcept override;
     bool Handle(const AppEvent& e) const noexcept override;
 
+    // Host-only access while a callback is being dispatched. Public Hotkeys
+    // callbacks remain zero-argument and the SDK vtable is unchanged.
+    [[nodiscard]] const AppEvent* CurrentDispatchEvent() const noexcept
+    {
+        return dispatchEvent_;
+    }
+
 private:
     struct Binding
     {
@@ -36,6 +43,7 @@ private:
     };
 
     std::vector<Binding> bindings_;
+    mutable const AppEvent* dispatchEvent_ = nullptr;
 
     void BindRawImpl(
         const std::string& name, Key key, Mod mods, void (*action)(void*), void* ud, void (*cleanup)(void*)
@@ -106,5 +114,39 @@ template <typename Fn>
 inline void Bind(HotkeysImpl& keys, const char* name, const std::string& bindList, Fn&& fn)
 {
     Bind(keys, name, bindList.c_str(), std::forward<Fn>(fn));
+}
+
+template <typename Fn>
+inline void BindEvent(HotkeysImpl& keys, const char* name, const char* bindList, Fn&& fn)
+{
+    struct C
+    {
+        HotkeysImpl* keys;
+        std::function<void(const AppEvent&)> fn;
+    };
+
+    auto* c = new C{&keys, std::forward<Fn>(fn)};
+    keys.BindNamedRaw(
+        name, bindList,
+        [](void* ud)
+        {
+            auto* cell = static_cast<C*>(ud);
+            if (const AppEvent* event = cell->keys->CurrentDispatchEvent())
+            {
+                cell->fn(*event);
+            }
+        },
+        c,
+        [](void* ud)
+        {
+            delete static_cast<C*>(ud);
+        }
+    );
+}
+
+template <typename Fn>
+inline void BindEvent(HotkeysImpl& keys, const char* name, const std::string& bindList, Fn&& fn)
+{
+    BindEvent(keys, name, bindList.c_str(), std::forward<Fn>(fn));
 }
 } // namespace host

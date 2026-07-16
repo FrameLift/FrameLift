@@ -673,6 +673,60 @@ void App::Dispatch(const AppEvent& e)
 #if FRAMELIFT_BUILD_LAUNCH_TESTS
 void App::ScheduleTestExitIfRequested()
 {
+    bool seekOk = false;
+    int seekDelayMs = qEnvironmentVariableIntValue("FL_TEST_SEEK_AFTER_MS", &seekOk);
+    if (seekOk)
+    {
+        bool absoluteOk = false;
+        const double absolute = qEnvironmentVariable("FL_TEST_SEEK_ABSOLUTE").toDouble(&absoluteOk);
+        bool deltaOk = false;
+        const double delta = qEnvironmentVariable("FL_TEST_SEEK_DELTA").toDouble(&deltaOk);
+        if (!deltaOk && !absoluteOk)
+        {
+            Log::Error(
+                "FL_TEST_SEEK_DELTA or FL_TEST_SEEK_ABSOLUTE must be a number when FL_TEST_SEEK_AFTER_MS is set"
+            );
+        }
+        else
+        {
+            seekDelayMs = std::max(0, seekDelayMs);
+            bool countOk = false;
+            int count = qEnvironmentVariableIntValue("FL_TEST_SEEK_COUNT", &countOk);
+            count = countOk ? std::max(1, count) : 1;
+            bool intervalOk = false;
+            int intervalMs = qEnvironmentVariableIntValue("FL_TEST_SEEK_INTERVAL_MS", &intervalOk);
+            intervalMs = intervalOk ? std::max(0, intervalMs) : 0;
+            const bool pauseBeforeSeek = qEnvironmentVariableIntValue("FL_TEST_PAUSE_BEFORE_SEEK") != 0;
+            Log::Info(
+                "test {}seek requested: {} x {}s after {} ms{}", absoluteOk ? "absolute " : "relative ", count,
+                absoluteOk ? absolute : delta, seekDelayMs, pauseBeforeSeek ? " while paused" : ""
+            );
+            for (int i = 0; i < count; ++i)
+            {
+                QTimer::singleShot(
+                    seekDelayMs + i * intervalMs,
+                    [this, delta, absolute, absoluteOk, pauseBeforeSeek, i]
+                    {
+                        if (pauseBeforeSeek && i == 0)
+                        {
+                            player_->SetPause(true);
+                        }
+                        if (absoluteOk)
+                        {
+                            player_->SeekAbsolute(absolute);
+                        }
+                        else
+                        {
+                            // The first timer models the physical KeyDown; later
+                            // timers model Qt/OS auto-repeat for held-seek tests.
+                            (void)player_->SeekRelativeFromInput(delta, i > 0);
+                        }
+                    }
+                );
+            }
+        }
+    }
+
     bool ok = false;
     int delayMs = qEnvironmentVariableIntValue("FL_TEST_EXIT_AFTER_MS", &ok);
     if (ok)
@@ -756,6 +810,15 @@ int App::Run()
         // FL_TEST_FILE wins over the positional argument, even on failure: the
         // cause is already logged, and starting with no file is less surprising
         // than silently opening something other than the requested test clip.
+        // Launch tests can pre-generate one sibling clip so Playlist's real
+        // directory scan supplies a deterministic next item. The primary spec is
+        // still the file opened first.
+#if FRAMELIFT_BUILD_LAUNCH_TESTS
+        if (const QString extraSpec = qEnvironmentVariable("FL_TEST_FILE_EXTRA"); !extraSpec.isEmpty())
+        {
+            (void)TestMediaGenerator::EnsureTestMedia(extraSpec);
+        }
+#endif
         if (const QString path = TestMediaGenerator::EnsureTestMedia(testSpec); !path.isEmpty())
         {
             const std::string p = path.toStdString();

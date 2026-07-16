@@ -44,12 +44,14 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
     FFmpegAudioFilter filter;
     uint64_t seenGen = ~0ull; // force a reconcile before the first frame
     bool filterActive = false;
+    std::uint64_t workerGeneration = 0;
+    double workerSeekSkipPts = kSeekNoSkipPts;
 
     // Queue one output frame (post seek-skip) and drive the audio-only TimePos clock.
     // ptsSec is the frame's start timestamp, already normalised to the 0 origin.
     const auto deliver = [&](AVFrame* f, double ptsSec)
     {
-        if (ptsSec < seekSkipPts_) // exact-seek: discard audio before the target
+        if (workerGeneration != activeGeneration_.load(std::memory_order_acquire) || ptsSec < workerSeekSkipPts)
         {
             return;
         }
@@ -65,7 +67,7 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
             std::unique_lock lock(mutex_);
             for (;;)
             {
-                const bool superseded = seekKicked_;
+                const bool superseded = workerGeneration != activeGeneration_.load(std::memory_order_acquire);
                 const bool tearingDown = shutdown_.load() || hasPendingLoad_ || stopRequested_;
                 const double heldSec =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - holdStart).count();
@@ -81,11 +83,18 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
             }
         }
         const double audioOffsetSec = static_cast<double>(audioSyncOffsetMs_.load()) / 1000.0;
-        audioOut_->Feed(f, ptsSec + audioOffsetSec);
+        if (!audioOut_->Feed(f, ptsSec + audioOffsetSec, workerGeneration))
+        {
+            return;
+        }
         if (audioOut_->HasDevice())
         {
             ClearSubtitleSeekClockOverride();
             std::lock_guard lock(mutex_);
+            if (workerGeneration != activeGeneration_.load(std::memory_order_acquire))
+            {
+                return;
+            }
             // The audio clock is the master when a device is open, and this first
             // post-seek Feed re-establishes it (lastQueuedPts_ ≈ target) — so the seek
             // anchor may release now, regardless of whether the video frame has painted.
@@ -103,14 +112,15 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
         if (!hasVideo_)
         {
             FRAMELIFT_PERF_END("file-open");
-            if (seekRefresh_.load())
+            if (seekRefreshGeneration_.load(std::memory_order_acquire) == workerGeneration)
             {
                 // Same rule as the video worker's present(): "seek" ends only on the
                 // first post-seek delivery, and audio-only must clear the refresh flag
                 // itself (no video worker exists to do it).
-                FRAMELIFT_PERF_END("seek");
+                FinishSeekPerf(workerGeneration);
             }
-            seekRefresh_ = false;
+            std::uint64_t expected = workerGeneration;
+            seekRefreshGeneration_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
 
             const auto now = std::chrono::steady_clock::now();
             if (now - lastEmit >= std::chrono::milliseconds(250))
@@ -139,7 +149,7 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
         for (;;)
         {
             const int bps = audioOut_->BytesPerSec();
-            if (!audioOut_->HasDevice() || bps <= 0 || audioQ_->Aborted() || audioQ_->AtEof())
+            if (!audioOut_->HasDevice() || bps <= 0 || audioQ_->Interrupted() || audioQ_->AtEof())
             {
                 // No drain to pace against, a seek/stop tore the queue down, or the
                 // session hit EOF — at EOF the worker must drain and exit promptly
@@ -242,8 +252,48 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
         }
     };
 
-    while (audioQ_->Pop(pkt))
+    for (;;)
     {
+        const FFmpegPacketQueue::PopResult item = audioQ_->Pop(pkt);
+        if (item.kind == FFmpegPacketQueue::PopKind::Stop)
+        {
+            break;
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Flush)
+        {
+            avcodec_flush_buffers(dec);
+            av_frame_unref(frame);
+            av_frame_unref(filtered);
+            filter.Close();
+            filterActive = false;
+            seenGen = ~0ull;
+            workerGeneration = item.generation;
+            workerSeekSkipPts = seekSkipPts_.load(std::memory_order_acquire);
+            LogSeekPerf("seek-audio-flush", item.generation, item.requestedAt);
+            continue;
+        }
+        if (workerGeneration == 0)
+        {
+            workerGeneration = item.generation;
+            workerSeekSkipPts = seekSkipPts_.load(std::memory_order_acquire);
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Eof)
+        {
+            avcodec_send_packet(dec, nullptr);
+            feedFrames();
+            if (filterActive)
+            {
+                filter.Send(nullptr);
+                drainFilter();
+            }
+            audioQ_->AcknowledgeEof(item.generation);
+            continue;
+        }
+        if (item.generation != workerGeneration || item.generation != activeGeneration_.load(std::memory_order_acquire))
+        {
+            av_packet_unref(pkt);
+            continue;
+        }
         if (avcodec_send_packet(dec, pkt) == 0)
         {
             feedFrames();
@@ -253,17 +303,6 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
             CountDecodeError(decodeErrors_, dec);
         }
         av_packet_unref(pkt);
-    }
-    // Drain the decoder on a clean EOF (skip when the queue was aborted).
-    if (!audioQ_->Aborted())
-    {
-        avcodec_send_packet(dec, nullptr);
-        feedFrames();
-        if (filterActive) // flush the filter's lookahead tail so the end isn't dropped
-        {
-            filter.Send(nullptr);
-            drainFilter();
-        }
     }
 
     av_frame_free(&filtered);
@@ -288,6 +327,8 @@ void FFmpegPlayer::VideoWorker(
     int swsSrcRange = -1;
     std::vector<uint8_t> pixelBuf; // reused CPU frame buffer (planar YUV or RGBA; sized at publish)
     bool clockStallWarned = false; // one warning per stall episode (reset on a normal present)
+    std::uint64_t workerGeneration = 0;
+    double workerSeekSkipPts = kSeekNoSkipPts;
     // Routine TimePos/PercentPos ticks follow the audio-only path's 250 ms cadence
     // (see AudioWorker's deliver); primed in the past so the first frame emits.
     auto lastEmit = std::chrono::steady_clock::now() - std::chrono::milliseconds(250);
@@ -333,6 +374,10 @@ void FFmpegPlayer::VideoWorker(
     // the render thread. Returns true if interrupted (new load / shutdown / seek).
     const auto present = [&](AVFrame* decoded) -> bool
     {
+        if (workerGeneration != activeGeneration_.load(std::memory_order_acquire))
+        {
+            return true; // generation invalidated: stop draining this packet
+        }
         // Zero-copy Vulkan frames stay on the GPU — no download, handed off as an AVVkFrame
         // ref below. Other hardware frames live in GPU memory and are downloaded to a
         // software frame (carrying pts) before swscale. Software decode leaves f unchanged.
@@ -348,7 +393,7 @@ void FFmpegPlayer::VideoWorker(
         // toward an exact-seek target, a discarded hw frame must not pay a full
         // av_hwframe_transfer_data just to be thrown away.
         const double framePts = FFmpegTimeline::ToRelative(FramePtsSec(decoded, tb), timelineStart);
-        if (framePts < seekSkipPts_) // exact-seek: discard frames before the target
+        if (framePts < workerSeekSkipPts) // exact-seek: discard frames before the target
         {
             return false;
         }
@@ -364,7 +409,7 @@ void FFmpegPlayer::VideoWorker(
         }
 
         // Emit VideoReconfig on the first frame of a file and whenever the decoded
-        // size changes. The player-owned tracker survives worker restarts on seek,
+        // size changes. The player-owned tracker survives seek generations,
         // preventing an unchanged post-seek frame from resizing the window.
         if (videoConfigTracker_.Update(f->width, f->height))
         {
@@ -401,7 +446,7 @@ void FFmpegPlayer::VideoWorker(
         // via queue backpressure, which can deadlock the whole pipeline when the
         // hold itself is what blocks audio delivery. Audio re-anchors the clock
         // and the *next* frames pace normally.
-        const bool paceThisFrame = !seekRefresh_.load();
+        const bool paceThisFrame = seekRefreshGeneration_.load(std::memory_order_acquire) != workerGeneration;
 
         while (paceThisFrame)
         {
@@ -413,19 +458,19 @@ void FFmpegPlayer::VideoWorker(
                 resumedFromPause = paused_.load();
                 cv_.wait(
                     lock,
-                    [this]
+                    [this, &workerGeneration]
                     {
-                        return !paused_.load() || seekRefresh_.load() || shutdown_.load() || hasPendingLoad_ ||
-                               hasPendingSeek_ || stopRequested_;
+                        return !paused_.load() ||
+                               seekRefreshGeneration_.load(std::memory_order_acquire) == workerGeneration ||
+                               activeGeneration_.load(std::memory_order_acquire) != workerGeneration ||
+                               shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
                     }
                 );
-                // Honour a pending seek only once this one has painted (seekSettled_),
-                // so the target frame is shown before the loop bails to re-seek. A
-                // *kicked* seek (seekKicked_) bails immediately: this frame predates
-                // the request, and pacing it out would stall the seek by up to a
-                // frame interval.
-                if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_) ||
-                    seekKicked_)
+                // A changed generation bails immediately: this frame predates the
+                // request, and pacing it out would stall the seek by up to a frame
+                // interval.
+                if (workerGeneration != activeGeneration_.load(std::memory_order_acquire) || shutdown_.load() ||
+                    hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_))
                 {
                     return true;
                 }
@@ -506,15 +551,15 @@ void FFmpegPlayer::VideoWorker(
                 std::unique_lock lock(mutex_);
                 cv_.wait_for(
                     lock, slice,
-                    [this]
+                    [this, &workerGeneration]
                     {
-                        return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load() ||
+                        return activeGeneration_.load(std::memory_order_acquire) != workerGeneration ||
+                               shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || paused_.load() ||
                                stopRequested_;
                     }
                 );
             }
-            if (shutdown_.load() || hasPendingLoad_ || stopRequested_ || (hasPendingSeek_ && seekSettled_) ||
-                seekKicked_)
+            if (workerGeneration != activeGeneration_.load(std::memory_order_acquire) || StopRequested())
             {
                 return true;
             }
@@ -532,7 +577,15 @@ void FFmpegPlayer::VideoWorker(
             AVFrame* clone = av_frame_alloc();
             if (clone && av_frame_ref(clone, f) == 0)
             {
-                frameGate_.PublishOpaque(clone, dstW, dstH);
+                if (workerGeneration == activeGeneration_.load(std::memory_order_acquire))
+                {
+                    frameGate_.PublishOpaque(clone, dstW, dstH);
+                }
+                else
+                {
+                    av_frame_free(&clone);
+                    return true;
+                }
             }
             else if (clone)
             {
@@ -634,7 +687,15 @@ void FFmpegPlayer::VideoWorker(
                 sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstStride);
             }
 
+            if (workerGeneration != activeGeneration_.load(std::memory_order_acquire))
+            {
+                return true;
+            }
             frameGate_.PublishPixels(pixelBuf, desc); // swap: worker reuses the returned buffer
+        }
+        if (workerGeneration != activeGeneration_.load(std::memory_order_acquire))
+        {
+            return true; // interrupted during conversion; never publish stale output
         }
         RequestRender();
 
@@ -642,22 +703,27 @@ void FFmpegPlayer::VideoWorker(
         // Each END is a no-op until its matching START, so calling it every frame
         // is safe; a resume-position seek on load never STARTs "seek", so it stays
         // folded into "file-open". "seek" may only end on a post-seek frame
-        // (seekRefresh_): a stale pre-seek frame this worker was already pacing when
+        // (seekRefreshGeneration_): a stale pre-seek frame this worker was already pacing when
         // the seek kicked would otherwise consume the timer and the real target
         // frame would log nothing.
         FRAMELIFT_PERF_END("file-open");
-        if (seekRefresh_.load())
+        if (seekRefreshGeneration_.load(std::memory_order_acquire) == workerGeneration)
         {
-            FRAMELIFT_PERF_END("seek");
+            FinishSeekPerf(workerGeneration);
         }
 
-        seekRefresh_ = false; // the post-seek frame has been shown
+        std::uint64_t expectedRefresh = workerGeneration;
+        seekRefreshGeneration_.compare_exchange_strong(expectedRefresh, 0, std::memory_order_acq_rel);
         bool reseek = false;
         {
             // A frame is now on screen for the current seek: the position is live again
             // (anchor for relative seeks) and the decode loop may honour the next pending
             // seek. Set here — not at clock-establish — so a held key paints each step.
             std::lock_guard lock(mutex_);
+            if (workerGeneration != activeGeneration_.load(std::memory_order_acquire))
+            {
+                return true;
+            }
             seekSettled_ = true;
             reseek = hasPendingSeek_; // a newer target (e.g. held key) arrived mid-seek
         }
@@ -667,9 +733,9 @@ void FFmpegPlayer::VideoWorker(
             // Tear the session down so the decode loop re-seeks to the latest target. The
             // Abort also frees a demuxer parked in a full Push() — without it the loop
             // could hang one step short once the key is released (no more repeats to kick).
-            audioQ_->Abort();
-            videoQ_->Abort();
-            subQ_->Abort();
+            audioQ_->Interrupt();
+            videoQ_->Interrupt();
+            subQ_->Interrupt();
             Wake();
         }
 
@@ -709,9 +775,43 @@ void FFmpegPlayer::VideoWorker(
     // decode fully, so timestamp jitter can't skip a frame the target references.
     const double discardMargin = frameInterval > 0.0 ? 2.0 * frameInterval : 0.2;
 
-    bool interrupted = false;
-    while (!interrupted && videoQ_->Pop(pkt))
+    for (;;)
     {
+        const FFmpegPacketQueue::PopResult item = videoQ_->Pop(pkt);
+        if (item.kind == FFmpegPacketQueue::PopKind::Stop)
+        {
+            break;
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Flush)
+        {
+            avcodec_flush_buffers(dec);
+            av_frame_unref(frame);
+            av_frame_unref(swFrame);
+            dec->skip_frame = AVDISCARD_DEFAULT;
+            workerGeneration = item.generation;
+            workerSeekSkipPts = seekSkipPts_.load(std::memory_order_acquire);
+            clockStallWarned = false;
+            LogSeekPerf("seek-video-flush", item.generation, item.requestedAt);
+            continue;
+        }
+        if (workerGeneration == 0)
+        {
+            workerGeneration = item.generation;
+            workerSeekSkipPts = seekSkipPts_.load(std::memory_order_acquire);
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Eof)
+        {
+            dec->skip_frame = AVDISCARD_DEFAULT;
+            avcodec_send_packet(dec, nullptr);
+            drain();
+            videoQ_->AcknowledgeEof(item.generation);
+            continue;
+        }
+        if (item.generation != workerGeneration || item.generation != activeGeneration_.load(std::memory_order_acquire))
+        {
+            av_packet_unref(pkt);
+            continue;
+        }
         // While decoding toward an exact-seek target, let the decoder skip
         // non-reference frames that the present path would discard anyway —
         // references still decode, so the target frame is unaffected. skip_frame
@@ -720,24 +820,18 @@ void FFmpegPlayer::VideoWorker(
         const double pktSec = rawTs == AV_NOPTS_VALUE
                                   ? std::numeric_limits<double>::quiet_NaN()
                                   : FFmpegTimeline::ToRelative(static_cast<double>(rawTs) * av_q2d(tb), timelineStart);
-        dec->skip_frame = DecideSeekDiscard(pktSec, seekSkipPts_, discardMargin) == SeekDiscardMode::SkipNonRef
+        dec->skip_frame = DecideSeekDiscard(pktSec, workerSeekSkipPts, discardMargin) == SeekDiscardMode::SkipNonRef
                               ? AVDISCARD_NONREF
                               : AVDISCARD_DEFAULT;
         if (avcodec_send_packet(dec, pkt) == 0)
         {
-            interrupted = drain();
+            (void)drain();
         }
         else
         {
             CountDecodeError(decodeErrors_, dec);
         }
         av_packet_unref(pkt);
-    }
-    if (!interrupted && !videoQ_->Aborted())
-    {
-        dec->skip_frame = AVDISCARD_DEFAULT; // never drain the tail in skip mode
-        avcodec_send_packet(dec, nullptr);
-        drain();
     }
 
     if (sws)
@@ -753,8 +847,36 @@ void FFmpegPlayer::SubtitleWorker(AVCodecContext* dec, AVStream* stream, double 
 {
     const AVRational tb = stream->time_base;
     AVPacket* pkt = av_packet_alloc();
-    while (subQ_->Pop(pkt))
+    std::uint64_t workerGeneration = 0;
+    for (;;)
     {
+        const FFmpegPacketQueue::PopResult item = subQ_->Pop(pkt);
+        if (item.kind == FFmpegPacketQueue::PopKind::Stop)
+        {
+            break;
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Flush)
+        {
+            avcodec_flush_buffers(dec);
+            subtitles_->FlushEvents();
+            workerGeneration = item.generation;
+            LogSeekPerf("seek-subtitle-flush", item.generation, item.requestedAt);
+            continue;
+        }
+        if (workerGeneration == 0)
+        {
+            workerGeneration = item.generation;
+        }
+        if (item.kind == FFmpegPacketQueue::PopKind::Eof)
+        {
+            subQ_->AcknowledgeEof(item.generation);
+            continue;
+        }
+        if (item.generation != workerGeneration || item.generation != activeGeneration_.load(std::memory_order_acquire))
+        {
+            av_packet_unref(pkt);
+            continue;
+        }
         subtitles_->ProcessPacket(dec, pkt, tb.num, tb.den, timelineStart);
         av_packet_unref(pkt);
     }
@@ -764,32 +886,71 @@ void FFmpegPlayer::SubtitleWorker(AVCodecContext* dec, AVStream* stream, double 
 void FFmpegPlayer::ExternalAudioDemux(AVFormatContext* fmt, int streamIndex)
 {
     AVPacket* pkt = av_packet_alloc();
+    std::uint64_t generation = activeGeneration_.load(std::memory_order_acquire);
     for (;;)
     {
-        if (StopRequested())
+        if (audioQ_->Stopped() || StopRequested())
         {
             break;
         }
+        bool doCommand = false;
+        bool applySeek = false;
+        double seekTarget = 0.0;
         {
             std::lock_guard lock(mutex_);
-            if (hasPendingSeek_)
+            if (externalAudioSeekPending_)
             {
-                break;
+                doCommand = true;
+                applySeek = externalAudioSeekApply_;
+                generation = externalAudioSeekGeneration_;
+                seekTarget = externalAudioSeekTarget_;
+                externalAudioSeekPending_ = false;
             }
+        }
+        if (doCommand && applySeek)
+        {
+            const auto ts = static_cast<int64_t>(seekTarget * AV_TIME_BASE);
+            if (av_seek_frame(fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
+            {
+                Log::Warn("FFmpegPlayer: external audio seek to {}s failed", seekTarget);
+            }
+        }
+        if (audioQ_->Interrupted())
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait(
+                lock,
+                [this]
+                {
+                    return audioQ_->Stopped() || shutdown_.load() || hasPendingLoad_ || stopRequested_ ||
+                           externalAudioSeekPending_ || !audioQ_->Interrupted();
+                }
+            );
+            continue;
         }
         if (av_read_frame(fmt, pkt) < 0)
         {
-            break; // external audio reached its own EOF
+            audioQ_->SignalEof();
+            std::unique_lock lock(mutex_);
+            cv_.wait(
+                lock,
+                [this]
+                {
+                    return audioQ_->Stopped() || shutdown_.load() || hasPendingLoad_ || stopRequested_ ||
+                           externalAudioSeekPending_;
+                }
+            );
+            continue;
         }
         bool pushed = true;
         if (pkt->stream_index == streamIndex)
         {
-            pushed = audioQ_->Push(pkt);
+            pushed = audioQ_->Push(pkt, generation);
         }
         av_packet_unref(pkt);
         if (!pushed)
         {
-            break; // audioQ_ aborted — a stop or seek is pending
+            continue;
         }
     }
     av_packet_free(&pkt);

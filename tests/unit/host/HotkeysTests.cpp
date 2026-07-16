@@ -12,11 +12,11 @@
 
 namespace
 {
-AppEvent KeyEvent(Key key, Mod mods)
+AppEvent KeyEvent(Key key, Mod mods, bool repeat = false)
 {
     AppEvent e;
     e.type = AppEventType::KeyDown;
-    e.AsKey() = {key, mods};
+    e.AsKey() = {key, mods, repeat};
     return e;
 }
 
@@ -56,6 +56,35 @@ private Q_SLOTS:
         // A non-bound key is ignored.
         QVERIFY(!(hk.Handle(KeyEvent(Keys::G, Mod::None))));
         QVERIFY((t.fired) == (2));
+    }
+
+    void HostEventBindingReceivesAutoRepeatBit()
+    {
+        HotkeysImpl hk;
+        std::vector<bool> repeats;
+        host::BindEvent(
+            hk, "seek", "Left",
+            [&](const AppEvent& e)
+            {
+                repeats.push_back(e.AsKey().repeat);
+            }
+        );
+
+        QVERIFY(hk.Handle(KeyEvent(Keys::Left, Mod::None, false)));
+        QVERIFY(hk.Handle(KeyEvent(Keys::Left, Mod::None, true)));
+        QCOMPARE(repeats.size(), std::size_t{2});
+        QVERIFY(!repeats[0]);
+        QVERIFY(repeats[1]);
+    }
+
+    void PublicBindingStillIgnoresDispatchPayload()
+    {
+        HotkeysImpl hk;
+        Tracked t;
+        hk.BindNamedRaw("seek", "Right", &Fire, &t, nullptr);
+
+        QVERIFY(hk.Handle(KeyEvent(Keys::Right, Mod::None, true)));
+        QCOMPARE(t.fired, 1);
     }
 
     void GetShortcutStringReturnsPrimaryKey()

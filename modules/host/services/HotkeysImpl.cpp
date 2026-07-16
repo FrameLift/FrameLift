@@ -483,7 +483,10 @@ bool HotkeysImpl::Handle(const AppEvent& e) const noexcept
         const bool modsMatch = b.mods == Mod::None ? kp.mods == Mod::None : kp.mods == b.mods;
         if (modsMatch && b.action)
         {
+            const AppEvent* previous = dispatchEvent_;
+            dispatchEvent_ = &e;
             b.action(b.ud);
+            dispatchEvent_ = previous;
             return true;
         }
     }

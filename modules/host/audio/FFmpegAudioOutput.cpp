@@ -390,6 +390,8 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
         sink_->ring.Clear();
         sink_->ResetSink();
         lastQueuedPts_ = 0.0;
+        generation_ = 0;
+        feedInterrupted_ = false;
         return true;
     }
 
@@ -429,12 +431,12 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     return true;
 }
 
-void FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec)
+bool FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec, std::uint64_t generation)
 {
     std::lock_guard lock(mutex_);
-    if (!sink_ || !sink_->active.load() || !swr_ || !frame)
+    if (!sink_ || !sink_->active.load() || !swr_ || !frame || feedInterrupted_ || generation != generation_)
     {
-        return;
+        return false;
     }
 
     // Decay a pending audio duck: the audio worker drives this regularly, so the host
@@ -450,7 +452,7 @@ void FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec)
         av_rescale_rnd(swr_get_delay(swr_, inRate) + frame->nb_samples, dstRate_, inRate, AV_ROUND_UP);
     if (maxOut <= 0)
     {
-        return;
+        return false;
     }
 
     const auto byteCap = static_cast<size_t>(maxOut) * dstChannels_ * sizeof(float);
@@ -465,12 +467,13 @@ void FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec)
     );
     if (converted <= 0)
     {
-        return;
+        return false;
     }
 
     const size_t bytes = static_cast<size_t>(converted) * dstChannels_ * sizeof(float);
     sink_->ring.Write(buffer_.data(), bytes);
     lastQueuedPts_ = ptsSec + static_cast<double>(converted) / static_cast<double>(dstRate_);
+    return true;
 }
 
 double FFmpegAudioOutput::MasterClock() const
@@ -607,7 +610,49 @@ void FFmpegAudioOutput::Flush()
         sink_->ring.Clear();
         sink_->ResetSink();
     }
+    if (swr_ && swr_init(swr_) < 0)
+    {
+        Log::Error("FFmpegAudioOutput: resampler reset failed");
+    }
     lastQueuedPts_ = 0.0;
+}
+
+void FFmpegAudioOutput::InterruptForSeek(std::uint64_t generation)
+{
+    std::lock_guard lock(mutex_);
+    // Latest generation wins. Requests arriving while output is already interrupted
+    // only advance the expected generation: resetting QAudioSink repeatedly is slower
+    // and can produce extra backend state transitions on Windows.
+    if (feedInterrupted_)
+    {
+        generation_ = generation;
+        return;
+    }
+    generation_ = generation;
+    feedInterrupted_ = true;
+    if (sink_)
+    {
+        sink_->ring.Clear();
+        sink_->ResetSink();
+    }
+    lastQueuedPts_ = 0.0;
+}
+
+void FFmpegAudioOutput::ResumeGeneration(std::uint64_t generation)
+{
+    std::lock_guard lock(mutex_);
+    if (feedInterrupted_ && generation != generation_)
+    {
+        return; // a newer queued seek already owns the output discontinuity
+    }
+    if (swr_ && swr_init(swr_) < 0)
+    {
+        Log::Error("FFmpegAudioOutput: resampler reset failed");
+        return;
+    }
+    generation_ = generation;
+    lastQueuedPts_ = 0.0;
+    feedInterrupted_ = false;
 }
 
 void FFmpegAudioOutput::Close()
@@ -625,5 +670,7 @@ void FFmpegAudioOutput::CloseLocked()
     }
     bytesPerSec_ = 0;
     lastQueuedPts_ = 0.0;
+    feedInterrupted_ = false;
+    generation_ = 0;
     sinkDevice_.clear();
 }

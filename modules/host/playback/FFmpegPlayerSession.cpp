@@ -89,17 +89,19 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     displayWidth_ = 0;
     displayHeight_ = 0;
     videoConfigTracker_.Reset();
-    seekSkipPts_ = -1e18; // no carry-over skip from a prior file's seek
-    seekRefresh_ = false;
+    seekSkipPts_.store(-1e18, std::memory_order_release); // no carry-over skip from a prior file's seek
+    seekRefreshGeneration_ = 0;
     {
         std::lock_guard lock(mutex_);
         hwDecName_ = "no"; // reset until the video decoder is (re)armed below
         videoClock_.Reset();
         subtitleSeekClockOverrideActive_ = false;
         hasPendingSeek_ = false; // discard any seek queued before this load
-        seekKicked_ = false;     // and its kick — must not leak into this file's workers
+        boundaryEofRequested_ = false;
         hasPendingAudioSwitch_ = false;
         hasPendingSubSwitch_ = false;
+        externalAudioSeekPending_ = false;
+        externalAudioSeekApply_ = false;
     }
     {
         // Drop the previous file's track snapshot up front so a failed open doesn't
@@ -138,31 +140,51 @@ void FFmpegPlayer::PlayFile(const std::string& path, double resumePos)
     }
     PublishLoadedMetadata(path, ctx);
 
-    // Absolute target for the next session iteration; NaN ⇒ play from here. The
-    // resume-position seek is always exact — resume must land where playback left off.
-    PendingSeek seek{resumePos > 0.0 ? resumePos : std::numeric_limits<double>::quiet_NaN(), SeekKind::Exact};
+    std::uint64_t initialGeneration = 0;
+    {
+        std::lock_guard lock(mutex_);
+        initialGeneration = nextGeneration_++;
+    }
+    activeGeneration_.store(initialGeneration, std::memory_order_release);
+    // Absolute target for the first generation; NaN starts from the demuxer's
+    // current position. Resume is exact.
+    PendingSeek seek{
+        resumePos > 0.0 ? resumePos : std::numeric_limits<double>::quiet_NaN(), SeekKind::Exact, initialGeneration
+    };
     AVPacket* pkt = av_packet_alloc();
+    ApplySeekAndPrepareQueues(seek, ctx);
+    StartWorkers(ctx);
 
     for (;;)
     {
-        ApplyPendingTrackSwitches(path, ctx);
-        ApplySeekAndPrepareQueues(seek, ctx);
-
         const SessionEndReason reason = RunDemuxSession(ctx, pkt);
         if (reason == SessionEndReason::Stop)
         {
             break;
         }
-        if (reason == SessionEndReason::Eof && !HoldAtEndOfFile(ctx))
+        if ((reason == SessionEndReason::Eof || reason == SessionEndReason::BoundaryEof) &&
+            !HoldAtEndOfFile(ctx, reason == SessionEndReason::BoundaryEof))
         {
             break;
         }
+        if (reason == SessionEndReason::Rebind)
+        {
+            StopWorkers();
+            ApplyPendingTrackSwitches(path, ctx);
+        }
         // A seek resumes the session — either directly or out of the EOF hold.
         seek = TakePendingSeek();
+        activeGeneration_.store(seek.generation, std::memory_order_release);
         QueueEvent(MakeLifecycle(MediaEventType::Seek));
         EmitFlag(PlayerProperty::Seeking, true);
+        ApplySeekAndPrepareQueues(seek, ctx);
+        if (reason == SessionEndReason::Rebind)
+        {
+            StartWorkers(ctx);
+        }
     }
 
+    StopWorkers();
     CloseSession(ctx, pkt);
 }
 
@@ -389,30 +411,24 @@ void FFmpegPlayer::ApplyPendingTrackSwitches(const std::string& path, SessionCon
     }
 }
 
-// Apply a pending seek (single-threaded here: workers are joined), then flush the
-// queues + read-ahead accounting for the next demux run. The "seek-apply" span
-// deliberately covers both: the queue reset is part of what a seek costs.
+// Apply a pending seek, then advance the persistent workers to its generation.
+// Codec contexts are deliberately not touched here: each worker consumes a Flush
+// control record and flushes the decoder it exclusively owns.
 void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& ctx)
 {
     const bool timingSeekApply = !std::isnan(seek.target);
+    const std::string seekApplyPerf = SeekPerfName("seek-apply", seek.generation);
     if (timingSeekApply)
     {
-        FRAMELIFT_PERF_START("seek-apply");
-    }
-    {
-        // The kick is consumed here regardless of the seek's outcome: workers are
-        // joined, so no in-flight present remains for it to bail, and a leftover
-        // flag would make the next session's first present bail forever.
-        std::lock_guard lock(mutex_);
-        seekKicked_ = false;
+        FRAMELIFT_PERF_START(seekApplyPerf.c_str());
     }
     if (!std::isnan(seek.target))
     {
         const SeekPlan plan = BuildSeekPlan(seek.kind, seek.target);
         const auto ts = static_cast<int64_t>(FFmpegTimeline::ToDemux(seek.target, ctx.timelineStartSec) * AV_TIME_BASE);
-        // A failed seek leaves the demuxer position untouched. Flushing the
-        // decoders / clock anyway would blank the picture for a seek that never
-        // happened, so only tear down and refresh when the seek actually landed.
+        // A failed seek leaves the demuxer position untouched. The queue generation
+        // still advances because the request already discarded queued packets/audio;
+        // the first frame from the continuing demux position refreshes immediately.
         int ret = av_seek_frame(ctx.fmt, -1, ts, plan.backwardFlag ? AVSEEK_FLAG_BACKWARD : 0);
         if (ret < 0 && !plan.backwardFlag)
         {
@@ -422,64 +438,48 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& 
             // at/before instead of failing the seek outright.
             ret = av_seek_frame(ctx.fmt, -1, ts, AVSEEK_FLAG_BACKWARD);
         }
-        if (ret < 0)
+        const bool seekSucceeded = ret >= 0;
+        if (!seekSucceeded)
         {
             Log::Warn("FFmpegPlayer: seek to {}s failed ({})", seek.target, ret);
         }
-        else
+        FRAMELIFT_PERF_END(seekApplyPerf.c_str());
+        if (ctx.aud.external && ctx.aud.fmt)
         {
-            // The external-audio side seek always lands at/before: every audio packet
-            // is a sync point, so backward is exact there and guarantees the audio
-            // stream covers whatever keyframe the video seek landed on.
-            const auto externalAudioTs =
-                static_cast<int64_t>(FFmpegTimeline::ToDemux(seek.target, ctx.aud.startOffset) * AV_TIME_BASE);
-            if (ctx.aud.external && ctx.aud.fmt &&
-                av_seek_frame(ctx.aud.fmt, -1, externalAudioTs, AVSEEK_FLAG_BACKWARD) < 0)
+            std::lock_guard lock(mutex_);
+            externalAudioSeekPending_ = true;
+            externalAudioSeekApply_ = seekSucceeded;
+            externalAudioSeekGeneration_ = seek.generation;
+            externalAudioSeekTarget_ = FFmpegTimeline::ToDemux(seek.target, ctx.aud.startOffset);
+        }
+        {
+            std::lock_guard lock(mutex_);
+            videoClock_.Reset();
+            // Every applied generation resets the clocks here, so both gates must
+            // re-arm: seekSettled_ so the worker re-paints before the next re-seek,
+            // and seekClockValid_ so a held repeat anchors to seekTarget_ instead of
+            // reading GetMasterClock()==0 and re-targeting from 0.
+            seekSettled_ = false;
+            seekClockValid_ = false;
+            if (seekSucceeded)
             {
-                Log::Warn("FFmpegPlayer: external audio seek to {}s failed", seek.target);
-            }
-            if (ctx.vDec)
-            {
-                avcodec_flush_buffers(ctx.vDec);
-            }
-            if (ctx.aud.dec)
-            {
-                avcodec_flush_buffers(ctx.aud.dec);
-            }
-            if (ctx.sDec)
-            {
-                avcodec_flush_buffers(ctx.sDec);
-            }
-            // Embedded subtitles re-decode from the seek point; drop their buffered
-            // events. External subs are pre-loaded with absolute times — leave them.
-            if (ctx.subIdx >= 0)
-            {
-                subtitles_->FlushEvents();
-            }
-            audioOut_->Flush();
-            {
-                std::lock_guard lock(mutex_);
-                videoClock_.Reset();
-                // Every applied seek (the RequestSeek kick *and* a demux-driven
-                // re-seek during a held burst) resets the clocks here, so both gates
-                // must re-arm: seekSettled_ so the worker re-paints before the next
-                // re-seek, and seekClockValid_ so a held repeat anchors to seekTarget_
-                // instead of reading GetMasterClock()==0 and re-targeting from 0.
-                seekSettled_ = false;
-                seekClockValid_ = false;
                 subtitleSeekClockOverride_ = seek.target;
                 subtitleSeekClockOverrideActive_ = true;
             }
-            // Exact: drop decoded frames before the target. Keyframe kinds
-            // (kSeekNoSkipPts) present straight from the keyframe the demuxer landed on.
-            seekSkipPts_ = plan.skipPts;
-            seekRefresh_ = true;
-            eofReached_ = false;
-            EmitFlag(PlayerProperty::EofReached, false);
-            QueueEvent(MakeLifecycle(MediaEventType::PlaybackRestart));
-            subtitles_->ForceNextUpdate();
-            RequestRender();
+            else
+            {
+                subtitleSeekClockOverrideActive_ = false;
+            }
         }
+        // Exact: discard toward a successful target. On failure, continue from
+        // whatever packet the demuxer supplies next without target discard.
+        seekSkipPts_.store(seekSucceeded ? plan.skipPts : kSeekNoSkipPts, std::memory_order_release);
+        seekRefreshGeneration_.store(seek.generation, std::memory_order_release);
+        eofReached_ = false;
+        EmitFlag(PlayerProperty::EofReached, false);
+        QueueEvent(MakeLifecycle(MediaEventType::PlaybackRestart));
+        subtitles_->ForceNextUpdate();
+        RequestRender();
         // Clear the pending seek and the UI "seeking" state regardless of outcome,
         // so a failed seek doesn't leave the player stuck mid-seek.
         seek.target = std::numeric_limits<double>::quiet_NaN();
@@ -487,21 +487,169 @@ void FFmpegPlayer::ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& 
         UpdateCoreIdle();
     }
 
-    audioQ_->Flush();
-    videoQ_->Flush();
-    subQ_->Flush();
-    // Clear the read-ahead accounting + abort flag (the queues were aborted on
-    // the seek that brought us here) so the demuxer can refill for this read.
+    // Clear the abort flag before producers enter the new generation. Flush is
+    // ordered ahead of packets inside each queue even if a producer runs first.
     cache_.Reset();
-    if (timingSeekApply)
-    {
-        FRAMELIFT_PERF_END("seek-apply");
-    }
+    const bool flushDecoders = timingSeekApply;
+    audioQ_->BeginGeneration(seek.generation, flushDecoders);
+    videoQ_->BeginGeneration(seek.generation, flushDecoders);
+    subQ_->BeginGeneration(seek.generation, flushDecoders);
+
+    // Failed seeks still resume cleanly at the demuxer's unchanged position. A
+    // newer coalesced request has already changed FFmpegAudioOutput's expected
+    // generation, so this completion cannot accidentally reopen stale audio.
+    audioOut_->ResumeGeneration(seek.generation);
+    cv_.notify_all(); // wake an external-audio worker parked at EOF/interruption
 }
 
 FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx, AVPacket* pkt)
 {
-    // Spawn workers, then demux until EOF / stop / a new seek.
+    // Demux into the current persistent worker generation.
+    const std::uint64_t generation = activeGeneration_.load(std::memory_order_acquire);
+
+    // Post-seek refill: time from generation start to the first packet handed to
+    // the presented stream's queue.
+    bool timingRefill = seekRefreshGeneration_.load(std::memory_order_acquire) == generation;
+    const auto refillStarted = std::chrono::steady_clock::now();
+
+    SessionEndReason reason = SessionEndReason::Eof;
+    for (;;)
+    {
+        if (StopRequested())
+        {
+            reason = SessionEndReason::Stop;
+            break;
+        }
+        {
+            std::lock_guard lock(mutex_);
+            if (boundaryEofRequested_)
+            {
+                reason = SessionEndReason::BoundaryEof;
+                break;
+            }
+            if (hasPendingSeek_ && seekSettled_)
+            {
+                reason = (hasPendingAudioSwitch_ || hasPendingSubSwitch_) ? SessionEndReason::Rebind
+                                                                          : SessionEndReason::Seek;
+                break;
+            }
+        }
+        if (av_read_frame(ctx.fmt, pkt) < 0)
+        {
+            reason = SessionEndReason::Eof;
+            break;
+        }
+        bool pushed = true;
+        bool presentedStream = false;
+        if (hasVideo_ && pkt->stream_index == ctx.vIdx)
+        {
+            pushed = videoQ_->Push(pkt, generation);
+            presentedStream = true;
+        }
+        else if (ctx.aud.dec && !ctx.aud.external && pkt->stream_index == ctx.aud.streamIndex)
+        {
+            pushed = audioQ_->Push(pkt, generation);
+            presentedStream = !hasVideo_;
+        }
+        else if (ctx.subIdx >= 0 && pkt->stream_index == ctx.subIdx)
+        {
+            pushed = subQ_->Push(pkt, generation);
+        }
+        av_packet_unref(pkt);
+        if (timingRefill && presentedStream && pushed)
+        {
+            LogSeekPerf("seek-refill", generation, refillStarted);
+            timingRefill = false;
+        }
+        if (!pushed)
+        {
+            if (StopRequested())
+            {
+                reason = SessionEndReason::Stop;
+            }
+            else
+            {
+                std::lock_guard lock(mutex_);
+                if (boundaryEofRequested_)
+                {
+                    reason = SessionEndReason::BoundaryEof;
+                }
+                else
+                {
+                    reason = (hasPendingAudioSwitch_ || hasPendingSubSwitch_) ? SessionEndReason::Rebind
+                                                                              : SessionEndReason::Seek;
+                }
+            }
+            break;
+        }
+    }
+
+    if (reason == SessionEndReason::Eof)
+    {
+        if (hasVideo_)
+        {
+            videoQ_->SignalEof();
+        }
+        if (ctx.subIdx >= 0 && ctx.sDec)
+        {
+            subQ_->SignalEof();
+        }
+        if (ctx.aud.dec && !ctx.aud.external)
+        {
+            audioQ_->SignalEof();
+        }
+        else if (ctx.aud.external)
+        {
+            audioQ_->Interrupt();
+        }
+
+        bool drained = true;
+        if (hasVideo_)
+        {
+            drained = videoQ_->WaitForEof(generation) && drained;
+        }
+        if (ctx.aud.dec && !ctx.aud.external)
+        {
+            drained = audioQ_->WaitForEof(generation) && drained;
+        }
+        if (ctx.subIdx >= 0 && ctx.sDec)
+        {
+            drained = subQ_->WaitForEof(generation) && drained;
+        }
+        if (!drained)
+        {
+            if (StopRequested())
+            {
+                reason = SessionEndReason::Stop;
+            }
+            else
+            {
+                std::lock_guard lock(mutex_);
+                if (boundaryEofRequested_)
+                {
+                    reason = SessionEndReason::BoundaryEof;
+                }
+                else
+                {
+                    reason = (hasPendingAudioSwitch_ || hasPendingSubSwitch_) ? SessionEndReason::Rebind
+                                                                              : SessionEndReason::Seek;
+                }
+            }
+        }
+    }
+    else if (reason == SessionEndReason::Seek || reason == SessionEndReason::Rebind)
+    {
+        // A coalesced seek reaches this path after the prior generation paints;
+        // invalidate it now before the next av_seek_frame.
+        audioQ_->Interrupt();
+        videoQ_->Interrupt();
+        subQ_->Interrupt();
+    }
+    return reason;
+}
+
+void FFmpegPlayer::StartWorkers(SessionContext& ctx)
+{
     if (ctx.aud.dec)
     {
         const double audioTimestampOffset = ctx.aud.external ? ctx.aud.startOffset : ctx.timelineStartSec;
@@ -521,99 +669,14 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
     {
         extAudioThread_ = std::thread(&FFmpegPlayer::ExternalAudioDemux, this, ctx.aud.fmt, ctx.aud.streamIndex);
     }
+}
 
-    // Post-seek refill: time from worker spawn to the first packet handed to the
-    // presented stream's queue — isolates the demuxer's time-to-first-packet after
-    // a seek (the part of the seek budget the read-ahead cache can't hide).
-    bool timingRefill = seekRefresh_.load();
-    if (timingRefill)
-    {
-        FRAMELIFT_PERF_START("seek-refill");
-    }
-
-    SessionEndReason reason = SessionEndReason::Eof;
-    for (;;)
-    {
-        if (StopRequested())
-        {
-            reason = SessionEndReason::Stop;
-            break;
-        }
-        {
-            std::lock_guard lock(mutex_);
-            // Hold off re-seeking until the current seek has painted a frame, so a
-            // burst of held-key repeats steps visibly instead of restarting the
-            // decoder before anything is shown. seekSettled_ flips on the present.
-            if (hasPendingSeek_ && seekSettled_)
-            {
-                reason = SessionEndReason::Seek;
-                break;
-            }
-        }
-        if (av_read_frame(ctx.fmt, pkt) < 0)
-        {
-            reason = SessionEndReason::Eof;
-            break;
-        }
-        bool pushed = true;
-        bool presentedStream = false; // the stream whose first frame settles a seek
-        if (hasVideo_ && pkt->stream_index == ctx.vIdx)
-        {
-            pushed = videoQ_->Push(pkt);
-            presentedStream = true;
-        }
-        else if (ctx.aud.dec && !ctx.aud.external && pkt->stream_index == ctx.aud.streamIndex)
-        {
-            pushed = audioQ_->Push(pkt);
-            presentedStream = !hasVideo_;
-        }
-        else if (ctx.subIdx >= 0 && pkt->stream_index == ctx.subIdx)
-        {
-            pushed = subQ_->Push(pkt);
-        }
-        av_packet_unref(pkt);
-        if (timingRefill && presentedStream && pushed)
-        {
-            FRAMELIFT_PERF_END("seek-refill");
-            timingRefill = false;
-        }
-        if (!pushed)
-        {
-            // A queue was aborted — a stop or seek is pending; re-resolve which.
-            reason = StopRequested() ? SessionEndReason::Stop : SessionEndReason::Seek;
-            break;
-        }
-    }
-
-    // Stop the workers (drain on EOF, abort otherwise) and join.
-    if (reason == SessionEndReason::Eof)
-    {
-        videoQ_->SignalEof();
-        subQ_->SignalEof();
-        // External audio runs on its own clock; abort it (and any backlog) at the
-        // video container's EOF so its demux thread can't block the join.
-        if (ctx.aud.external)
-        {
-            audioQ_->Abort();
-        }
-        else
-        {
-            audioQ_->SignalEof();
-        }
-    }
-    else
-    {
-        audioQ_->Abort();
-        videoQ_->Abort();
-        subQ_->Abort();
-    }
-    // Time the worker teardown only on the seek path (EOF/stop joins aren't part
-    // of any latency budget) so the span means one thing.
-    const bool timingJoin = reason == SessionEndReason::Seek;
-    if (timingJoin)
-    {
-        FRAMELIFT_PERF_START("seek-join");
-    }
+void FFmpegPlayer::StopWorkers()
+{
+    audioQ_->Stop();
+    videoQ_->Stop();
+    subQ_->Stop();
+    cv_.notify_all();
     if (audioThread_.joinable())
     {
         audioThread_.join();
@@ -630,22 +693,33 @@ FFmpegPlayer::SessionEndReason FFmpegPlayer::RunDemuxSession(SessionContext& ctx
     {
         extAudioThread_.join();
     }
-    if (timingJoin)
-    {
-        FRAMELIFT_PERF_END("seek-join");
-    }
-    return reason;
 }
 
-bool FFmpegPlayer::HoldAtEndOfFile(const SessionContext& ctx)
+bool FFmpegPlayer::HoldAtEndOfFile(const SessionContext& ctx, bool boundaryRequested)
 {
     // Decide whether this end advances the playlist (EndFile) or just holds.
     bool emitEnd = true;
-    if (ctx.isImage && imageDisplayDuration_.load() <= 0.0)
     {
-        emitEnd = false; // still image, infinite hold — never auto-advances
+        std::lock_guard lock(mutex_);
+        boundaryRequested = boundaryRequested || boundaryEofRequested_;
     }
-    else if (ctx.isImage)
+    if (!boundaryRequested && ctx.isImage && imageDisplayDuration_.load() <= 0.0)
+    {
+        // An ordinary still image holds forever, but a forward boundary command
+        // must be able to turn that hold into the same clean EOF as video.
+        std::unique_lock lock(mutex_);
+        cv_.wait(
+            lock,
+            [this]
+            {
+                return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_ ||
+                       boundaryEofRequested_;
+            }
+        );
+        boundaryRequested = boundaryEofRequested_;
+        emitEnd = boundaryRequested;
+    }
+    else if (!boundaryRequested && ctx.isImage)
     {
         // Slideshow still: hold the configured duration unless interrupted.
         const auto until =
@@ -657,11 +731,13 @@ bool FFmpegPlayer::HoldAtEndOfFile(const SessionContext& ctx)
                 lock, until,
                 [this]
                 {
-                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_;
+                    return shutdown_.load() || hasPendingLoad_ || hasPendingSeek_ || stopRequested_ ||
+                           boundaryEofRequested_;
                 }
             ))
         {
-            emitEnd = false; // a seek/stop arrived first — handle it below
+            boundaryRequested = boundaryEofRequested_;
+            emitEnd = boundaryRequested; // boundary completes; seek/stop interrupts
         }
     }
     if (emitEnd)

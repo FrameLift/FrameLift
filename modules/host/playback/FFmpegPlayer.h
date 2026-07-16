@@ -53,7 +53,7 @@ class Settings;
 //             below (commands, properties, PollEvent, track Enumerate/Select).
 //   decode  — decodeThread_: DecodeThreadMain → PlayFile; owns the demux session.
 //   workers — audioThread_ / videoThread_ / subtitleThread_ / extAudioThread_,
-//             spawned and joined by PlayFile per demux session.
+//             persistent for one file/track binding and joined on rebind/close.
 //   render  — InitRender/ReleaseRender/HasNewFrame/RenderFrame/
 //             PrepareRenderFrame/DrawPreparedFrame (Qt scene-graph thread).
 //
@@ -80,15 +80,14 @@ class Settings;
 //                    fields read on the decode thread. Held only briefly; never
 //                    across a cv_ wait, and never acquire mutex_ while holding it.
 //
-// Decode-thread-owned, deliberately non-atomic: hasVideo_ and seekSkipPts_ are
-// written only while all workers are joined (between sessions / at the seek
-// boundary) and read lock-free by workers afterwards.
+// Decode-thread-owned, deliberately non-atomic: hasVideo_ changes only while
+// workers are stopped. Seek-local state travels with queue generations.
 //
 // Per file, a demux thread fans packets into bounded audio/video queues and
-// spawns an audio worker (resamples to Qt's raw PCM sink — the master clock) and
+// runs an audio worker (resamples to Qt's raw PCM sink — the master clock) and
 // a video worker (swscale → present,
-// synced to the clock). A session loop performs keyframe/exact seeks between
-// worker spawns, holds the last frame on EOF (still seekable), and handles still
+// synced to the clock). A session loop performs keyframe/exact seeks by advancing
+// queue generations, holds the last frame on EOF (still seekable), and handles still
 // images / slideshows. Pause, volume/mute and the full host-consumed property set
 // are live. Subtitles (libass) and hardware decoding arrive in later phases.
 class FFmpegPlayer final : public IMediaPlayback,
@@ -114,6 +113,9 @@ public:
     void ToggleMute() noexcept override;
     void AdjustVolume(int delta) noexcept override;
     void Seek(double seconds) noexcept override;
+    // Host-only input path: preserves the OS auto-repeat bit so a held backward
+    // key can stop cleanly at zero. Plugins continue through IMediaPlayer::Seek.
+    [[nodiscard]] RelativeSeekResult SeekRelativeFromInput(double seconds, bool autoRepeat) noexcept;
     void SeekAbsolute(double seconds) noexcept override;
     void SetImageDisplayDuration(double seconds) noexcept override;
     void SetAudioNormalize(bool enabled, const AudioNormalizeParams& params = {}) noexcept override;
@@ -202,12 +204,15 @@ private:
     {
         double target = 0.0;
         SeekKind kind = SeekKind::Exact;
+        std::uint64_t generation = 0;
     };
     enum class SessionEndReason : std::uint8_t
     {
-        Eof,  // demuxer reached end of file
-        Stop, // shutdown or a new file load
-        Seek, // a seek was requested
+        Eof,         // demuxer reached end of file
+        BoundaryEof, // relative seek reached the known duration
+        Stop,        // shutdown or a new file load
+        Seek,        // a seek was requested
+        Rebind,      // audio/subtitle track binding changed
     };
     // Open the container and read stream info; on failure emits the end event +
     // summary and returns false (nothing to close).
@@ -224,18 +229,20 @@ private:
     void PublishLoadedMetadata(const std::string& path, SessionContext& ctx);
     // Rebind audio/subtitle to a pending Select* request (workers are joined).
     void ApplyPendingTrackSwitches(const std::string& path, SessionContext& ctx);
-    // Apply a pending seek (NaN ⇒ none; cleared on return) and flush/reset the
-    // packet queues + read-ahead accounting for the next demux run.
+    // Apply a pending seek and begin its packet generation. Codec flushes happen
+    // on the persistent worker that owns each decoder.
     void ApplySeekAndPrepareQueues(PendingSeek& seek, SessionContext& ctx);
-    // Spawn the workers, demux until EOF/stop/seek, stop the queues and join.
+    void StartWorkers(SessionContext& ctx);
+    void StopWorkers();
+    // Demux until EOF/stop/seek. Ordinary seeks leave workers alive.
     [[nodiscard]] SessionEndReason RunDemuxSession(SessionContext& ctx, AVPacket* pkt);
     // EOF: emit EndFile (per still-image hold rules) and park on the last frame.
     // False ⇒ stopping; true ⇒ a seek arrived and the session resumes.
-    [[nodiscard]] bool HoldAtEndOfFile(const SessionContext& ctx);
+    [[nodiscard]] bool HoldAtEndOfFile(const SessionContext& ctx, bool boundaryRequested = false);
     // Emit the session summary and free every per-file resource.
     void CloseSession(SessionContext& ctx, AVPacket*& pkt);
 
-    // Per-file worker bodies (each on its own thread, spawned by PlayFile).
+    // Per-file worker bodies (persistent across ordinary seeks).
     void AudioWorker(AVCodecContext* dec, AVStream* stream, double timestampOffset);
     // hw is non-null when the decoder is armed for hardware decode (downloads frames
     // to system memory before swscale); null / inactive ⇒ unchanged software path.
@@ -277,6 +284,8 @@ private:
     [[nodiscard]] PendingSeek TakePendingSeek();
     // Record an absolute seek target (+ execution kind) and wake the decode thread / workers.
     void RequestSeek(double target, SeekKind kind) noexcept;
+    void RequestBoundaryEof() noexcept;
+    void FinishSeekPerf(std::uint64_t generation);
     // Emit one sparse perf summary for the loaded session; no file paths are logged.
     void EmitPlaybackSummary(const char* reason);
 
@@ -375,6 +384,15 @@ private:
     std::thread videoThread_;
     std::thread subtitleThread_;
     std::thread extAudioThread_; // external-audio container demux
+    std::atomic<std::uint64_t> activeGeneration_{0};
+    std::uint64_t nextGeneration_ = 1;     // guarded by mutex_
+    std::uint64_t seekGeneration_ = 0;     // reserved for hasPendingSeek_
+    std::uint64_t seekPerfGeneration_ = 0; // latest requested first-frame timer; guarded by mutex_
+    std::chrono::steady_clock::time_point seekPerfStarted_{};
+    bool externalAudioSeekPending_ = false; // guarded by mutex_
+    bool externalAudioSeekApply_ = false;
+    std::uint64_t externalAudioSeekGeneration_ = 0;
+    double externalAudioSeekTarget_ = 0.0;
     // Deferred embedded-subtitle cue read (walks the whole container off the open
     // path). Spawned by OpenSubtitleBinding; joined (with AbortPreload) before any
     // track replacement and in CloseSession — decode thread only, no lock.
@@ -392,6 +410,13 @@ private:
     // new one (StopRequested() folds it in). Lingers harmlessly while the decode thread
     // is parked; cleared when the next load is consumed.
     bool stopRequested_ = false;
+    // Once-per-file relative-seek completion request. It has its own demux-session
+    // reason so an interrupted queue/drain can never accidentally become a seek.
+    bool boundaryEofRequested_ = false; // guarded by mutex_
+    // Suppress the remaining OS repeats from the physical press that completed a
+    // file, including repeats arriving after Playlist has opened the next file.
+    // A fresh KeyDown releases the latch.
+    bool forwardBoundaryRepeatLatched_ = false; // guarded by mutex_
     std::string currentPath_;
 
     // Video frame handoff (decode thread → render thread): latest-wins mailbox,
@@ -399,7 +424,7 @@ private:
     // (a ref'd AVFrame released via av_frame_free, injected in the ctor).
     VideoFrameGate frameGate_;
     bool preparedOverlayActive_ = false;
-    // Survives per-seek video-worker restarts so unchanged post-seek frames do not
+    // Survives seek generations so unchanged post-seek frames do not
     // masquerade as a video configuration change.
     FFmpegVideoConfigTracker videoConfigTracker_;
 
@@ -419,9 +444,10 @@ private:
     bool hasVideo_ = false; // set by PlayFile; audio worker drives TimePos when false
 
     // Seeking. seekTarget_/hasPendingSeek_ are a request from the main thread to
-    // the decode thread (guarded by mutex_). seekSkipPts_ is set by the decode
-    // thread before spawning workers (read-only to them) — exact seeks drop frames
-    // before it. seekRefresh_ lets the video worker present one frame while paused.
+    // the decode thread. seekSkipPts_ is published before each
+    // queue generation and copied by workers from its Flush marker — exact seeks
+    // drop frames before it. seekRefreshGeneration_ lets the matching worker present one frame
+    // immediately (including while paused) without a stale generation clearing it.
     bool hasPendingSeek_ = false;
     double seekTarget_ = 0.0;
     SeekKind seekKind_ = SeekKind::Exact; // execution kind for seekTarget_ (guarded by mutex_)
@@ -436,20 +462,10 @@ private:
     //    in Seek(): until true, GetMasterClock() reads ~0, so a repeat must accumulate
     //    against seekTarget_ instead of re-targeting from the start. The video frame can
     //    paint before the audio worker re-feeds, so this must NOT key off the video frame.
-    //  • seekKicked_ — a kicked seek (RequestSeek disturbed a *settled* pipeline) has
-    //    not been applied yet. Lets an in-flight present() bail its stale pre-seek frame
-    //    immediately instead of pacing it out (up to a full frame interval of dead time
-    //    before av_seek_frame can run). Distinct from hasPendingSeek_ && seekSettled_: a
-    //    coalesced repeat during an unsettled seek must NOT bail the current target's
-    //    present (held-key stepping). Set only under the RequestSeek kick; cleared with
-    //    workers joined (ApplySeekAndPrepareQueues / PlayFile), so it cannot outlive the
-    //    present it targets. seekKicked_ ⇒ hasPendingSeek_, so the workers' cv_ wait
-    //    predicates already wake on it.
     bool seekSettled_ = true;
     bool seekClockValid_ = true;
-    bool seekKicked_ = false;
-    double seekSkipPts_ = -1e18;
-    std::atomic<bool> seekRefresh_{false};
+    std::atomic<double> seekSkipPts_{-1e18};
+    std::atomic<std::uint64_t> seekRefreshGeneration_{0};
     // playback.seekMode policy (Smart = mpv hr-seek=default; see FFmpegSeekPlan.h).
     // Replaces the old hrSeek_ bool; each request's SeekKind is decided at request time.
     std::atomic<SeekPrecisionMode> seekMode_{SeekPrecisionMode::Smart};

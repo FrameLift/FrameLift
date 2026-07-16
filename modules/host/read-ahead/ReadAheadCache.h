@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <utility>
 
 // Shared, memory-bounded read-ahead budget + metrics for the demuxer packet
@@ -48,6 +49,15 @@ public:
     // admitted once the cache is empty so playback can progress.
     bool Reserve(int64_t bytes)
     {
+        return Reserve(bytes, nullptr);
+    }
+
+    // Queue callers retain the returned epoch with the packet reservation. If a
+    // seek resets the cache before a blocked old producer cleans up, the matching
+    // RemoveBytes overload ignores that stale reservation instead of subtracting
+    // from the new generation's accounting.
+    bool Reserve(int64_t bytes, std::uint64_t* epoch)
+    {
         std::unique_lock lock(m_);
         cv_.wait(
             lock,
@@ -59,6 +69,10 @@ public:
         if (aborted_)
         {
             return false;
+        }
+        if (epoch)
+        {
+            *epoch = epoch_;
         }
         used_ += bytes;
         if (used_ > peakUsed_)
@@ -72,8 +86,23 @@ public:
     // demuxer parked in Reserve.
     void RemoveBytes(int64_t bytes)
     {
+        RemoveBytes(bytes, std::nullopt);
+    }
+
+    void RemoveBytes(int64_t bytes, std::uint64_t epoch)
+    {
+        RemoveBytes(bytes, std::optional<std::uint64_t>{epoch});
+    }
+
+private:
+    void RemoveBytes(int64_t bytes, std::optional<std::uint64_t> epoch)
+    {
         {
             std::lock_guard lock(m_);
+            if (epoch && *epoch != epoch_)
+            {
+                return;
+            }
             used_ -= bytes;
             if (used_ < 0)
             {
@@ -83,6 +112,7 @@ public:
         cv_.notify_all();
     }
 
+public:
     [[nodiscard]] int64_t UsedBytes() const
     {
         std::lock_guard lock(m_);
@@ -175,6 +205,7 @@ public:
     {
         {
             std::lock_guard lock(m_);
+            ++epoch_;
             used_ = 0;
             aborted_ = false;
         }
@@ -207,6 +238,7 @@ private:
     int64_t maxBytes_ = 0;
     int64_t used_ = 0;
     int64_t peakUsed_ = 0;
+    std::uint64_t epoch_ = 0;
     std::atomic<int64_t> hits_{0};
     std::atomic<int64_t> misses_{0};
     std::atomic<int> stalls_{0};

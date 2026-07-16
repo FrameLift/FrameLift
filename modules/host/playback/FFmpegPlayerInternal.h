@@ -28,14 +28,15 @@ extern "C"
 #ifndef NOMINMAX
 #define NOMINMAX // keep std::min/std::max usable in the including TU
 #endif
-#include <windows.h>
 #include <timeapi.h> // timeBeginPeriod / timeEndPeriod (winmm); needs windows.h types first
+#include <windows.h>
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002 // Win10 1803+; define for older SDK headers
 #endif
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -51,17 +52,30 @@ extern "C"
 //                        VideoWorker first present (Workers), PlayFile error
 //                        paths (Session), DecodeThreadMain catch (core)
 //   "file-load-metadata" START PlayFile (Session)            END same set as above
-//   "seek"               START RequestSeek (Commands)        END workers' first
-//                        present (Workers) — gated on seekRefresh_ so only the
-//                        first post-seek (target) frame ends it, never a stale
-//                        pre-seek frame; DecodeThreadMain catch (core)
-// Self-contained pairs ("seek-apply", "seek-join", "seek-refill", "cache-stall",
-// the PerfScope-wrapped open/bind phases) stay within one function and are safe
-// to rename locally.
+// Seek timings use a :g<generation> suffix. Request-to-first-frame timing is kept
+// by FFmpegPlayer so superseded generations leave no orphaned name-keyed timer;
+// decoder Flush results carry their request timestamp to the owning worker, measuring
+// acknowledgement latency rather than only avcodec_flush_buffers() call time.
 // EmitPlaybackSummary() must remain reachable from every session exit path.
 
 namespace ffplay_detail
 {
+
+inline std::string SeekPerfName(const char* phase, std::uint64_t generation)
+{
+    return std::string(phase) + ":g" + std::to_string(generation);
+}
+
+inline void LogSeekPerf(const char* phase, std::uint64_t generation, std::chrono::steady_clock::time_point started)
+{
+    if (!Log::PerfActive())
+    {
+        return;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const std::string name = SeekPerfName(phase, generation);
+    Log::Perf(name.c_str(), ms);
+}
 
 // RAII wrapper for a self-contained FRAMELIFT_PERF_START/END span.
 class PerfScope
