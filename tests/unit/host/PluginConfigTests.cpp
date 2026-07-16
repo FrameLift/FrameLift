@@ -64,11 +64,21 @@ private Q_SLOTS:
     void EnsureKnownAddsAsEnabledWithoutOverriding()
     {
         PluginConfig cfg;
-        cfg.Set("framelift.overlay", false);
-        cfg.EnsureKnown({"framelift.overlay", "framelift.history"});
+        QVERIFY(cfg.Set("framelift.overlay", false));
+        QVERIFY(cfg.EnsureKnown({"framelift.overlay", "framelift.history"}));
 
         QVERIFY(!(cfg.IsEnabled("framelift.overlay"))); // existing state preserved
         QVERIFY(cfg.IsEnabled("framelift.history"));    // newly known ⇒ enabled
+        QVERIFY(!cfg.EnsureKnown({"framelift.overlay", "framelift.history"}));
+    }
+
+    void SetReportsOnlyEffectiveChanges()
+    {
+        PluginConfig cfg;
+        QVERIFY(cfg.Set("framelift.overlay", true));
+        QVERIFY(!cfg.Set("framelift.overlay", true));
+        QVERIFY(cfg.Set("framelift.overlay", false));
+        QVERIFY(!cfg.Set("framelift.overlay", false));
     }
 
     void SaveWritesSortedRowsWithHeader()

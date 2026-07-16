@@ -10,8 +10,14 @@ Item {
     visible: false
     required property var viewModel
     property var vm: viewModel
+    property bool contentRequested: vm !== null && vm.open
+    property bool contentLoaded: false
+    onContentRequestedChanged: if (contentRequested) contentLoaded = true
 
-    FLWindow {
+    Loader {
+        active: root.contentLoaded
+        sourceComponent: Component {
+            FLWindow {
         id: settingsWindow
         width: 980
         height: 680
@@ -275,6 +281,8 @@ Item {
                         }
                     }
                 }
+            }
+        }
             }
         }
     }

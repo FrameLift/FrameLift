@@ -89,6 +89,25 @@ bool AbiCompatible(const PluginMetadata& meta)
 {
     return meta.valid && FrameLiftAbiCompatible(meta.abiVersion, FRAMELIFT_ABI_VERSION);
 }
+
+PluginLoader::AvailablePlugin MakeAvailablePlugin(const PluginBinary& binary, const PluginMetadata& meta)
+{
+    if (!meta.valid || !AbiCompatible(meta) || meta.pluginId.empty())
+    {
+        return {binary.pluginFile, binary.pluginFile, binary.pluginFile};
+    }
+
+    PluginLoader::AvailablePlugin plugin;
+    plugin.pluginId = meta.pluginId;
+    plugin.pluginFile = binary.pluginFile;
+    plugin.displayName = meta.name.empty() ? meta.pluginId : meta.name;
+    plugin.version[0] = meta.version[0];
+    plugin.version[1] = meta.version[1];
+    plugin.version[2] = meta.version[2];
+    plugin.publisher = meta.publisher;
+    plugin.description = meta.description;
+    return plugin;
+}
 } // namespace
 
 PluginLoader::PluginLoader() = default;
@@ -102,30 +121,37 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
     // plugin code runs here; metaData() reads the embedded JSON only.
     std::vector<PluginCandidate> candidates;
     std::unordered_map<std::string, std::size_t> seenIds;
-    for (const auto& binary : DiscoverPluginBinaries(pluginsDir))
+    availablePlugins_.clear();
     {
-        auto loader = std::make_unique<QPluginLoader>(QString::fromStdString(binary.path));
-        PluginMetadata meta = ReadPluginMetadata(*loader);
-        if (!meta.valid)
+        PerfScope discoveryPerf("plugin-discovery");
+        for (const auto& binary : DiscoverPluginBinaries(pluginsDir))
         {
-            Log::Warn("Plugin '{}': missing/invalid metadata - rebuild against current SDK", binary.pluginFile);
-            continue;
+            auto loader = std::make_unique<QPluginLoader>(QString::fromStdString(binary.path));
+            PluginMetadata meta = ReadPluginMetadata(*loader);
+            availablePlugins_.push_back(MakeAvailablePlugin(binary, meta));
+            if (!meta.valid)
+            {
+                Log::Warn("Plugin '{}': missing/invalid metadata - rebuild against current SDK", binary.pluginFile);
+                continue;
+            }
+            if (!AbiCompatible(meta))
+            {
+                Log::Warn(
+                    "Plugin '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current "
+                    "SDK",
+                    meta.pluginId, meta.version[0], meta.version[1], meta.version[2], meta.abiVersion,
+                    FRAMELIFT_ABI_VERSION
+                );
+                continue;
+            }
+            if (seenIds.contains(meta.pluginId))
+            {
+                Log::Warn("Plugin '{}': duplicate plugin id - skipped", meta.pluginId);
+                continue;
+            }
+            seenIds.emplace(meta.pluginId, candidates.size());
+            candidates.push_back(PluginCandidate{binary, std::move(loader), std::move(meta)});
         }
-        if (!AbiCompatible(meta))
-        {
-            Log::Warn(
-                "Plugin '{}' v{}.{}.{}: ABI version {} incompatible with host version {} - rebuild against current SDK",
-                meta.pluginId, meta.version[0], meta.version[1], meta.version[2], meta.abiVersion, FRAMELIFT_ABI_VERSION
-            );
-            continue;
-        }
-        if (seenIds.contains(meta.pluginId))
-        {
-            Log::Warn("Plugin '{}': duplicate plugin id - skipped", meta.pluginId);
-            continue;
-        }
-        seenIds.emplace(meta.pluginId, candidates.size());
-        candidates.push_back(PluginCandidate{binary, std::move(loader), std::move(meta)});
     }
 
     // Resolve dependencies over every discovered plugin, then load the accepted ones
@@ -238,34 +264,6 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
 
     const double totalMs = std::chrono::duration<double, std::milli>(Clock::now() - loadStart).count();
     Log::Info("Loaded {} plugin(s) in {:.1f} ms", plugins_.size(), totalMs);
-}
-
-std::vector<PluginLoader::AvailablePlugin> PluginLoader::DiscoverAvailable(const std::string& pluginsDir)
-{
-    std::vector<AvailablePlugin> out;
-    for (const auto& binary : DiscoverPluginBinaries(pluginsDir))
-    {
-        QPluginLoader loader(QString::fromStdString(binary.path));
-        const PluginMetadata meta = ReadPluginMetadata(loader);
-        if (meta.valid && AbiCompatible(meta) && !meta.pluginId.empty())
-        {
-            AvailablePlugin plugin;
-            plugin.pluginId = meta.pluginId;
-            plugin.pluginFile = binary.pluginFile;
-            plugin.displayName = meta.name.empty() ? meta.pluginId : meta.name;
-            plugin.version[0] = meta.version[0];
-            plugin.version[1] = meta.version[1];
-            plugin.version[2] = meta.version[2];
-            plugin.publisher = meta.publisher;
-            plugin.description = meta.description;
-            out.push_back(std::move(plugin));
-        }
-        else
-        {
-            out.push_back({binary.pluginFile, binary.pluginFile, binary.pluginFile});
-        }
-    }
-    return out;
 }
 
 PluginLoader::~PluginLoader()

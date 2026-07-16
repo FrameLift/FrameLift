@@ -5,4 +5,6 @@ add_framelift_plugin(ContextMenu
         "${CMAKE_CURRENT_SOURCE_DIR}/ContextMenuModule.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ContextMenuModule.h"
         ${FRAMELIFT_SDK_SOURCES}
+        QML_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/ContextMenuContent.qml"
 )

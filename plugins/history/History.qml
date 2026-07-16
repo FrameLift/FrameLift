@@ -13,7 +13,7 @@ Item {
     function countText() {
         if (root.vm === null)
             return "0"
-        return panel.searchOpen
+        return drawer.contentItem !== null && drawer.contentItem.searchOpen
                 ? root.vm.entries.length + " / " + root.vm.totalCount
                 : root.vm.totalCount.toString()
     }
@@ -26,7 +26,7 @@ Item {
         drawerWidthRatio: 0.32
         minimumDrawerWidth: 320
         maximumDrawerWidth: 440
-        onOpenChanged: if (!open) panel.setSearchOpen(false)
+        onOpenChanged: if (!open && contentItem !== null) contentItem.setSearchOpen(false)
         onXChanged: if (root.vm !== null) root.vm.publishVisibleWidth(Math.max(0, root.width - x))
 
         ColumnLayout {
@@ -229,7 +229,8 @@ Item {
         destructive: true
         onAccepted: if (root.vm !== null) {
             root.vm.Clear()
-            panel.setSearchOpen(false)
+            if (drawer.contentItem !== null)
+                drawer.contentItem.setSearchOpen(false)
         }
     }
 }

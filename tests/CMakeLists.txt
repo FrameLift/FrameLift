@@ -70,6 +70,7 @@ add_executable(framelift_tests
         unit/host/MediaStoreTests.cpp
         unit/host/ModuleContextTests.cpp
         unit/host/PluginConfigTests.cpp
+        unit/host/PluginLoaderTests.cpp
         unit/host/CommandRegistryTests.cpp
         unit/host/ModuleSettingsTests.cpp
         unit/misc/KeyNamesTests.cpp
@@ -113,6 +114,7 @@ add_executable(framelift_tests
         ${FRAMELIFT_QT_TEST_RUNNER}
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"
+        "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginLoader.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/CommandRegistry.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/ModuleContext.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"

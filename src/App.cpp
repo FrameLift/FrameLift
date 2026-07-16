@@ -66,14 +66,15 @@ std::string LegacyPluginId(std::string id)
     return id;
 }
 
-void MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& pluginConfig)
+bool MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& pluginConfig)
 {
     std::ifstream file(legacyPath);
     if (!file)
     {
-        return;
+        return false;
     }
 
+    bool changed = false;
     std::string line;
     while (std::getline(file, line))
     {
@@ -96,9 +97,10 @@ void MigrateLegacyPluginConfig(const std::string& legacyPath, PluginConfig& plug
         const std::string value = line.substr(eq + 1);
         if (!id.empty())
         {
-            pluginConfig.Set(id, value != "disabled");
+            changed |= pluginConfig.Set(id, value != "disabled");
         }
     }
+    return changed;
 }
 
 } // namespace
@@ -111,23 +113,22 @@ App::App(
 )
     : cliArgc_(cliArgc), cliArgv_(cliArgv), player_(std::make_unique<FFmpegPlayer>())
 {
-    FRAMELIFT_PERF_START("app-start");
-
     ffmpeg_ = player_.get();
 
     char prefBuf[512] = {};
     (void)QtAppWindow::ResolvePrefPath("", "FrameLift", prefBuf, sizeof(prefBuf));
     const std::string prefDir = prefBuf;
-    const std::string settingsPath = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
+    settingsPath_ = prefDir.empty() ? "settings.ini" : prefDir + "settings.ini";
     pluginsPath_ = prefDir.empty() ? "plugins.ini" : prefDir + "plugins.ini";
+    settingsFileExistedAtLaunch_ = std::filesystem::exists(settingsPath_);
 
     {
         PerfScope perf("startup-platform");
-        InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath);
+        InitPlatform(title, width, height, graphicsApi, prefDir, settingsPath_);
     }
     {
         PerfScope perf("startup-services");
-        InitServices(prefDir, settingsPath);
+        InitServices(prefDir, settingsPath_);
     }
 
     // The ContextMenu plugin owns the right-click menu: it registers the ContextMenu
@@ -180,7 +181,7 @@ void App::InitPlatform(
     const std::string legacyPath = std::filesystem::path(pluginsPath_).parent_path().empty()
                                        ? std::string("packages.ini")
                                        : (std::filesystem::path(pluginsPath_).parent_path() / "packages.ini").string();
-    MigrateLegacyPluginConfig(legacyPath, pluginConfig_);
+    pluginConfigDirty_ = MigrateLegacyPluginConfig(legacyPath, pluginConfig_);
 
     appWindow_ = std::make_unique<QtAppWindow>(title, width, height, graphicsApi);
 
@@ -332,17 +333,17 @@ void App::LoadPlugins()
     // settings UI can list and toggle each plugin. Populate it before Install() so a
     // plugin module may enumerate peers during it.
     std::vector<std::string> discoveredPluginIds;
-    for (auto& plugin : PluginLoader::DiscoverAvailable(pluginsDir))
+    for (const auto& plugin : pluginLoader_.AvailablePlugins())
     {
         PluginCatalog::PluginCatalogEntry entry;
         entry.id = plugin.pluginId;
         discoveredPluginIds.push_back(plugin.pluginId);
-        entry.displayName = std::move(plugin.displayName);
+        entry.displayName = plugin.displayName;
         entry.version[0] = plugin.version[0];
         entry.version[1] = plugin.version[1];
         entry.version[2] = plugin.version[2];
-        entry.publisher = std::move(plugin.publisher);
-        entry.description = std::move(plugin.description);
+        entry.publisher = plugin.publisher;
+        entry.description = plugin.description;
         entry.enabled = pluginConfig_.IsEnabled(entry.id);
         entry.loaded = loadedPluginIds.contains(entry.id);
         moduleCtx_->Catalog().AddPlugin(std::move(entry));
@@ -351,23 +352,33 @@ void App::LoadPlugins()
     // Install each loaded plugin module.
     for (auto& p : pluginLoader_.Plugins())
     {
+        PerfScope perf("plugin-install:" + p.pluginId);
         registry_.Add(p.module, *moduleCtx_);
     }
 
-    // Refresh the manifest so it lists every discovered plugin (new ones default to
-    // enabled), keeping plugins.ini a complete, hand-editable record.
-    pluginConfig_.EnsureKnown(discoveredPluginIds);
-    pluginConfig_.Save(pluginsPath_);
+    {
+        PerfScope perf("startup-persistence");
+
+        // Keep the manifest complete without atomically rewriting an unchanged file.
+        pluginConfigDirty_ |= pluginConfig_.EnsureKnown(discoveredPluginIds);
+        if (pluginConfigDirty_)
+        {
+            pluginConfig_.Save(pluginsPath_);
+            pluginConfigDirty_ = false;
+        }
+
+        // ModuleBase already materializes missing module/keybind sections during
+        // Install(). Persist host defaults only on the first launch, without running
+        // settings callbacks or rewriting every module section.
+        if (!settingsFileExistedAtLaunch_)
+        {
+            settings_.Save(settingsPath_);
+            settingsFileExistedAtLaunch_ = true;
+        }
+    }
 
     registry_.BindHotkeys(keys_);
     playbackControls_->Bind();
-
-    // Materialize module settings + keybinds on first run: modules populate their
-    // ModuleSettingsImpl caches during Install(), but those reach disk only via
-    // SaveSettings(). The startup Settings::Save (InitPlatform, before plugins)
-    // writes host sections only, so without this flush module sections appear only
-    // after the user presses Save in the Settings menu.
-    moduleCtx_->Settings().SaveSettings();
 
     settings_.ApplyLaunchEnvironmentOverrides();
     ValidateDecodeModeSelection();
@@ -673,6 +684,42 @@ void App::Dispatch(const AppEvent& e)
 #if FRAMELIFT_BUILD_LAUNCH_TESTS
 void App::ScheduleTestExitIfRequested()
 {
+    if (qEnvironmentVariableIsSet("FL_TEST_ACTIVATE_LAZY_SURFACES"))
+    {
+        const auto toggleLazySurfaces = [this]
+        {
+            const auto trigger = [this](Key key, Mod mods = Mod::None)
+            {
+                AppEvent event{};
+                event.type = AppEventType::KeyDown;
+                event.AsKey() = {key, mods, false};
+                (void)keys_.Handle(event);
+            };
+
+            trigger(Keys::L);                // Playlist
+            trigger(Keys::H);                // History
+            trigger(Keys::F11);              // DBViewer
+            trigger(Keys::Tab);              // DebugOverlay
+            trigger(Keys::F10);              // Benchmark
+            trigger(Keys::L, Mod::Ctrl);     // Console
+            trigger(Keys::Comma, Mod::Ctrl); // SettingsMenu
+        };
+
+        // Open, close, and reopen the toggleable surfaces. The first pass forces
+        // lazy construction; the third verifies the retained tree can be reused.
+        QTimer::singleShot(0, toggleLazySurfaces);
+        QTimer::singleShot(100, toggleLazySurfaces);
+        QTimer::singleShot(200, toggleLazySurfaces);
+        QTimer::singleShot(
+            0,
+            [this]
+            {
+                moduleCtx_->Publish<OpenNetworkStreamRequestEvent>({});
+                Log::Info("test lazy plugin surfaces activated");
+            }
+        );
+    }
+
     bool seekOk = false;
     int seekDelayMs = qEnvironmentVariableIntValue("FL_TEST_SEEK_AFTER_MS", &seekOk);
     if (seekOk)
@@ -831,6 +878,7 @@ int App::Run()
     }
 
     FRAMELIFT_PERF_END("app-start");
+    FRAMELIFT_PERF_END("startup-app-ready");
 #if FRAMELIFT_BUILD_LAUNCH_TESTS
     ScheduleTestExitIfRequested();
 #endif

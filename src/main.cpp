@@ -11,6 +11,12 @@
 
 int main(int argc, char* argv[])
 {
+    // Cover all work from main entry through the first presented window frame.
+    // PerfStart only records a steady-clock stamp, so it is safe before Log::Init().
+    FRAMELIFT_PERF_START("startup-first-frame");
+    FRAMELIFT_PERF_START("startup-app-ready");
+    FRAMELIFT_PERF_START("startup-qt-bootstrap");
+
     ConfigureQtEnvironment();
 
     // Backend is chosen via FL_BACKEND before the Qt platform exists (see GraphicsApi.h).
@@ -51,8 +57,10 @@ int main(int argc, char* argv[])
     QQuickStyle::setStyle("Basic");
 
     Log::Init();
+    FRAMELIFT_PERF_END("startup-qt-bootstrap");
     try
     {
+        FRAMELIFT_PERF_START("app-start");
         App app("FrameLift", 1280, 720, graphicsApi, argc, argv);
         return app.Run();
     }
