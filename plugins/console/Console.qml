@@ -11,13 +11,16 @@ Item {
     property var vm: viewModel
     anchors.fill: parent
     visible: vm !== null && vm.open
+    property bool contentLoaded: false
 
     // Re-pin to the newest line once the panel is actually on screen. Doing this
     // only from ListView.onCountChanged misfires on the first open: the count goes
     // 0 → N while the panel is still laying out (height 0), so positionViewAtEnd
     // scrolls past the content and the view looks empty until the next entry bumps
     // the count again. Re-position when we become visible, deferred so layout has run.
-    onVisibleChanged: if (visible) Qt.callLater(logList.positionViewAtEnd)
+    onVisibleChanged: if (visible) {
+        contentLoaded = true
+    }
 
     // Console output shows each line as "[time] [LEVEL] message"; mirror that here.
     function levelLabel(level) {
@@ -64,13 +67,27 @@ Item {
         return root.levelColor(row.level)
     }
 
-    FLGlassPanel {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 18
-        height: Math.min(parent.height * 0.55, 520)
-        ColumnLayout {
+    Loader {
+        id: consoleLoader
+        anchors.fill: parent
+        active: root.contentLoaded
+        sourceComponent: Component {
+            FLGlassPanel {
+                Component.onCompleted: if (root.visible) Qt.callLater(logList.positionViewAtEnd)
+                Connections {
+                    target: root
+                    function onVisibleChanged() {
+                        if (root.visible)
+                            Qt.callLater(logList.positionViewAtEnd)
+                    }
+                }
+
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 18
+                height: Math.min(parent.height * 0.55, 520)
+                ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
             spacing: 10
@@ -190,6 +207,8 @@ Item {
                     color: "#14000000"
                     border.width: 1
                     border.color: commandField.activeFocus ? FLTheme.accent : FLTheme.border
+                }
+            }
                 }
             }
         }

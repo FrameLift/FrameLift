@@ -11,8 +11,14 @@ Item {
     required property var viewModel
     anchors.fill: parent
     visible: root.viewModel.running
+    property bool contentLoaded: false
+    onVisibleChanged: if (visible) contentLoaded = true
 
-    Rectangle {
+    Loader {
+        anchors.fill: parent
+        active: root.contentLoaded
+        sourceComponent: Component {
+            Rectangle {
         id: pill
         anchors.top: parent.top
         anchors.right: parent.right
@@ -49,6 +55,8 @@ Item {
                     elide: Text.ElideMiddle
                     width: Math.min(implicitWidth, 260)
                 }
+            }
+        }
             }
         }
     }

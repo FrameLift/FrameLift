@@ -335,6 +335,7 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             "FL_BACKEND=gl"
             "FL_ACCEL_MODE=off"
             "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
             "FL_TEST_EXIT_AFTER_MS=1500"
             "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl_offscreen")
     set(_framelift_launch_fail_regex
@@ -356,6 +357,23 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             LABELS launch
             TIMEOUT 20
             ENVIRONMENT "${_framelift_launch_env}"
+            PASS_REGULAR_EXPRESSION "startup-first-frame [0-9]+\\.[0-9]+ ms"
+            FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
+    set(_framelift_lazy_surfaces_env ${_framelift_launch_env})
+    list(FILTER _framelift_lazy_surfaces_env EXCLUDE REGEX "^(FL_TEST_EXIT_AFTER_MS|XDG_CONFIG_HOME)=")
+    list(APPEND _framelift_lazy_surfaces_env
+            "FL_TEST_ACTIVATE_LAZY_SURFACES=1"
+            "FL_TEST_EXIT_AFTER_MS=750"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_lazy_surfaces")
+    add_test(NAME framelift_launch_lazy_surfaces
+            COMMAND $<TARGET_FILE:FrameLift>)
+    set_tests_properties(framelift_launch_lazy_surfaces PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+            LABELS launch
+            TIMEOUT 20
+            ENVIRONMENT "${_framelift_lazy_surfaces_env}"
+            PASS_REGULAR_EXPRESSION "test lazy plugin surfaces activated"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
 
     set(_framelift_event_pump_quit_env

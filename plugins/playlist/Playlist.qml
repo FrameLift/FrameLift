@@ -14,7 +14,7 @@ Item {
     function countText() {
         if (root.vm === null)
             return "0"
-        if (panel.searchOpen)
+        if (drawer.contentItem !== null && drawer.contentItem.searchOpen)
             return root.vm.entries.length + " / " + root.vm.totalCount
         if (root.vm.currentIndex >= 0)
             return (root.vm.currentIndex + 1) + " / " + root.vm.totalCount
@@ -28,7 +28,7 @@ Item {
         drawerWidthRatio: 0.32
         minimumDrawerWidth: 320
         maximumDrawerWidth: 440
-        onOpenChanged: if (!open) panel.setSearchOpen(false)
+        onOpenChanged: if (!open && contentItem !== null) contentItem.setSearchOpen(false)
         onXChanged: if (root.vm !== null) root.vm.publishVisibleWidth(Math.max(0, width + x))
 
         ColumnLayout {

@@ -26,7 +26,7 @@ public:
         IPlugin* plugin;                       // qobject_cast<IPlugin*>(loader->instance())
         PluginMetadata meta;                   // owned copy of the embedded metadata
         IModule* module = nullptr;
-        QObject* viewModel = nullptr;          // may be nullptr
+        QObject* viewModel = nullptr; // may be nullptr
         std::string qmlEntryUrl;
         int renderOrder = 0;
     };
@@ -56,11 +56,13 @@ public:
         return plugins_;
     }
 
-    // Discover every plugin binary present in pluginsDir by reading embedded metadata
-    // only (no instantiation), so the settings UI can list and re-enable plugins that
-    // are disabled or failed.
-    static std::vector<AvailablePlugin> DiscoverAvailable(const std::string& pluginsDir);
+    // Metadata captured by the same scan LoadAll() used for resolution/loading.
+    const std::vector<AvailablePlugin>& AvailablePlugins() const
+    {
+        return availablePlugins_;
+    }
 
 private:
     std::vector<LoadedPlugin> plugins_;
+    std::vector<AvailablePlugin> availablePlugins_;
 };

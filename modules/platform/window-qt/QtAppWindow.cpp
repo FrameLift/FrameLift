@@ -397,6 +397,19 @@ int QtAppWindow::RunEventLoop()
 {
     if (window_)
     {
+        if (Log::PerfActive())
+        {
+            FRAMELIFT_PERF_START("window-show");
+            QObject::connect(
+                window_, &QQuickWindow::frameSwapped, window_,
+                []
+                {
+                    FRAMELIFT_PERF_END("window-show");
+                    FRAMELIFT_PERF_END("startup-first-frame");
+                },
+                Qt::SingleShotConnection
+            );
+        }
         window_->show();
     }
     return QGuiApplication::exec();

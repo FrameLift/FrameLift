@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import FrameLift.Controls
 
@@ -7,7 +9,14 @@ Item {
     property var vm: viewModel
     anchors.fill: parent
     visible: vm !== null && vm.open
-    FLGlassPanel {
+    property bool contentLoaded: false
+    onVisibleChanged: if (visible) contentLoaded = true
+
+    Loader {
+        anchors.fill: parent
+        active: root.contentLoaded
+        sourceComponent: Component {
+            FLGlassPanel {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: 0
@@ -45,6 +54,8 @@ Item {
                         lineHeight: 1.2
                     }
                 }
+            }
+        }
             }
         }
     }

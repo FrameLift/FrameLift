@@ -2,6 +2,10 @@ import QtQuick
 
 FLGlassPanel {
     id: drawer
+    // A drawer's visual tree is often much larger than its closed shell. Accept the
+    // caller's direct child as a component and instantiate it only on first open;
+    // keep it alive afterward so close/reopen preserves focus, scroll, and search.
+    default property alias content: contentLoader.sourceComponent
     property bool open: false
     property bool rightSide: false
     property real drawerWidth: 340
@@ -19,6 +23,16 @@ FLGlassPanel {
         return Math.min(parent.width, clampedWidth)
     }
     signal visibleWidthChangedByAnimation(real width)
+
+    property bool _contentLoaded: open
+    onOpenChanged: if (open) _contentLoaded = true
+    property Loader _contentLoader: Loader {
+        id: contentLoader
+        parent: drawer
+        anchors.fill: parent
+        active: drawer._contentLoaded
+    }
+    readonly property var contentItem: contentLoader.item
 
     // Overdraw 1px past every edge so the panel covers the sub-pixel seam that
     // otherwise lets the window/video show through where the flush edges land on

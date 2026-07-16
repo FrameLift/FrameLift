@@ -10,7 +10,14 @@ Item {
     property var vm: viewModel
     anchors.fill: parent
     visible: vm !== null && vm.open
-    FLGlassPanel {
+    property bool contentLoaded: false
+    onVisibleChanged: if (visible) contentLoaded = true
+
+    Loader {
+        anchors.fill: parent
+        active: root.contentLoaded
+        sourceComponent: Component {
+            FLGlassPanel {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 18
@@ -120,6 +127,8 @@ Item {
                 FLActionButton { text: "Load file"; onClicked: root.vm.chooseFile() }
                 FLActionButton { text: "Reset"; onClicked: root.vm.resetRun() }
                 Item { Layout.fillWidth: true }
+            }
+        }
             }
         }
     }

@@ -121,7 +121,10 @@ private:
 
     Settings settings_;
     PluginConfig pluginConfig_;
+    std::string settingsPath_;
     std::string pluginsPath_;
+    bool pluginConfigDirty_ = false;
+    bool settingsFileExistedAtLaunch_ = false;
     FileDialogServiceImpl fileDialogService_{&settings_};
     HotkeysImpl keys_;
     JsonServiceImpl jsonService_;
