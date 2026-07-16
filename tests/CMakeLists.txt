@@ -181,17 +181,20 @@ target_link_libraries(framelift_test_ai_service PRIVATE Threads::Threads Qt6::Co
 framelift_apply_coverage(framelift_test_ai_service)
 framelift_qt_discover_tests(framelift_test_ai_service)
 
-# QmlCompositor needs a QGuiApplication and Qt Quick to exercise plugin-root
-# anchors against the host-owned inset viewport. Keep it isolated from the
+# Host QML geometry tests need a QGuiApplication and Qt Quick to exercise the
+# compositor viewport and shared controls. Keep them isolated from the
 # platform-independent suites so their QCoreApplication runner stays lean.
 add_executable(framelift_test_qml_compositor
+        unit/platform/FLDrawerTests.cpp
         unit/platform/QmlCompositorTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
         "${FRAMELIFT_ROOT}/modules/platform/window-qt/QmlCompositor.cpp"
         "${FRAMELIFT_ROOT}/sdk/src/Log.cpp")
 set_target_properties(framelift_test_qml_compositor PROPERTIES
         CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF AUTOMOC ON)
-target_compile_definitions(framelift_test_qml_compositor PRIVATE FRAMELIFT_TEST_GUI_APPLICATION)
+target_compile_definitions(framelift_test_qml_compositor PRIVATE
+        FRAMELIFT_TEST_GUI_APPLICATION
+        "FRAMELIFT_TEST_CONTROL_QML_DIR=\"${FRAMELIFT_ROOT}/qml/FrameLift/Controls\"")
 target_include_directories(framelift_test_qml_compositor PRIVATE
         "${FRAMELIFT_ROOT}/sdk/include"
         ${FRAMELIFT_HOST_MODULE_TEST_INCLUDE_DIRS}
