@@ -136,6 +136,23 @@ private Q_SLOTS:
         QVERIFY((c.Misses()) == (1));
     }
 
+    void StaleReservationCleanupDoesNotTouchNewEpoch()
+    {
+        ReadAheadCache c;
+        c.Configure(true, 1000);
+        std::uint64_t oldEpoch = 0;
+        std::uint64_t newEpoch = 0;
+        QVERIFY(c.Reserve(400, &oldEpoch));
+        c.Reset();
+        QVERIFY(c.Reserve(600, &newEpoch));
+        QVERIFY(oldEpoch != newEpoch);
+
+        c.RemoveBytes(400, oldEpoch);
+        QCOMPARE(c.UsedBytes(), 600);
+        c.RemoveBytes(600, newEpoch);
+        QCOMPARE(c.UsedBytes(), 0);
+    }
+
     void UsedKbRoundsDown()
     {
         ReadAheadCache c;

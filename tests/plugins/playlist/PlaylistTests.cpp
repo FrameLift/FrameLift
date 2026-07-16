@@ -416,6 +416,77 @@ private Q_SLOTS:
         QVERIFY((opened) == ("/movies/v.mp4")); // FileOpenedEvent published
     }
 
+    void CleanEofAdvancesOnceAndClearsResumePosition()
+    {
+        Settings settings;
+        const TempFile ini;
+        ModuleContext ctx("pref/", &settings, ini.str());
+        FakeMediaPlayer player;
+        ctx.RegisterService<IMediaPlayback>(&player);
+
+        std::string endedPath;
+        double endedPosition = -1.0;
+        framelift::Subscribe<FileEndedEvent>(
+            ctx,
+            [&](const FileEndedEvent& e)
+            {
+                endedPath = e.path ? e.path : "";
+                endedPosition = e.position;
+            }
+        );
+
+        Playlist pl;
+        pl.Install(ctx);
+        pl.AddFile("/movies/a.mp4", "/");
+        pl.AddFile("/movies/b.mp4", "/");
+        pl.Next();
+        QCOMPARE(pl.Current(), 0);
+        QCOMPARE(player.loadCount, 1);
+
+        MediaEvent eof;
+        eof.type = MediaEventType::EndFile;
+        eof.endReason = EndFileReason::Eof;
+        pl.HandleMediaEvent(eof);
+
+        QCOMPARE(pl.Current(), 1);
+        QCOMPARE(player.loadCount, 2);
+        QCOMPARE(player.loadedPath, std::string("/movies/b.mp4"));
+        QCOMPARE(endedPath, std::string("/movies/a.mp4"));
+        QCOMPARE(endedPosition, 0.0);
+    }
+
+    void CleanEofOnLastItemStopsWithoutWrapping()
+    {
+        Settings settings;
+        const TempFile ini;
+        ModuleContext ctx("pref/", &settings, ini.str());
+        FakeMediaPlayer player;
+        ctx.RegisterService<IMediaPlayback>(&player);
+
+        int stopRequests = 0;
+        framelift::Subscribe<StopPlaybackRequestEvent>(
+            ctx,
+            [&](const StopPlaybackRequestEvent&)
+            {
+                ++stopRequests;
+            }
+        );
+
+        Playlist pl;
+        pl.Install(ctx);
+        pl.AddFile("/movies/only.mp4", "/");
+        pl.Next();
+
+        MediaEvent eof;
+        eof.type = MediaEventType::EndFile;
+        eof.endReason = EndFileReason::Eof;
+        pl.HandleMediaEvent(eof);
+
+        QCOMPARE(stopRequests, 1);
+        QCOMPARE(pl.Current(), 0);
+        QCOMPARE(player.loadCount, 1);
+    }
+
     // ── First-run persistence: Install writes plugin config to disk ───────────────
 
     void InstallPersistsSettingsAndKeybindsOnFirstRun()

@@ -72,9 +72,9 @@ FFmpegPlayer::~FFmpegPlayer()
     }
     Wake();
     // Unblock any workers still parked on a queue so PlayFile can return.
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
+    audioQ_->Stop();
+    videoQ_->Stop();
+    subQ_->Stop();
     if (decodeThread_.joinable())
     {
         decodeThread_.join();
@@ -154,10 +154,28 @@ void FFmpegPlayer::DecodeThreadMain()
             QueueEvent(MakeEndFile(EndFileReason::Error));
             FRAMELIFT_PERF_END("file-load-metadata");
             FRAMELIFT_PERF_END("file-open");
-            FRAMELIFT_PERF_END("seek");
+            {
+                std::lock_guard lock(mutex_);
+                seekPerfGeneration_ = 0;
+            }
             EmitPlaybackSummary("decode-error");
         }
     }
+}
+
+void FFmpegPlayer::FinishSeekPerf(std::uint64_t generation)
+{
+    std::chrono::steady_clock::time_point started;
+    {
+        std::lock_guard lock(mutex_);
+        if (seekPerfGeneration_ != generation)
+        {
+            return;
+        }
+        seekPerfGeneration_ = 0;
+        started = seekPerfStarted_;
+    }
+    LogSeekPerf("seek", generation, started);
 }
 
 // ── Clocks ─────────────────────────────────────────────────────────────────────
@@ -280,7 +298,7 @@ FFmpegPlayer::PendingSeek FFmpegPlayer::TakePendingSeek()
     // anchor-release gate in the same lock so a held-key Seek() can't read a
     // momentarily-0 GetMasterClock() and re-target from the start.
     seekClockValid_ = false;
-    return {seekTarget_, seekKind_};
+    return {seekTarget_, seekKind_, seekGeneration_};
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────

@@ -31,9 +31,9 @@ void FFmpegPlayer::LoadFile(const char* path, double resumePos) noexcept
     }
     // Wake the decode thread and unblock any workers waiting on a queue so the
     // current file is abandoned promptly.
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
+    audioQ_->Stop();
+    videoQ_->Stop();
+    subQ_->Stop();
     Wake();
 }
 
@@ -47,13 +47,15 @@ void FFmpegPlayer::Stop() noexcept
         }
         stopRequested_ = true;   // break the decode thread out of playback / EOF hold
         hasPendingSeek_ = false; // drop any queued seek — there's nothing to resume
+        boundaryEofRequested_ = false;
+        forwardBoundaryRepeatLatched_ = false;
     }
     // Abandon the current file promptly (mirror LoadFile): unblock the workers and the
     // decode thread so it tears the session down and parks. stopRequested_ lingers while
     // parked (harmless — nothing consults it there) and is cleared by the next load.
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
+    audioQ_->Stop();
+    videoQ_->Stop();
+    subQ_->Stop();
     Wake();
 
     // Reflect idle immediately for the UI: clears the EOF-held frame's seekable state
@@ -97,9 +99,14 @@ void FFmpegPlayer::AdjustVolume(int delta) noexcept
 
 void FFmpegPlayer::Seek(double seconds) noexcept
 {
+    (void)SeekRelativeFromInput(seconds, false);
+}
+
+RelativeSeekResult FFmpegPlayer::SeekRelativeFromInput(double seconds, bool autoRepeat) noexcept
+{
     if (idle_.load())
     {
-        return; // nothing loaded — ignore (avoids seeking the next file opened)
+        return RelativeSeekResult::IgnoredAtStart; // don't seek the next file opened
     }
     // Accumulate relative seeks against the last requested target rather than the
     // master clock whenever a seek is still settling: while a seek is in flight or its
@@ -108,18 +115,38 @@ void FFmpegPlayer::Seek(double seconds) noexcept
     // start instead of stepping further from the previous press.
     bool useAnchor = false;
     double anchor = 0.0;
+    double previousTarget = 0.0;
     {
         std::lock_guard lock(mutex_);
+        if (!autoRepeat)
+        {
+            forwardBoundaryRepeatLatched_ = false;
+        }
+        else if (seconds > 0.0 && forwardBoundaryRepeatLatched_)
+        {
+            return RelativeSeekResult::CompletedAtEnd;
+        }
         // Anchor on seekClockValid_, not seekSettled_: the master clock (audio when a
         // device is open) may still read 0 even after the video frame has painted.
         useAnchor = hasPendingSeek_ || !seekClockValid_;
         anchor = seekTarget_;
+        previousTarget = seekTarget_;
     }
     const double base = useAnchor ? anchor : GetMasterClock();
-    RequestSeek(
-        ClampSeekTarget(base + seconds, duration_.load()),
-        DecideSeekKind(seekMode_.load(), /*relative=*/true, seconds, hasVideo_)
-    );
+    const RelativeSeekDecision decision =
+        DecideRelativeSeek(base, seconds, duration_.load(), autoRepeat, previousTarget);
+    if (decision.result == RelativeSeekResult::IgnoredAtStart)
+    {
+        return decision.result;
+    }
+    if (decision.result == RelativeSeekResult::CompletedAtEnd)
+    {
+        RequestBoundaryEof();
+        return decision.result;
+    }
+
+    RequestSeek(decision.target, DecideSeekKind(seekMode_.load(), /*relative=*/true, seconds, hasVideo_));
+    return RelativeSeekResult::Applied;
 }
 
 void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
@@ -135,35 +162,74 @@ void FFmpegPlayer::SeekAbsolute(double seconds) noexcept
 
 void FFmpegPlayer::RequestSeek(double target, SeekKind kind) noexcept
 {
-    // Only disturb the running pipeline when the previous seek has already painted a
-    // frame (or none is in flight). While a seek is mid-decode, a new request — e.g. a
-    // held arrow key auto-repeating ~30x/s — just updates the target (latest-wins) and
-    // lets the in-flight seek present first; the decode loop then re-seeks to the newer
-    // target. Aborting on every repeat instead would tear the decoder down before it ever
-    // reaches the target, freezing the picture until the key is released.
+    // Give every request a generation, even when it only updates an already-pending
+    // target. The demux thread still takes just the latest target/generation, but a
+    // request must never share an output generation with work that may already be in
+    // flight for an earlier target.
     bool kick = false;
+    std::uint64_t generation = 0;
     {
         std::lock_guard lock(mutex_);
+        seekGeneration_ = nextGeneration_++;
         seekTarget_ = target; // latest-wins: coalesces rapid seeks (seek-bar drags)
         seekKind_ = kind;
         hasPendingSeek_ = true;
+        boundaryEofRequested_ = false; // a seek from EOF hold resumes this file
+        generation = seekGeneration_;
         kick = seekSettled_; // pipeline idle / already painted ⇒ safe to restart
+        activeGeneration_.store(generation, std::memory_order_release);
+        seekPerfGeneration_ = generation;
+        seekPerfStarted_ = std::chrono::steady_clock::now();
         if (kick)
         {
             seekSettled_ = false; // re-settled by the worker that presents the post-seek frame
-            seekKicked_ = true;   // an in-flight present() may bail its stale frame now
         }
     }
-    if (kick)
+    // The audio discontinuity starts at the command, not after worker teardown.
+    // FFmpegAudioOutput serialises this reset against Feed(), so either an old
+    // feed lands first and is cleared, or it lands later and is rejected.
+    const auto audioCutStarted = std::chrono::steady_clock::now();
+    audioOut_->InterruptForSeek(generation);
+    ffplay_detail::LogSeekPerf("seek-audio-cut", generation, audioCutStarted);
+    // Every request cuts off the currently applied generation. This also releases a
+    // demuxer blocked on queue backpressure; the decode loop then takes the latest
+    // coalesced target without waiting for an obsolete frame to present.
+    audioQ_->Interrupt();
+    videoQ_->Interrupt();
+    subQ_->Interrupt();
+    Wake();
+}
+
+void FFmpegPlayer::RequestBoundaryEof() noexcept
+{
+    std::uint64_t generation = 0;
     {
-        // Perf timing: measure each applied seek (not each coalesced repeat) to its frame.
-        FRAMELIFT_PERF_START("seek");
-        // Unblock the demux read loop / keep-open wait and any worker mid-present.
-        audioQ_->Abort();
-        videoQ_->Abort();
-        subQ_->Abort();
-        Wake();
+        std::lock_guard lock(mutex_);
+        if (boundaryEofRequested_ || eofReached_.load() || idle_.load())
+        {
+            return;
+        }
+        boundaryEofRequested_ = true;
+        forwardBoundaryRepeatLatched_ = true;
+        hasPendingSeek_ = false;
+        seekTarget_ = duration_.load();
+        seekSettled_ = true;
+        seekClockValid_ = false; // a later backward seek anchors on seekTarget_
+        generation = nextGeneration_++;
+        activeGeneration_.store(generation, std::memory_order_release);
+        seekPerfGeneration_ = 0; // a superseded in-file seek must not report a frame
     }
+
+    // Cut the old generation before publishing EOF. This is the same immediate
+    // PCM/device discontinuity used by an ordinary seek, but there is no decoder
+    // flush/refill: Playlist will replace the file or Stop() the final item.
+    audioOut_->InterruptForSeek(generation);
+    audioQ_->Interrupt();
+    videoQ_->Interrupt();
+    subQ_->Interrupt();
+    EmitFlag(PlayerProperty::Seeking, false);
+    Log::Debug("FFmpegPlayer: relative seek completed file at end (generation {})", generation);
+    Wake();
 }
 
 void FFmpegPlayer::SetImageDisplayDuration(double seconds) noexcept
@@ -195,7 +261,7 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     {
         return; // config unchanged — nothing to rebuild, don't disturb playback
     }
-    normalizeGen_.fetch_add(1); // the respawned worker rebuilds its graph from the flag
+    normalizeGen_.fetch_add(1); // the next generation rebuilds the worker-local graph
 
     if (idle_.load())
     {
@@ -205,16 +271,7 @@ void FFmpegPlayer::SetAudioNormalize(bool enabled, const AudioNormalizeParams& p
     // re-decoded from here with the new setting — otherwise the change isn't heard until
     // the device buffer drains (potentially several seconds).
     const double target = ClampSeekTarget(GetMasterClock(), duration_.load());
-    {
-        std::lock_guard lock(mutex_);
-        seekTarget_ = target;
-        seekKind_ = SeekKind::Exact; // must resume at the current position, not a keyframe
-        hasPendingSeek_ = true;
-    }
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
-    Wake();
+    RequestSeek(target, SeekKind::Exact);
 }
 
 void FFmpegPlayer::SetPlaybackOptions(const PlaybackOptions& opts) noexcept

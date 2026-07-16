@@ -320,6 +320,15 @@ endif ()
 # standalone pure-logic tests/ project. Linux CI can run this headlessly through
 # Qt's offscreen platform and software scene-graph backend.
 if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TESTS)
+    find_package(Threads REQUIRED)
+    add_executable(framelift_test_packet_queue tests/unit/media/FFmpegPacketQueueTests.cpp)
+    set_target_properties(framelift_test_packet_queue PROPERTIES
+            CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_include_directories(framelift_test_packet_queue PRIVATE ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
+    target_link_libraries(framelift_test_packet_queue PRIVATE Threads::Threads ffmpeg)
+    add_test(NAME framelift_packet_queue_generation COMMAND framelift_test_packet_queue)
+    set_tests_properties(framelift_packet_queue_generation PROPERTIES LABELS "launch;unit" TIMEOUT 10)
+
     set(_framelift_launch_env
             "QT_QPA_PLATFORM=offscreen"
             "QT_QUICK_BACKEND=software"
@@ -366,6 +375,142 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             ENVIRONMENT "${_framelift_event_pump_quit_env}"
             PASS_REGULAR_EXPRESSION "App: module shutdown complete"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
+    # Real playback seek through the launch-test-only timer hook. The perf match
+    # proves a post-seek frame was presented; timeout/teardown catches generation
+    # waits that fail to wake at seek or EOF boundaries.
+    set(_framelift_seek_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=30s-360p-mpeg4-noaudio"
+            "FL_TEST_SEEK_AFTER_MS=900"
+            "FL_TEST_SEEK_DELTA=2"
+            "FL_TEST_SEEK_COUNT=4"
+            "FL_TEST_SEEK_INTERVAL_MS=25"
+            "FL_TEST_EXIT_AFTER_MS=3000"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_seek_generation"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_seek_generation")
+    add_test(NAME framelift_launch_seek_generation COMMAND $<TARGET_FILE:FrameLift>)
+    set_tests_properties(framelift_launch_seek_generation PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+            LABELS launch
+            TIMEOUT 30
+            ENVIRONMENT "${_framelift_seek_env}"
+            PASS_REGULAR_EXPRESSION "seek:g[0-9]+ [0-9]+\\.[0-9]+ ms"
+            FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex};master clock stalled")
+
+    set(_framelift_paused_seek_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=10s-360p-mpeg4-noaudio-srt"
+            "FL_TEST_SEEK_AFTER_MS=900"
+            "FL_TEST_SEEK_ABSOLUTE=7.25"
+            "FL_TEST_PAUSE_BEFORE_SEEK=1"
+            "FL_TEST_EXIT_AFTER_MS=2500"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_paused_seek"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_paused_seek")
+    add_test(NAME framelift_launch_paused_absolute_seek COMMAND $<TARGET_FILE:FrameLift>)
+    set_tests_properties(framelift_launch_paused_absolute_seek PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+            LABELS launch
+            TIMEOUT 30
+            ENVIRONMENT "${_framelift_paused_seek_env}"
+            PASS_REGULAR_EXPRESSION "seek:g[0-9]+ [0-9]+\\.[0-9]+ ms"
+            FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex};master clock stalled")
+
+    set(_framelift_eof_seek_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=2s-360p-mpeg4-noaudio"
+            "FL_TEST_SEEK_AFTER_MS=1500"
+            "FL_TEST_SEEK_ABSOLUTE=0.5"
+            "FL_TEST_EXIT_AFTER_MS=3500"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_eof_seek"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_eof_seek")
+    add_test(NAME framelift_launch_eof_seek_restart COMMAND $<TARGET_FILE:FrameLift>)
+    set_tests_properties(framelift_launch_eof_seek_restart PROPERTIES
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
+            LABELS launch
+            TIMEOUT 30
+            ENVIRONMENT "${_framelift_eof_seek_env}"
+            PASS_REGULAR_EXPRESSION "seek:g[0-9]+ [0-9]+\\.[0-9]+ ms"
+            FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex};master clock stalled")
+
+    # A relative step that reaches the known duration completes the first file
+    # immediately. The second generated sibling proves Playlist received the
+    # normal clean-EOF event and advanced rather than merely holding at EOF.
+    set(_framelift_boundary_forward_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=2s-360p-mpeg4-noaudio"
+            "FL_TEST_FILE_EXTRA=3s-360p-mpeg4-noaudio"
+            "FL_TEST_SEEK_AFTER_MS=900"
+            "FL_TEST_SEEK_DELTA=5"
+            "FL_TEST_SEEK_COUNT=5"
+            "FL_TEST_SEEK_INTERVAL_MS=25"
+            "FL_TEST_PAUSE_BEFORE_SEEK=1"
+            "FL_TEST_EXIT_AFTER_MS=2600"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_boundary_forward"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_boundary_forward")
+    add_test(NAME framelift_launch_seek_forward_advances
+            COMMAND ${CMAKE_COMMAND}
+                    "-DTEST_EXECUTABLE=$<TARGET_FILE:FrameLift>"
+                    "-DTEST_WORKING_DIRECTORY=$<TARGET_FILE_DIR:FrameLift>"
+                    "-DTEST_ENVIRONMENT=${_framelift_boundary_forward_env}"
+                    "-DREQUIRED_REGEXES=relative seek completed file at end;playback-summary reason=superseded"
+                    "-DFORBIDDEN_REGEXES=${_framelift_launch_fail_regex};master clock stalled"
+                    "-DCOUNT_REGEX=relative seek completed file at end"
+                    "-DEXPECTED_COUNT=1"
+                    -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
+    set_tests_properties(framelift_launch_seek_forward_advances PROPERTIES LABELS launch TIMEOUT 30)
+
+    # The first backward press reaches zero; its repeat stream must not create
+    # additional generations/audio resets after the clock starts moving again.
+    set(_framelift_boundary_back_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            # Keep CI independent of a host audio daemon. RequestSeek still runs
+            # the exact audio discontinuity/generation path and emits its cutoff
+            # timing even when the generated clip has no audio stream.
+            "FL_TEST_FILE=4s-360p-mpeg4-noaudio"
+            "FL_TEST_SEEK_AFTER_MS=700"
+            "FL_TEST_SEEK_DELTA=-5"
+            "FL_TEST_SEEK_COUNT=8"
+            "FL_TEST_SEEK_INTERVAL_MS=25"
+            "FL_TEST_EXIT_AFTER_MS=2200"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_boundary_back"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_boundary_back")
+    add_test(NAME framelift_launch_seek_back_stops_cleanly
+            COMMAND ${CMAKE_COMMAND}
+                    "-DTEST_EXECUTABLE=$<TARGET_FILE:FrameLift>"
+                    "-DTEST_WORKING_DIRECTORY=$<TARGET_FILE_DIR:FrameLift>"
+                    "-DTEST_ENVIRONMENT=${_framelift_boundary_back_env}"
+                    "-DREQUIRED_REGEXES=seek:g[0-9]+ [0-9]+\\.[0-9]+ ms"
+                    "-DFORBIDDEN_REGEXES=${_framelift_launch_fail_regex};master clock stalled"
+                    "-DCOUNT_REGEX=seek-audio-cut:g[0-9]+"
+                    "-DEXPECTED_COUNT=1"
+                    -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
+    set_tests_properties(framelift_launch_seek_back_stops_cleanly PROPERTIES LABELS launch TIMEOUT 30)
 
     # Same launch on a real Vulkan device with the Khronos validation layer forced on,
     # playing a short software-decoded clip when ${CMAKE_BINARY_DIR}/test-media/smoke.mp4

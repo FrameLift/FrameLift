@@ -47,7 +47,13 @@ void PlaybackControls::Connect()
     framelift::RegisterSettingsChangeCallback(ctx_, apply);
 
     // Duck audio briefly whenever a UI notification is shown.
-    framelift::Subscribe<NotificationEvent>(ctx_, [this](const NotificationEvent&) { player_.PulseDucking(); });
+    framelift::Subscribe<NotificationEvent>(
+        ctx_,
+        [this](const NotificationEvent&)
+        {
+            player_.PulseDucking();
+        }
+    );
 
     // Mirror the player idle state so TogglePause can resume the most recent file.
     player_.ObserveProperty(PlayerProperty::IdleActive);
@@ -57,20 +63,52 @@ void PlaybackControls::Bind()
 {
     const KeybindSettings& kb = settings_.Get<KeybindSettings>();
 
-    host::Bind(keys_, "togglePause", kb.togglePause, [this] { TogglePause(); });
-    host::Bind(keys_, "toggleFullscreen", kb.toggleFullscreen, [this] { window_.SetFullscreen(!window_.IsFullscreen()); });
-    host::Bind(keys_, "quit", kb.quit, [this] { events_.PushQuitEvent(); });
+    host::Bind(
+        keys_, "togglePause", kb.togglePause,
+        [this]
+        {
+            TogglePause();
+        }
+    );
+    host::Bind(
+        keys_, "toggleFullscreen", kb.toggleFullscreen,
+        [this]
+        {
+            window_.SetFullscreen(!window_.IsFullscreen());
+        }
+    );
+    host::Bind(
+        keys_, "quit", kb.quit,
+        [this]
+        {
+            events_.PushQuitEvent();
+        }
+    );
     host::Bind(
         keys_, "toggleNormalize", kb.toggleNormalize,
         [this]
         {
             const bool on = !player_.IsNormalizeEnabled();
-            player_.SetAudioNormalize(on, on ? ToAudioNormalizeParams(settings_.Get<AudioSettings>()) : AudioNormalizeParams{});
+            player_.SetAudioNormalize(
+                on, on ? ToAudioNormalizeParams(settings_.Get<AudioSettings>()) : AudioNormalizeParams{}
+            );
             ctx_.Publish<NotificationEvent>({on ? "Normalize: On" : "Normalize: Off"});
         }
     );
-    host::Bind(keys_, "volumeUp", kb.volumeUp, [this] { AdjustVolumeAndNotify(5); });
-    host::Bind(keys_, "volumeDown", kb.volumeDown, [this] { AdjustVolumeAndNotify(-5); });
+    host::Bind(
+        keys_, "volumeUp", kb.volumeUp,
+        [this]
+        {
+            AdjustVolumeAndNotify(5);
+        }
+    );
+    host::Bind(
+        keys_, "volumeDown", kb.volumeDown,
+        [this]
+        {
+            AdjustVolumeAndNotify(-5);
+        }
+    );
     host::Bind(
         keys_, "toggleMute", kb.toggleMute,
         [this]
@@ -87,11 +125,31 @@ void PlaybackControls::Bind()
             ctx_.Publish<NotificationEvent>({player_.IsSubtitlesEnabled() ? "Subtitles: On" : "Subtitles: Off"});
         }
     );
-    host::Bind(keys_, "seekForward", kb.seekForward, [this] { player_.Seek(5); ctx_.Publish<NotificationEvent>({"Seek +Short"}); });
-    host::Bind(keys_, "seekBack", kb.seekBack, [this] { player_.Seek(-5); ctx_.Publish<NotificationEvent>({"Seek -Short"}); });
-    host::Bind(keys_, "seekForwardLong", kb.seekForwardLong, [this] { player_.Seek(60); ctx_.Publish<NotificationEvent>({"Seek +Long"}); });
-    host::Bind(keys_, "seekBackLong", kb.seekBackLong, [this] { player_.Seek(-60); ctx_.Publish<NotificationEvent>({"Seek -Long"}); });
-    host::Bind(keys_, "openFileDialog", kb.openFileDialog, [this] { OpenFileDialog(); });
+    const auto bindSeek = [this](const char* name, const std::string& binding, double delta, const char* notice)
+    {
+        host::BindEvent(
+            keys_, name, binding,
+            [this, delta, notice](const AppEvent& e)
+            {
+                const RelativeSeekResult result = player_.SeekRelativeFromInput(delta, e.AsKey().repeat);
+                if (result == RelativeSeekResult::Applied)
+                {
+                    ctx_.Publish<NotificationEvent>({notice});
+                }
+            }
+        );
+    };
+    bindSeek("seekForward", kb.seekForward, 5.0, "Seek +Short");
+    bindSeek("seekBack", kb.seekBack, -5.0, "Seek -Short");
+    bindSeek("seekForwardLong", kb.seekForwardLong, 60.0, "Seek +Long");
+    bindSeek("seekBackLong", kb.seekBackLong, -60.0, "Seek -Long");
+    host::Bind(
+        keys_, "openFileDialog", kb.openFileDialog,
+        [this]
+        {
+            OpenFileDialog();
+        }
+    );
 }
 
 void PlaybackControls::TogglePause() const

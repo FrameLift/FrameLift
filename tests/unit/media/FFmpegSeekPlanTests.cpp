@@ -62,6 +62,48 @@ private Q_SLOTS:
         QCOMPARE(back.skipPts, kSeekNoSkipPts);
     }
 
+    void RelativeSeekCompletesAtKnownEnd()
+    {
+        const auto crossing = DecideRelativeSeek(118.0, 5.0, 120.0, false, 0.0);
+        QVERIFY(crossing.result == RelativeSeekResult::CompletedAtEnd);
+        QCOMPARE(crossing.target, 120.0);
+
+        const auto exact = DecideRelativeSeek(115.0, 5.0, 120.0, false, 0.0);
+        QVERIFY(exact.result == RelativeSeekResult::CompletedAtEnd);
+    }
+
+    void RelativeSeekReachesStartOnceDuringRepeat()
+    {
+        const auto first = DecideRelativeSeek(3.0, -5.0, 120.0, false, 42.0);
+        QVERIFY(first.result == RelativeSeekResult::Applied);
+        QCOMPARE(first.target, 0.0);
+
+        // The live audio clock may already have crept forward after the first seek;
+        // the remembered zero target still suppresses the OS repeat.
+        const auto repeated = DecideRelativeSeek(0.15, -5.0, 120.0, true, 0.0);
+        QVERIFY(repeated.result == RelativeSeekResult::IgnoredAtStart);
+    }
+
+    void FreshBackwardPressWorksAfterPlaybackAdvances()
+    {
+        const auto fresh = DecideRelativeSeek(3.0, -5.0, 120.0, false, 0.0);
+        QVERIFY(fresh.result == RelativeSeekResult::Applied);
+        QCOMPARE(fresh.target, 0.0);
+    }
+
+    void RelativeSeekAtStartIsIgnored()
+    {
+        const auto decision = DecideRelativeSeek(0.0, -5.0, 120.0, false, 0.0);
+        QVERIFY(decision.result == RelativeSeekResult::IgnoredAtStart);
+    }
+
+    void UnknownDurationNeverCompletesFromRelativeSeek()
+    {
+        const auto decision = DecideRelativeSeek(100.0, 60.0, 0.0, true, 100.0);
+        QVERIFY(decision.result == RelativeSeekResult::Applied);
+        QCOMPARE(decision.target, 160.0);
+    }
+
     void ModeStringsRoundTrip()
     {
         for (SeekPrecisionMode mode : {SeekPrecisionMode::Smart, SeekPrecisionMode::Exact, SeekPrecisionMode::Keyframe})

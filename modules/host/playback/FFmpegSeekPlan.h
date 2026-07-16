@@ -33,6 +33,52 @@ enum class SeekKind : uint8_t
     KeyframeBackward,
 };
 
+// Host-side outcome for one relative seek command. Boundary completion is kept
+// separate from an ordinary seek so the player can emit its normal clean-EOF
+// lifecycle without asking FFmpeg to seek to a timestamp at/past the duration.
+enum class RelativeSeekResult : uint8_t
+{
+    Applied,
+    IgnoredAtStart,
+    CompletedAtEnd,
+};
+
+struct RelativeSeekDecision
+{
+    RelativeSeekResult result = RelativeSeekResult::Applied;
+    double target = 0.0;
+};
+
+// Pure boundary policy for relative commands. `previousTarget` is the most recent
+// requested target, not the live clock: after the first held-key step reaches zero,
+// the audio clock can advance slightly before the next OS repeat arrives. Remembering
+// that zero target prevents those repeats from continually restarting the pipeline.
+constexpr RelativeSeekDecision DecideRelativeSeek(
+    double base, double delta, double duration, bool autoRepeat, double previousTarget
+)
+{
+    const double rawTarget = base + delta;
+    if (delta > 0.0 && duration > 0.0 && rawTarget >= duration)
+    {
+        return {RelativeSeekResult::CompletedAtEnd, duration};
+    }
+    if (delta < 0.0 && rawTarget <= 0.0)
+    {
+        if (base <= 0.0 || (autoRepeat && previousTarget <= 0.0))
+        {
+            return {RelativeSeekResult::IgnoredAtStart, 0.0};
+        }
+        return {RelativeSeekResult::Applied, 0.0};
+    }
+
+    double target = rawTarget < 0.0 ? 0.0 : rawTarget;
+    if (duration > 0.0 && target > duration)
+    {
+        target = duration;
+    }
+    return {RelativeSeekResult::Applied, target};
+}
+
 // skipPts sentinel meaning "present straight from the landed keyframe".
 inline constexpr double kSeekNoSkipPts = -1e18;
 

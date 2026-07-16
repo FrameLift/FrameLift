@@ -286,13 +286,6 @@ void FFmpegPlayer::SetAudioPreferences(const AudioPreferences& prefs) noexcept
     {
         const double target = ClampSeekTarget(GetMasterClock(), duration_.load());
         RequestSeek(target, SeekKind::Exact); // device switch resumes exactly where playback was
-        audioQ_->Abort();
-        videoQ_->Abort();
-        subQ_->Abort();
-        // RequestSeek only wakes cv_ when it kicks (pipeline settled); when a seek is
-        // already in flight the aborts above need their own wake or a worker parked on
-        // cv_ notices them only via its wait timeout (mirrors SelectAudioTrack).
-        Wake();
     }
 }
 
@@ -367,14 +360,8 @@ void FFmpegPlayer::SelectSubtitleTrack(int64_t id) noexcept
         std::lock_guard lock(mutex_);
         pendingSubId_ = id;
         hasPendingSubSwitch_ = true;
-        seekTarget_ = target;
-        seekKind_ = SeekKind::Exact; // resume exactly where playback was
-        hasPendingSeek_ = true;
     }
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
-    Wake();
+    RequestSeek(target, SeekKind::Exact);
 }
 
 void FFmpegPlayer::EnumerateAudioTracks(void (*visit)(const AudioTrack*, void*), void* ud) const noexcept
@@ -409,12 +396,6 @@ void FFmpegPlayer::SelectAudioTrack(int64_t id) noexcept
         std::lock_guard lock(mutex_);
         pendingAudioId_ = id;
         hasPendingAudioSwitch_ = true;
-        seekTarget_ = target;
-        seekKind_ = SeekKind::Exact; // resume exactly where playback was
-        hasPendingSeek_ = true;
     }
-    audioQ_->Abort();
-    videoQ_->Abort();
-    subQ_->Abort();
-    Wake();
+    RequestSeek(target, SeekKind::Exact);
 }

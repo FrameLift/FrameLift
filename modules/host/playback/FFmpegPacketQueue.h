@@ -7,33 +7,40 @@ extern "C"
 
 #include "ReadAheadCache.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <queue>
 
-// Thread-safe, bounded hand-off of demuxed AVPackets from the demux thread to a
-// single decode worker. One instance per stream (audio /
-// video). The per-queue packet-count bound caps memory when one stream is read
-// far ahead of the other: Push() blocks once the queue is full so the demuxer
-// naturally paces itself.
-//
-// When a shared ReadAheadCache budget is attached, Push() reserves byte-space in
-// the common budget, so read-ahead is bounded by a configured memory size across
-// all streams; Pop() records hit/miss metrics and brackets
-// underruns so the player can surface CacheUsed / PausedForCache.
-//
-// Header-only and ffmpeg-side (it touches AVPacket), so it is only ever compiled
-// into the FFmpeg backend translation units, never the tests.
+// Thread-safe, bounded hand-off of demuxed packets to one persistent decode
+// worker. A seek interrupts the current generation without terminating the
+// worker: queued packets are discarded, a later BeginGeneration() delivers one
+// Flush result before any packet from the new position, and the worker flushes
+// its own codec context. Stop() is the only terminal result.
 class FFmpegPacketQueue
 {
 public:
+    enum class PopKind : std::uint8_t
+    {
+        Packet,
+        Flush,
+        Eof,
+        Stop,
+    };
+
+    struct PopResult
+    {
+        PopKind kind = PopKind::Stop;
+        std::uint64_t generation = 0;
+        std::chrono::steady_clock::time_point requestedAt{};
+    };
+
     explicit FFmpegPacketQueue(std::size_t maxPackets = 256) : maxPackets_(maxPackets)
     {
     }
 
-    // Attach the shared read-ahead budget (null ⇒ packet-count bound only). Set
-    // once before the queue is used by the demux/worker threads.
     void SetBudget(ReadAheadCache* budget)
     {
         budget_ = budget;
@@ -41,164 +48,224 @@ public:
 
     ~FFmpegPacketQueue()
     {
-        Flush();
+        ClearPackets();
     }
 
     FFmpegPacketQueue(const FFmpegPacketQueue&) = delete;
     FFmpegPacketQueue& operator=(const FFmpegPacketQueue&) = delete;
 
-    // Move pkt's contents into a queue-owned packet (pkt is left unreferenced and
-    // reusable by the caller). Blocks while the queue is full. Returns false if
-    // the queue was aborted while waiting.
-    bool Push(AVPacket* pkt)
-    {
-        const int64_t sz = pkt->size;
-
-        AVPacket* owned = av_packet_alloc();
-        if (!owned)
-        {
-            return false;
-        }
-
-        // Reserve byte-space before taking ownership, so concurrent demuxers
-        // cannot exceed the shared read-ahead budget between admission and
-        // accounting.
-        if (budget_ && !budget_->Reserve(sz))
-        {
-            av_packet_free(&owned);
-            return false; // aborted while waiting (seek / stop)
-        }
-        av_packet_move_ref(owned, pkt);
-
-        std::unique_lock lock(m_);
-        notFull_.wait(lock, [this] { return abort_ || q_.size() < maxPackets_; });
-        if (abort_)
-        {
-            lock.unlock();
-            av_packet_free(&owned);
-            if (budget_)
-            {
-                budget_->RemoveBytes(sz);
-            }
-            return false;
-        }
-        q_.push(owned);
-        primed_ = true;
-        lock.unlock();
-        notEmpty_.notify_one();
-        return true;
-    }
-
-    // Move the next packet into out (caller owns it and must av_packet_unref it).
-    // Blocks until a packet is available, EOF is signalled, or the queue is
-    // aborted. Returns false when the queue is drained at EOF or aborted — the
-    // caller distinguishes via Aborted().
-    bool Pop(AVPacket* out)
-    {
-        std::unique_lock lock(m_);
-
-        // A non-EOF empty queue means the worker must wait for the demuxer to
-        // catch up — a read-ahead underrun. Count it as a miss and bracket the
-        // wait as a cache stall (drives PausedForCache); otherwise it's a hit.
-        // Before the first Push after a Flush (primed_), an empty queue is the
-        // expected pipeline fill after a seek/open — already inside the "seek"/
-        // "file-open" spans — not an underrun, so it is neither a miss nor a stall.
-        const bool stall = budget_ && q_.empty() && !eof_ && !abort_ && primed_;
-        if (stall)
-        {
-            budget_->RecordMiss();
-            // The cache callback reaches host code, so do not invoke it while
-            // holding the packet-queue mutex.
-            lock.unlock();
-            budget_->BeginStall();
-            lock.lock();
-        }
-
-        notEmpty_.wait(lock, [this] { return abort_ || eof_ || !q_.empty(); });
-
-        if (stall)
-        {
-            lock.unlock();
-            budget_->EndStall();
-            lock.lock();
-        }
-
-        if (!q_.empty())
-        {
-            AVPacket* owned = q_.front();
-            q_.pop();
-            const int64_t sz = owned->size;
-            lock.unlock();
-            notFull_.notify_one();
-            if (budget_)
-            {
-                budget_->RemoveBytes(sz);
-                if (!stall)
-                {
-                    budget_->RecordHit();
-                }
-            }
-            av_packet_move_ref(out, owned);
-            av_packet_free(&owned);
-            return true;
-        }
-        // Empty: either EOF (drained) or aborted.
-        return false;
-    }
-
-    // No more packets will be pushed; Pop() drains the backlog then returns false.
-    void SignalEof()
+    // Start accepting one generation. The worker observes Flush before any
+    // packet with this generation, even when the demuxer wins the scheduling race.
+    void BeginGeneration(std::uint64_t generation, bool flushDecoder)
     {
         {
             std::lock_guard lock(m_);
-            eof_ = true;
-        }
-        notEmpty_.notify_all();
-    }
-
-    // Wake every waiter; subsequent Push()/Pop() return false immediately. Used to
-    // tear down a worker when abandoning the current file.
-    void Abort()
-    {
-        {
-            std::lock_guard lock(m_);
-            abort_ = true;
+            ClearPacketsLocked();
+            generation_ = generation;
+            interrupted_ = false;
+            stopped_ = false;
+            flushPending_ = flushDecoder;
+            flushRequestedAt_ =
+                flushDecoder ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            eof_ = false;
+            eofDelivered_ = false;
+            eofAcknowledged_ = false;
+            primed_ = false;
         }
         notEmpty_.notify_all();
         notFull_.notify_all();
-        // Release a demuxer parked in budget_->Reserve(). Queues are always
-        // aborted as a group (seek / stop), so aborting the shared budget here is
-        // safe; the player Reset()s it before resuming reads.
+    }
+
+    // Immediately invalidate the current generation and wake blocked producers.
+    // Consumers stay parked until BeginGeneration() or Stop() supplies a command.
+    void Interrupt()
+    {
+        {
+            std::lock_guard lock(m_);
+            ClearPacketsLocked();
+            interrupted_ = true;
+            eof_ = false;
+            eofDelivered_ = false;
+            eofAcknowledged_ = false;
+            primed_ = false;
+        }
+        notEmpty_.notify_all();
+        notFull_.notify_all();
         if (budget_)
         {
             budget_->Abort();
         }
     }
 
-    // Drop all queued packets and reset eof/abort so the queue can be reused for
-    // the next file.
-    void Flush()
+    // Terminal worker shutdown (file close, track rebind, application stop).
+    void Stop()
     {
-        std::lock_guard lock(m_);
-        while (!q_.empty())
         {
-            AVPacket* p = q_.front();
-            q_.pop();
-            if (budget_)
-            {
-                budget_->RemoveBytes(p->size);
-            }
-            av_packet_free(&p);
+            std::lock_guard lock(m_);
+            ClearPacketsLocked();
+            interrupted_ = true;
+            stopped_ = true;
+            eof_ = false;
+            eofDelivered_ = false;
+            eofAcknowledged_ = false;
         }
-        eof_ = false;
-        abort_ = false;
-        primed_ = false;
+        notEmpty_.notify_all();
+        notFull_.notify_all();
+        if (budget_)
+        {
+            budget_->Abort();
+        }
     }
 
-    [[nodiscard]] bool Aborted() const
+    // Move pkt into the queue for generation. Returns false if a seek/stop
+    // invalidated that generation while admission was blocked.
+    bool Push(AVPacket* pkt, std::uint64_t generation)
+    {
+        const int64_t sz = pkt->size;
+        AVPacket* owned = av_packet_alloc();
+        if (!owned)
+        {
+            return false;
+        }
+
+        std::uint64_t budgetEpoch = 0;
+        if (budget_ && !budget_->Reserve(sz, &budgetEpoch))
+        {
+            av_packet_free(&owned);
+            return false;
+        }
+        av_packet_move_ref(owned, pkt);
+
+        std::unique_lock lock(m_);
+        notFull_.wait(
+            lock,
+            [this, generation]
+            {
+                return stopped_ || interrupted_ || generation != generation_ || q_.size() < maxPackets_;
+            }
+        );
+        if (stopped_ || interrupted_ || generation != generation_)
+        {
+            lock.unlock();
+            av_packet_free(&owned);
+            if (budget_)
+            {
+                budget_->RemoveBytes(sz, budgetEpoch);
+            }
+            return false;
+        }
+        q_.push({owned, generation, budgetEpoch});
+        primed_ = true;
+        lock.unlock();
+        notEmpty_.notify_one();
+        return true;
+    }
+
+    // Pop one packet or lifecycle command. EOF is delivered once per generation;
+    // after it the worker waits for the next generation instead of exiting.
+    PopResult Pop(AVPacket* out)
+    {
+        std::unique_lock lock(m_);
+        for (;;)
+        {
+            const bool stall =
+                budget_ && q_.empty() && !stopped_ && !interrupted_ && !flushPending_ && !eof_ && primed_;
+            if (stall)
+            {
+                budget_->RecordMiss();
+                lock.unlock();
+                budget_->BeginStall();
+                lock.lock();
+            }
+            notEmpty_.wait(
+                lock,
+                [this]
+                {
+                    return stopped_ || flushPending_ || !q_.empty() || (eof_ && !eofDelivered_);
+                }
+            );
+            if (stall)
+            {
+                lock.unlock();
+                budget_->EndStall();
+                lock.lock();
+            }
+
+            if (stopped_)
+            {
+                return {PopKind::Stop, generation_};
+            }
+            if (flushPending_)
+            {
+                flushPending_ = false;
+                return {PopKind::Flush, generation_, flushRequestedAt_};
+            }
+            if (!q_.empty())
+            {
+                Entry entry = q_.front();
+                q_.pop();
+                const int64_t sz = entry.packet->size;
+                lock.unlock();
+                notFull_.notify_one();
+                if (budget_)
+                {
+                    budget_->RemoveBytes(sz, entry.budgetEpoch);
+                    budget_->RecordHit();
+                }
+                av_packet_move_ref(out, entry.packet);
+                av_packet_free(&entry.packet);
+                return {PopKind::Packet, entry.generation};
+            }
+            if (eof_ && !eofDelivered_)
+            {
+                eofDelivered_ = true;
+                return {PopKind::Eof, generation_};
+            }
+        }
+    }
+
+    void SignalEof()
+    {
+        {
+            std::lock_guard lock(m_);
+            eof_ = true;
+            eofDelivered_ = false;
+            eofAcknowledged_ = false;
+        }
+        notEmpty_.notify_all();
+    }
+
+    void AcknowledgeEof(std::uint64_t generation)
+    {
+        {
+            std::lock_guard lock(m_);
+            if (generation == generation_ && eof_)
+            {
+                eofAcknowledged_ = true;
+            }
+        }
+        notEmpty_.notify_all();
+    }
+
+    // The old per-seek worker join also acted as an EOF drain barrier. Persistent
+    // workers acknowledge after decoder/filter drain; seek/stop cancels the wait.
+    [[nodiscard]] bool WaitForEof(std::uint64_t generation)
+    {
+        std::unique_lock lock(m_);
+        notEmpty_.wait(
+            lock,
+            [this, generation]
+            {
+                return stopped_ || interrupted_ || generation != generation_ || eofAcknowledged_;
+            }
+        );
+        return eofAcknowledged_ && generation == generation_;
+    }
+
+    [[nodiscard]] bool Interrupted() const
     {
         std::lock_guard lock(m_);
-        return abort_;
+        return interrupted_;
     }
 
     [[nodiscard]] bool AtEof() const
@@ -207,14 +274,53 @@ public:
         return eof_;
     }
 
+    [[nodiscard]] bool Stopped() const
+    {
+        std::lock_guard lock(m_);
+        return stopped_;
+    }
+
 private:
+    struct Entry
+    {
+        AVPacket* packet = nullptr;
+        std::uint64_t generation = 0;
+        std::uint64_t budgetEpoch = 0;
+    };
+
+    void ClearPackets()
+    {
+        std::lock_guard lock(m_);
+        ClearPacketsLocked();
+    }
+
+    void ClearPacketsLocked()
+    {
+        while (!q_.empty())
+        {
+            Entry entry = q_.front();
+            q_.pop();
+            if (budget_)
+            {
+                budget_->RemoveBytes(entry.packet->size, entry.budgetEpoch);
+            }
+            av_packet_free(&entry.packet);
+        }
+    }
+
     mutable std::mutex m_;
     std::condition_variable notEmpty_;
     std::condition_variable notFull_;
-    std::queue<AVPacket*> q_;
+    std::queue<Entry> q_;
     std::size_t maxPackets_;
-    ReadAheadCache* budget_ = nullptr; // shared byte budget + metrics; null ⇒ count bound only
+    ReadAheadCache* budget_ = nullptr;
+    std::uint64_t generation_ = 0;
+    bool interrupted_ = true;
+    bool stopped_ = false;
+    bool flushPending_ = false;
+    std::chrono::steady_clock::time_point flushRequestedAt_{};
     bool eof_ = false;
-    bool abort_ = false;
-    bool primed_ = false; // a Push has landed since the last Flush
+    bool eofDelivered_ = false;
+    bool eofAcknowledged_ = false;
+    bool primed_ = false;
 };
