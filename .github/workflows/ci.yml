@@ -42,7 +42,8 @@ jobs:
             cmake \
             ninja-build \
             git \
-            ca-certificates
+            ca-certificates \
+            gcovr
       # Qt Core/Gui/Test come from the pinned prebuilt Qt (base desktop package),
       # not the distro qt6-base-dev, to match the version dev/release build with.
       - name: Install prebuilt Qt
@@ -53,16 +54,32 @@ jobs:
           version: ${{ env.QT_VERSION }}
       - name: Build & run tests
         run: |
-          cmake -S tests -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake -S tests -B build-tests -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DFRAMELIFT_COVERAGE=ON
           cmake --build build-tests
           # --output-junit produces a JUnit report uploaded as an artifact below.
           ctest --test-dir build-tests --output-on-failure --output-junit junit.xml
-      - name: Upload test report
+      - name: Generate coverage reports
+        run: |
+          gcovr --root . --object-directory build-tests \
+            --filter '^(src|modules|plugins|sdk)/' \
+            --exclude 'tests/' \
+            --xml-pretty build-tests/coverage.xml
+          gcovr --root . --object-directory build-tests \
+            --filter '^(src|modules|plugins|sdk)/' \
+            --exclude 'tests/' \
+            --html-details build-tests/coverage.html
+      - name: Upload test and coverage reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: build-tests/junit.xml
+          path: |
+            build-tests/junit.xml
+            build-tests/coverage.xml
+            build-tests/coverage.html
+            build-tests/coverage.*.html
 
   # ── Windows build (native MSVC) ─────────────────────────────────────────────
   # Produces FrameLift-win64.zip on a native Windows runner with MSVC. The
