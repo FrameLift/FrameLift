@@ -112,7 +112,10 @@ PluginLoader::AvailablePlugin MakeAvailablePlugin(const PluginBinary& binary, co
 
 PluginLoader::PluginLoader() = default;
 
-void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_set<std::string>& disabledPlugins)
+void PluginLoader::LoadAll(
+    const std::string& pluginsDir, const std::unordered_set<std::string>& disabledPlugins,
+    std::span<const std::string_view> hostFeatures
+)
 {
     using Clock = std::chrono::steady_clock;
     const auto loadStart = Clock::now();
@@ -160,11 +163,11 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
     resolveCandidates.reserve(candidates.size());
     for (const auto& candidate : candidates)
     {
-        resolveCandidates.push_back({&candidate.meta});
+        resolveCandidates.push_back({&candidate.meta, !disabledPlugins.contains(candidate.meta.pluginId)});
     }
 
     const std::vector<PluginResolveDecision> decisions =
-        ResolvePlugins(resolveCandidates, FrameLiftCurrentPlatformId());
+        ResolvePlugins(resolveCandidates, FrameLiftCurrentPlatformId(), hostFeatures);
 
     std::vector<PluginResolveCandidate> acceptedResolve;
     std::vector<std::size_t> acceptedIndex;
@@ -172,7 +175,7 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
     {
         if (decisions[i].accepted)
         {
-            acceptedResolve.push_back({&candidates[i].meta});
+            acceptedResolve.push_back({&candidates[i].meta, true});
             acceptedIndex.push_back(i);
         }
         else
@@ -181,42 +184,10 @@ void PluginLoader::LoadAll(const std::string& pluginsDir, const std::unordered_s
         }
     }
 
-    // Diagnose colliding providers: two accepted plugins declaring the same feature.
-    // Plugin ids are already deduped above. We keep first-wins but warn so a
-    // collision is visible rather than silent.
-    {
-        std::unordered_map<std::string, std::string> firstProvider; // feature -> plugin id
-        for (const auto& accepted : acceptedResolve)
-        {
-            const PluginMetadata& meta = *accepted.meta;
-            for (const std::string& feature : meta.providesFeatures)
-            {
-                if (feature.empty())
-                {
-                    continue;
-                }
-                const auto [it, inserted] = firstProvider.emplace(feature, meta.pluginId);
-                if (!inserted)
-                {
-                    Log::Warn(
-                        "Plugin '{}': feature '{}' already provided by '{}' - keeping the first provider",
-                        meta.pluginId, feature, it->second
-                    );
-                }
-            }
-        }
-    }
-
     for (const std::size_t orderIdx : OrderPlugins(acceptedResolve))
     {
         PluginCandidate& candidate = candidates[acceptedIndex[orderIdx]];
         const PluginMetadata& meta = candidate.meta;
-
-        if (disabledPlugins.contains(meta.pluginId))
-        {
-            Log::Info("Plugin '{}': disabled by user - skipped", meta.pluginId);
-            continue;
-        }
 
         PerfScope pluginPerf("plugin-load:" + meta.pluginId);
 

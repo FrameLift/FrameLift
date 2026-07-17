@@ -2,7 +2,9 @@
 #include "PluginMetadata.h"
 #include <framelift/IModule.h>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -49,7 +51,10 @@ public:
     // whose id is NOT in `disabledPlugins`. Dependencies and load order are resolved
     // from embedded plugin metadata before any module object is created. Does NOT
     // call Install(); the caller does that via Registry().Add(module, ctx).
-    void LoadAll(const std::string& pluginsDir, const std::unordered_set<std::string>& disabledPlugins = {});
+    void LoadAll(
+        const std::string& pluginsDir, const std::unordered_set<std::string>& disabledPlugins = {},
+        std::span<const std::string_view> hostFeatures = {}
+    );
 
     const std::vector<LoadedPlugin>& Plugins() const
     {

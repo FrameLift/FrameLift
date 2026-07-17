@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginMetadata.h"
 #include <cstddef>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -8,6 +9,7 @@
 struct PluginResolveCandidate
 {
     const PluginMetadata* meta = nullptr;
+    bool enabledByUser = true;
 };
 
 struct PluginResolveDecision
@@ -19,7 +21,8 @@ struct PluginResolveDecision
 [[nodiscard]] const char* FrameLiftCurrentPlatformId() noexcept;
 
 [[nodiscard]] std::vector<PluginResolveDecision> ResolvePlugins(
-    const std::vector<PluginResolveCandidate>& candidates, std::string_view platformId
+    const std::vector<PluginResolveCandidate>& candidates, std::string_view platformId,
+    std::span<const std::string_view> hostFeatures = {}
 );
 
 // Return indices into `candidates` in a deterministic load order: any plugin that

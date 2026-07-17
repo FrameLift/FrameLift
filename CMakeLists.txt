@@ -38,6 +38,7 @@ include(FetchContent)
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftBuiltinModules.cmake")
 framelift_load_builtin_modules("${CMAKE_SOURCE_DIR}/modules")
 framelift_report_builtin_modules()
+framelift_generate_builtin_features_header("${CMAKE_CURRENT_BINARY_DIR}/FrameLiftBuiltinFeatures.h")
 
 # The shared AI runtime deliberately consumes a packaged llama.cpp installation
 # (vcpkg `llama-cpp[tools]` on Windows, distro packages on Linux). Lean builds

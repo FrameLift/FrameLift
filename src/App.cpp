@@ -3,6 +3,7 @@
 #include "CoreCommands.h"
 #include "CoreSettings.h"
 #include "FFmpegPlayer.h"
+#include "FrameLiftBuiltinFeatures.h"
 #include "GraphicsApi.h"
 #include "IGraphicsBackend.h"
 #include "LogBuffer.h"
@@ -320,7 +321,7 @@ void App::LoadPlugins()
     char baseBuf[512] = {};
     (void)appWindow_->GetBasePath(baseBuf, sizeof(baseBuf));
     const std::string pluginsDir = std::string(baseBuf) + "plugins/";
-    pluginLoader_.LoadAll(pluginsDir, pluginConfig_.DisabledIds());
+    pluginLoader_.LoadAll(pluginsDir, pluginConfig_.DisabledIds(), kFrameLiftBuiltinFeatures);
 
     // What actually got instantiated this session, by plugin id.
     std::unordered_set<std::string> loadedPluginIds;
