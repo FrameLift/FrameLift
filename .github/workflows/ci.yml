@@ -65,7 +65,7 @@ jobs:
           gcovr --root . --object-directory build-tests \
             --filter '^(src|modules|plugins|sdk)/' \
             --exclude 'tests/' \
-            --xml-pretty build-tests/coverage.xml
+            --xml build-tests/coverage.xml --xml-pretty
           gcovr --root . --object-directory build-tests \
             --filter '^(src|modules|plugins|sdk)/' \
             --exclude 'tests/' \
