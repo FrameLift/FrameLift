@@ -259,6 +259,7 @@ add_custom_command(TARGET FrameLift PRE_BUILD
 # registers its target through add_framelift_plugin().
 if (FRAMELIFT_BUILD_PLUGINS)
     set_property(GLOBAL PROPERTY FRAMELIFT_PLUGIN_TARGETS)
+    set_property(GLOBAL PROPERTY FRAMELIFT_PLUGIN_BINARY_NAMES)
     file(GLOB FRAMELIFT_PLUGIN_DIRS CONFIGURE_DEPENDS LIST_DIRECTORIES TRUE
             RELATIVE "${CMAKE_SOURCE_DIR}/plugins"
             "${CMAKE_SOURCE_DIR}/plugins/*")
@@ -271,7 +272,23 @@ if (FRAMELIFT_BUILD_PLUGINS)
     endforeach ()
 
     get_property(FRAMELIFT_PLUGIN_TARGETS GLOBAL PROPERTY FRAMELIFT_PLUGIN_TARGETS)
+    get_property(_framelift_plugin_binary_names GLOBAL PROPERTY FRAMELIFT_PLUGIN_BINARY_NAMES)
+    set(_framelift_expected_plugin_files)
+    foreach (_plugin_binary_name IN LISTS _framelift_plugin_binary_names)
+        list(APPEND _framelift_expected_plugin_files "${_plugin_binary_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endforeach ()
+    add_custom_target(framelift_prune_plugin_output
+            COMMAND ${CMAKE_COMMAND}
+                    "-DPLUGIN_DIR=$<TARGET_FILE_DIR:FrameLift>/plugins"
+                    "-DPLUGIN_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                    "-DEXPECTED_PLUGIN_FILES=${_framelift_expected_plugin_files}"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/PrunePluginOutput.cmake"
+            VERBATIM)
+    add_dependencies(FrameLift framelift_prune_plugin_output)
     if (FRAMELIFT_PLUGIN_TARGETS)
+        foreach (_plugin IN LISTS FRAMELIFT_PLUGIN_TARGETS)
+            add_dependencies(${_plugin} framelift_prune_plugin_output)
+        endforeach ()
         add_dependencies(FrameLift ${FRAMELIFT_PLUGIN_TARGETS})
     endif ()
 

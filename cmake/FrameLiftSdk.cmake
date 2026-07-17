@@ -104,6 +104,8 @@ function(add_framelift_plugin NAME)
         return()
     endif ()
 
+    set_property(GLOBAL APPEND PROPERTY FRAMELIFT_PLUGIN_BINARY_NAMES "${_framelift_plugin_binary_name}")
+
     get_filename_component(_framelift_metadata_json_name "${_framelift_metadata_json}" NAME)
 
     add_library(${NAME} SHARED ${_FL_PLUGIN_UNPARSED_ARGUMENTS})
