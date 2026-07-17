@@ -1,6 +1,6 @@
+#include "HostSettings.h"
 #include "ModuleContext.h"
 #include "PluginConfig.h"
-#include "Settings.h"
 #include "UISettings.h"
 
 #include "QtTestRunner.h"
@@ -20,7 +20,7 @@ namespace
 // (no Save), so a dummy is fine.
 struct Ctx
 {
-    Settings settings;
+    HostSettings settings;
     ModuleContext ctx{"pref/", &settings, "unused.ini"};
 };
 
@@ -220,7 +220,7 @@ private Q_SLOTS:
 
     void GetSettingsFilePathReportsPathWithBufferContract()
     {
-        Settings settings;
+        HostSettings settings;
         ModuleContext ctx{"pref/", &settings, "some/dir/settings.ini"};
 
         // Full length reported regardless of buffer.
@@ -238,7 +238,7 @@ private Q_SLOTS:
 
     void ReloadSettingsRereadsFileAndFiresCallbacks()
     {
-        Settings settings;
+        HostSettings settings;
         const std::string ini = (std::filesystem::temp_directory_path() / "framelift_test_reload.ini").string();
 
         // Write a config that overrides one core key; everything else stays default.
@@ -426,7 +426,7 @@ private Q_SLOTS:
 
     void SetPluginEnabledUpdatesCatalogueAndPersists()
     {
-        Settings settings;
+        HostSettings settings;
         PluginConfig pluginConfig;
         const std::string pluginsIni =
             (std::filesystem::temp_directory_path() / "framelift_test_pluginsini.ini").string();

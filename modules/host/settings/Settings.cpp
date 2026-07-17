@@ -1,21 +1,9 @@
 #include "Settings.h"
 
-#include "SettingsRegistry.h"
-
-// Settings.cpp is the single place that knows the full set of settings sections.
-#include "CoreSettings.h"     // host-core: General/Files/Keybinds
-#include "AudioSettings.h"    // host/audio
-#include "PlaybackSettings.h" // media/ffmpeg
-#include "SubtitleSettings.h" // media/ffmpeg
-#include "CacheSettings.h"    // host/read-ahead
-#include "ThemeSettings.h"    // host/ui
-#include "UISettings.h"       // host/ui
-
 #include <QSettings>
 #include <QString>
 #include <QStringList>
 
-#include <cstdlib>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -49,54 +37,28 @@ std::string ToSettingString(const QVariant& value, SettingType type)
 }
 } // namespace
 
-// ── Section registration ──────────────────────────────────────────────────────
-Settings::Settings()
-{
-    Add<PlaybackSettings>();
-    Add<SubtitleSettings>();
-    Add<CacheSettings>();
-    Add<UISettings>();
-    Add<FilesSettings>();
-    Add<AudioSettings>();
-    Add<ThemeSettings>();
-    Add<KeybindSettings>();
-}
-
 void Settings::ResetToDefaults()
 {
-    // Assign through the section references so the stored objects keep their
-    // addresses (a SettingsRegistry bound to this instance stays valid).
-    Get<PlaybackSettings>() = {};
-    Get<SubtitleSettings>() = {};
-    Get<CacheSettings>() = {};
-    Get<UISettings>() = {};
-    Get<FilesSettings>() = {};
-    Get<AudioSettings>() = {};
-    Get<ThemeSettings>() = {};
-    Get<KeybindSettings>() = {};
+    for (const SectionBinding& binding : sectionBindings_)
+    {
+        binding.reset(sections_.at(binding.type));
+    }
 }
 
-// ── Registry assembly ─────────────────────────────────────────────────────────
-// Each module registers the fields it owns. Section order here fixes the order of
-// sections written to settings.ini.
-SettingsRegistry BuildSettingsRegistry(Settings& s)
+SettingsRegistry Settings::BuildRegistry()
 {
     SettingsRegistry reg;
-    RegisterPlaybackSettings(reg, s.Get<PlaybackSettings>());
-    RegisterSubtitleSettings(reg, s.Get<SubtitleSettings>());
-    RegisterCacheSettings(reg, s.Get<CacheSettings>());
-    RegisterUISettings(reg, s.Get<UISettings>());
-    RegisterFilesSettings(reg, s.Get<FilesSettings>());
-    RegisterAudioSettings(reg, s.Get<AudioSettings>());
-    RegisterThemeSettings(reg, s.Get<ThemeSettings>());
-    RegisterKeybindSettings(reg, s.Get<KeybindSettings>());
+    for (const SectionBinding& binding : sectionBindings_)
+    {
+        binding.bind(reg, sections_.at(binding.type));
+    }
     return reg;
 }
 
 // ── Settings::Load ────────────────────────────────────────────────────────────
 void Settings::Load(const std::string& path)
 {
-    const SettingsRegistry reg = BuildSettingsRegistry(*this);
+    const SettingsRegistry reg = BuildRegistry();
 
     // A missing or empty file (e.g. a truncated/blank settings.ini) is seeded with
     // the current defaults so it is never left blank — otherwise defaults would stay
@@ -139,7 +101,7 @@ void Settings::Load(const std::string& path)
 // QStrings, so commas/spaces round-trip as a single string (no INI list-splitting).
 void Settings::Save(const std::string& path)
 {
-    const SettingsRegistry reg = BuildSettingsRegistry(*this);
+    const SettingsRegistry reg = BuildRegistry();
 
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
@@ -150,14 +112,4 @@ void Settings::Save(const std::string& path)
         qs.setValue(ToQtKey(field.key), QString::fromStdString(field.save()));
     }
     qs.sync();
-}
-
-void Settings::ApplyLaunchEnvironmentOverrides()
-{
-    if (const char* modeEnv = std::getenv("FL_ACCEL_MODE"); modeEnv && modeEnv[0])
-    {
-        PlaybackSettings& playback = Get<PlaybackSettings>();
-        const VideoDecodeMode mode = VideoDecodeModeFromString(modeEnv);
-        playback.hwdecMode = VideoDecodeModeName(mode);
-    }
 }

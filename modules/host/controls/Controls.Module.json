@@ -13,7 +13,9 @@
   "requires": {
     "modules": [
       "framelift.services",
-      "framelift.settings"
+      "framelift.settings",
+      "framelift.playback",
+      "framelift.window_qt"
     ],
     "features": []
   },

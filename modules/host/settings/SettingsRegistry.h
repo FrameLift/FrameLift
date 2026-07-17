@@ -49,6 +49,7 @@ class SettingsRegistry
 {
 public:
     using SaveFn = std::function<std::string()>;
+    using SetStringFn = std::function<void(const std::string&)>;
 
     // Bind `member` to `key`. `save` overrides serialization for the few fields that
     // need a transform (e.g. playback.hwdecMode normalization); empty = plain to-string.
@@ -58,10 +59,25 @@ public:
         f.key = std::move(key);
         f.type = SettingType::Bool;
         f.desc = std::move(desc);
-        f.save = save ? std::move(save) : SaveFn([&member] { return std::string(member ? "1" : "0"); });
-        f.load = [&member](const std::string& v) { member = (v == "1"); };
-        f.getBool = [&member] { return member; };
-        f.setBool = [&member](bool v) { member = v; };
+        f.save = save ? std::move(save)
+                      : SaveFn(
+                            [&member]
+                            {
+                                return std::string(member ? "1" : "0");
+                            }
+                        );
+        f.load = [&member](const std::string& v)
+        {
+            member = (v == "1");
+        };
+        f.getBool = [&member]
+        {
+            return member;
+        };
+        f.setBool = [&member](bool v)
+        {
+            member = v;
+        };
         Append(std::move(f));
     }
 
@@ -71,10 +87,25 @@ public:
         f.key = std::move(key);
         f.type = SettingType::Int;
         f.desc = std::move(desc);
-        f.save = save ? std::move(save) : SaveFn([&member] { return std::to_string(member); });
-        f.load = [&member](const std::string& v) { member = std::stoi(v); };
-        f.getInt = [&member] { return member; };
-        f.setInt = [&member](int v) { member = v; };
+        f.save = save ? std::move(save)
+                      : SaveFn(
+                            [&member]
+                            {
+                                return std::to_string(member);
+                            }
+                        );
+        f.load = [&member](const std::string& v)
+        {
+            member = std::stoi(v);
+        };
+        f.getInt = [&member]
+        {
+            return member;
+        };
+        f.setInt = [&member](int v)
+        {
+            member = v;
+        };
         Append(std::move(f));
     }
 
@@ -84,23 +115,56 @@ public:
         f.key = std::move(key);
         f.type = SettingType::Float;
         f.desc = std::move(desc);
-        f.save = save ? std::move(save) : SaveFn([&member] { return std::to_string(member); });
-        f.load = [&member](const std::string& v) { member = std::stof(v); };
-        f.getFloat = [&member] { return member; };
-        f.setFloat = [&member](float v) { member = v; };
+        f.save = save ? std::move(save)
+                      : SaveFn(
+                            [&member]
+                            {
+                                return std::to_string(member);
+                            }
+                        );
+        f.load = [&member](const std::string& v)
+        {
+            member = std::stof(v);
+        };
+        f.getFloat = [&member]
+        {
+            return member;
+        };
+        f.setFloat = [&member](float v)
+        {
+            member = v;
+        };
         Append(std::move(f));
     }
 
-    void AddString(std::string key, std::string& member, std::string desc, SaveFn save = {})
+    void AddString(std::string key, std::string& member, std::string desc, SaveFn save = {}, SetStringFn set = {})
     {
         SettingField f;
         f.key = std::move(key);
         f.type = SettingType::String;
         f.desc = std::move(desc);
-        f.save = save ? std::move(save) : SaveFn([&member] { return member; });
-        f.load = [&member](const std::string& v) { member = v; };
-        f.getString = [&member] { return member; };
-        f.setString = [&member](const std::string& v) { member = v; };
+        f.save = save ? std::move(save)
+                      : SaveFn(
+                            [&member]
+                            {
+                                return member;
+                            }
+                        );
+        f.load = [&member](const std::string& v)
+        {
+            member = v;
+        };
+        f.getString = [&member]
+        {
+            return member;
+        };
+        f.setString = set ? std::move(set)
+                          : SetStringFn(
+                                [&member](const std::string& v)
+                                {
+                                    member = v;
+                                }
+                            );
         Append(std::move(f));
     }
 

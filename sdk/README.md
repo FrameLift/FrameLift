@@ -51,6 +51,10 @@ Drop the resulting plugin DLL/SO into the `plugins/` directory next to `framelif
 next launch. Plugins default to enabled; to stop one loading, set `<plugin-id>=disabled` in
 `plugins.ini` in the FrameLift config directory.
 
+Use a publisher-owned plugin id such as `example.my_plugin`. The `framelift.*` id and binary namespace
+is reserved for first-party plugins; FrameLift's in-tree build removes obsolete artifacts in that
+namespace from its build output and deliberately leaves all other namespaces untouched.
+
 ## Writing a plugin
 
 `MyPlugin.h`:

@@ -2,8 +2,8 @@
 
 #include "KeybindList.h"
 
+#include "HostSettings.h"
 #include "ModuleContext.h"
-#include "Settings.h"
 #include "TempIni.h"
 
 #include "AudioSettings.h"
@@ -58,7 +58,7 @@ private Q_SLOTS:
 
     void SeedsEditingModelFromContextOnInstall()
     {
-        Settings settings;
+        HostSettings settings;
         settings.Get<UISettings>().panelWidth = 500.f; // non-default host values
         settings.Get<AudioSettings>().normalizeMode = "dynaudnorm";
         settings.Get<AudioSettings>().limiterLevelIn = 2.5f;
@@ -80,7 +80,7 @@ private Q_SLOTS:
 
     void SeedsThemeFieldsFromContextOnInstall()
     {
-        Settings settings;
+        HostSettings settings;
         settings.Get<ThemeSettings>().preset = "light";
         settings.Get<ThemeSettings>().accentColor = "#112233";
 
@@ -96,7 +96,7 @@ private Q_SLOTS:
 
     void ExposesThemePageToQml()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
 
@@ -108,7 +108,7 @@ private Q_SLOTS:
 
     void DoesNotInventModulePagesFromRawFields()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
 
@@ -146,7 +146,7 @@ private Q_SLOTS:
     // hotkeys don't fire underneath it.
     void SwallowsKeybindsWhileOpen()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
 
@@ -237,7 +237,7 @@ private Q_SLOTS:
 
     void CapturesCoreKeyIntoDraftSlots()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         SettingsMenu sm;
@@ -262,7 +262,7 @@ private Q_SLOTS:
 
     void ReseedDuringCaptureResolvesFreshSlot()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         SettingsMenu sm;
@@ -284,7 +284,7 @@ private Q_SLOTS:
 
     void RejectsKeyAlreadyBoundElsewhere()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         SettingsMenu sm;
@@ -301,7 +301,7 @@ private Q_SLOTS:
 
     void ExposesCoreAndPluginGroups()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         SettingsMenu sm;
@@ -329,7 +329,7 @@ private Q_SLOTS:
 
     void ResetRestoresPluginDefault()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         SettingsMenu sm;

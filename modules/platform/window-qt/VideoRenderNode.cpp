@@ -38,8 +38,16 @@ void VideoRenderNode::prepare()
 
 void VideoRenderNode::render(const RenderState* /*state*/)
 {
-    if (!callbacks_ || !callbacks_->HasRender() || !window_)
+    if (!callbacks_ || !callbacks_->HasRender() || !window_ || !window_->rendererInterface())
     {
+        return;
+    }
+
+    const QSGRendererInterface::GraphicsApi api = window_->rendererInterface()->graphicsApi();
+    if (api != QSGRendererInterface::OpenGL && api != QSGRendererInterface::Vulkan)
+    {
+        // The software scene graph has no native GPU command stream. It remains
+        // useful for QML startup tests, but must not masquerade as OpenGL.
         return;
     }
 
@@ -55,8 +63,7 @@ void VideoRenderNode::render(const RenderState* /*state*/)
     // Tell Qt's RHI we are issuing native API commands outside its tracking, so it can
     // flush pending state and restore afterwards.
     window_->beginExternalCommands();
-    if (window_->rendererInterface() && window_->rendererInterface()->graphicsApi() != QSGRendererInterface::Vulkan &&
-        callbacks_->HasPrepare())
+    if (api == QSGRendererInterface::OpenGL && callbacks_->HasPrepare())
     {
         callbacks_->Prepare(fb.x, fb.y, fb.w, fb.h);
     }

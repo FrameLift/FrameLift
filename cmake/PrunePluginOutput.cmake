@@ -1,0 +1,13 @@
+if (NOT DEFINED PLUGIN_DIR OR NOT DEFINED PLUGIN_SUFFIX)
+    message(FATAL_ERROR "PLUGIN_DIR and PLUGIN_SUFFIX are required")
+endif ()
+
+file(MAKE_DIRECTORY "${PLUGIN_DIR}")
+file(GLOB _reserved_artifacts LIST_DIRECTORIES FALSE "${PLUGIN_DIR}/framelift.*${PLUGIN_SUFFIX}")
+foreach (_artifact IN LISTS _reserved_artifacts)
+    get_filename_component(_artifact_name "${_artifact}" NAME)
+    if (NOT _artifact_name IN_LIST EXPECTED_PLUGIN_FILES)
+        message(STATUS "Removing obsolete first-party plugin artifact: ${_artifact_name}")
+        file(REMOVE "${_artifact}")
+    endif ()
+endforeach ()

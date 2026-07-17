@@ -12,18 +12,11 @@
     ]
   },
   "requires": {
-    "modules": [
-      "framelift.graphics_core",
-      "framelift.playback",
-      "framelift.read_ahead",
-      "framelift.ui"
-    ],
+    "modules": [],
     "features": []
   },
   "optional": {
-    "modules": [
-      "framelift.graphics_vulkan"
-    ],
+    "modules": [],
     "features": []
   },
   "platforms": []

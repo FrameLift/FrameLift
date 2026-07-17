@@ -2,7 +2,7 @@
 
 An **extensible** Qt/QML video player built on Qt 6, FFmpeg, and libass — where user-facing
 features are runtime-loaded plugins. The host application has no compile-time knowledge of any of
-them: playback controls, playlists, history, settings, network streaming, and updates are all plugin
+them: playback controls, playlists, history, settings, and network streaming are all plugin
 DLLs loaded at startup over a stable, versioned binary ABI; the window, decode/playback engine, and
 platform integration are built-in modules compiled into the host. Add or remove plugin features by
 dropping a DLL/SO in or out of the `plugins/` folder.
@@ -27,7 +27,6 @@ dropping a DLL/SO in or out of the `plugins/` folder.
 - **Image slideshow** — configurable auto-advance interval for image-only or mixed playlists
 - **Fully rebindable hotkeys** — every action has a default keybind, all overridable in settings
 - **Theming** — dark/light/classic presets, custom accent color, and font
-- **Auto-update** — background update check against GitHub Releases, applied on next launch (Windows)
 - **Debug & benchmark overlays** — live playback stats and performance benchmarking
 
 ## Installation
@@ -74,6 +73,10 @@ name is the lowercase plugin id (e.g. `framelift.playlist.so`), and it is enable
 Settings → Plugins page (persisted by plugin id in `plugins.ini`). You can build your own against the
 **dependency-free plugin SDK** (`framelift-sdk-<ver>.zip`, published as a Release asset on every
 version tag).
+
+The `framelift.*` plugin id and binary namespace is reserved for plugins shipped by FrameLift. External
+plugins should use a publisher-owned prefix such as `example.my_plugin`; FrameLift builds prune obsolete
+`framelift.*` artifacts from their own build output while preserving every other namespace.
 
 - **Stable binary boundary.** The host↔plugin boundary is a COM-like binary ABI: pure abstract
   interfaces and POD-only method signatures, fronted by a Qt plugin factory (`IPlugin` +

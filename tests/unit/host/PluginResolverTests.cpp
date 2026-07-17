@@ -113,6 +113,58 @@ private Q_SLOTS:
         QVERIFY(decisions[0].accepted);
     }
 
+    void DisabledProviderRejectsRequiredConsumer()
+    {
+        PluginFixture provider{"framelift.provider", List({"shared.feature"}), EmptyList(), EmptyList(), EmptyList(),
+                               EmptyList()};
+        PluginFixture consumer{"framelift.consumer",     EmptyList(), EmptyList(),
+                               List({"shared.feature"}), EmptyList(), EmptyList()};
+
+        const auto decisions = ResolvePlugins({{&provider.info, false}, {&consumer.info, true}}, "linux");
+
+        QVERIFY(!decisions[0].accepted);
+        QVERIFY(decisions[0].reason.find("disabled by user") != std::string::npos);
+        QVERIFY(!decisions[1].accepted);
+        QVERIFY(decisions[1].reason.find("shared.feature") != std::string::npos);
+    }
+
+    void HostFeatureSatisfiesRequiredDependency()
+    {
+        PluginFixture consumer{"framelift.consumer",   EmptyList(), EmptyList(),
+                               List({"host.feature"}), EmptyList(), EmptyList()};
+        constexpr std::string_view hostFeatures[] = {"host.feature"};
+
+        const auto decisions = ResolvePlugins({{&consumer.info}}, "linux", hostFeatures);
+
+        QVERIFY(decisions[0].accepted);
+    }
+
+    void HostFeatureRejectsPluginProvider()
+    {
+        PluginFixture provider{"framelift.provider", List({"host.feature"}), EmptyList(), EmptyList(), EmptyList(),
+                               EmptyList()};
+        constexpr std::string_view hostFeatures[] = {"host.feature"};
+
+        const auto decisions = ResolvePlugins({{&provider.info}}, "linux", hostFeatures);
+
+        QVERIFY(!decisions[0].accepted);
+        QVERIFY(decisions[0].reason.find("host-provided") != std::string::npos);
+    }
+
+    void LowestPluginIdWinsFeatureCollision()
+    {
+        PluginFixture high{"framelift.zzz", List({"shared.feature"}), EmptyList(), EmptyList(), EmptyList(),
+                           EmptyList()};
+        PluginFixture low{"framelift.aaa", List({"shared.feature"}), EmptyList(), EmptyList(), EmptyList(),
+                          EmptyList()};
+
+        const auto decisions = ResolvePlugins({{&high.info}, {&low.info}}, "linux");
+
+        QVERIFY(!decisions[0].accepted);
+        QVERIFY(decisions[0].reason.find("framelift.aaa") != std::string::npos);
+        QVERIFY(decisions[1].accepted);
+    }
+
     void OrdersProviderBeforeOptionalConsumer()
     {
         PluginFixture provider{

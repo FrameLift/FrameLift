@@ -38,6 +38,7 @@ include(FetchContent)
 include("${CMAKE_SOURCE_DIR}/cmake/FrameLiftBuiltinModules.cmake")
 framelift_load_builtin_modules("${CMAKE_SOURCE_DIR}/modules")
 framelift_report_builtin_modules()
+framelift_generate_builtin_features_header("${CMAKE_CURRENT_BINARY_DIR}/FrameLiftBuiltinFeatures.h")
 
 # The shared AI runtime deliberately consumes a packaged llama.cpp installation
 # (vcpkg `llama-cpp[tools]` on Windows, distro packages on Linux). Lean builds
@@ -258,6 +259,7 @@ add_custom_command(TARGET FrameLift PRE_BUILD
 # registers its target through add_framelift_plugin().
 if (FRAMELIFT_BUILD_PLUGINS)
     set_property(GLOBAL PROPERTY FRAMELIFT_PLUGIN_TARGETS)
+    set_property(GLOBAL PROPERTY FRAMELIFT_PLUGIN_BINARY_NAMES)
     file(GLOB FRAMELIFT_PLUGIN_DIRS CONFIGURE_DEPENDS LIST_DIRECTORIES TRUE
             RELATIVE "${CMAKE_SOURCE_DIR}/plugins"
             "${CMAKE_SOURCE_DIR}/plugins/*")
@@ -270,7 +272,23 @@ if (FRAMELIFT_BUILD_PLUGINS)
     endforeach ()
 
     get_property(FRAMELIFT_PLUGIN_TARGETS GLOBAL PROPERTY FRAMELIFT_PLUGIN_TARGETS)
+    get_property(_framelift_plugin_binary_names GLOBAL PROPERTY FRAMELIFT_PLUGIN_BINARY_NAMES)
+    set(_framelift_expected_plugin_files)
+    foreach (_plugin_binary_name IN LISTS _framelift_plugin_binary_names)
+        list(APPEND _framelift_expected_plugin_files "${_plugin_binary_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endforeach ()
+    add_custom_target(framelift_prune_plugin_output
+            COMMAND ${CMAKE_COMMAND}
+                    "-DPLUGIN_DIR=$<TARGET_FILE_DIR:FrameLift>/plugins"
+                    "-DPLUGIN_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                    "-DEXPECTED_PLUGIN_FILES=${_framelift_expected_plugin_files}"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/PrunePluginOutput.cmake"
+            VERBATIM)
+    add_dependencies(FrameLift framelift_prune_plugin_output)
     if (FRAMELIFT_PLUGIN_TARGETS)
+        foreach (_plugin IN LISTS FRAMELIFT_PLUGIN_TARGETS)
+            add_dependencies(${_plugin} framelift_prune_plugin_output)
+        endforeach ()
         add_dependencies(FrameLift ${FRAMELIFT_PLUGIN_TARGETS})
     endif ()
 
@@ -321,6 +339,7 @@ endif ()
 # Qt's offscreen platform and software scene-graph backend.
 if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TESTS)
     find_package(Threads REQUIRED)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
     add_executable(framelift_test_packet_queue tests/unit/media/FFmpegPacketQueueTests.cpp)
     set_target_properties(framelift_test_packet_queue PROPERTIES
             CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -328,6 +347,28 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
     target_link_libraries(framelift_test_packet_queue PRIVATE Threads::Threads ffmpeg)
     add_test(NAME framelift_packet_queue_generation COMMAND framelift_test_packet_queue)
     set_tests_properties(framelift_packet_queue_generation PROPERTIES LABELS "launch;unit" TIMEOUT 10)
+
+    if (FRAMELIFT_MODULE_FRAME_SAMPLER)
+        add_executable(framelift_test_frame_sampler
+                tests/integration/FrameSamplerIntegrationTests.cpp
+                modules/host/frame-sampler/FrameSamplerService.cpp
+                src/TestMediaGenerator.cpp
+                sdk/src/Log.cpp)
+        set_target_properties(framelift_test_frame_sampler PROPERTIES
+                CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF AUTOMOC ON)
+        target_include_directories(framelift_test_frame_sampler PRIVATE
+                "${CMAKE_SOURCE_DIR}/sdk/include"
+                "${CMAKE_SOURCE_DIR}/src"
+                ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
+        target_link_libraries(framelift_test_frame_sampler PRIVATE
+                FrameLiftSdk Threads::Threads Qt6::Core Qt6::Test ffmpeg)
+        add_test(NAME framelift_frame_sampler_integration COMMAND framelift_test_frame_sampler)
+        set_tests_properties(framelift_frame_sampler_integration PROPERTIES
+                LABELS "launch;integration"
+                TIMEOUT 35
+                ENVIRONMENT
+                "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_frame_sampler")
+    endif ()
 
     set(_framelift_launch_env
             "QT_QPA_PLATFORM=offscreen"
@@ -337,7 +378,7 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             "FL_LOG_LEVEL=debug"
             "FL_LOG_PERF=1"
             "FL_TEST_EXIT_AFTER_MS=1500"
-            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl_offscreen")
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_qml_software")
     set(_framelift_launch_fail_regex
             "TypeError"
             "ReferenceError"
@@ -350,15 +391,37 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             "Assertion"
             "AddressSanitizer"
             "UndefinedBehaviorSanitizer")
-    add_test(NAME framelift_launch_opengl_offscreen
+    add_test(NAME framelift_launch_qml_software
             COMMAND $<TARGET_FILE:FrameLift>)
-    set_tests_properties(framelift_launch_opengl_offscreen PROPERTIES
+    set_tests_properties(framelift_launch_qml_software PROPERTIES
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
             LABELS launch
             TIMEOUT 20
             ENVIRONMENT "${_framelift_launch_env}"
             PASS_REGULAR_EXPRESSION "startup-first-frame [0-9]+\\.[0-9]+ ms"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
+    set(_framelift_opengl_launch_env
+            "QT_QPA_PLATFORM=xcb"
+            "QSG_RHI_BACKEND=opengl"
+            "LIBGL_ALWAYS_SOFTWARE=1"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=2s-360p-mpeg4-noaudio"
+            "FL_TEST_EXIT_AFTER_MS=3000"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_opengl")
+    add_test(NAME framelift_launch_opengl
+            COMMAND ${CMAKE_COMMAND}
+                    "-DTEST_EXECUTABLE=$<TARGET_FILE:FrameLift>"
+                    "-DTEST_WORKING_DIRECTORY=$<TARGET_FILE_DIR:FrameLift>"
+                    "-DTEST_ENVIRONMENT=${_framelift_opengl_launch_env}"
+                    "-DREQUIRED_REGEXES=video renderer initialized: OpenGL;file-open [0-9]+\\.[0-9]+ ms"
+                    "-DFORBIDDEN_REGEXES=${_framelift_launch_fail_regex};GlVideoRenderer:;video renderer init failed"
+                    -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
+    set_tests_properties(framelift_launch_opengl PROPERTIES LABELS launch TIMEOUT 35)
 
     set(_framelift_lazy_surfaces_env ${_framelift_launch_env})
     list(FILTER _framelift_lazy_surfaces_env EXCLUDE REGEX "^(FL_TEST_EXIT_AFTER_MS|XDG_CONFIG_HOME)=")

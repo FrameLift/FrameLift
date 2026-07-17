@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -49,10 +50,19 @@ const char* FrameLiftCurrentPlatformId() noexcept
 }
 
 std::vector<PluginResolveDecision> ResolvePlugins(
-    const std::vector<PluginResolveCandidate>& candidates, std::string_view platformId
+    const std::vector<PluginResolveCandidate>& candidates, std::string_view platformId,
+    std::span<const std::string_view> hostFeatures
 )
 {
     std::vector<PluginResolveDecision> decisions(candidates.size());
+    std::unordered_set<std::string> hostProvidedFeatures;
+    for (const std::string_view feature : hostFeatures)
+    {
+        if (!feature.empty())
+        {
+            hostProvidedFeatures.emplace(feature);
+        }
+    }
 
     for (std::size_t i = 0; i < candidates.size(); ++i)
     {
@@ -72,6 +82,11 @@ std::vector<PluginResolveDecision> ResolvePlugins(
             decisions[i].reason = "plugin disabled by metadata";
             continue;
         }
+        if (!candidates[i].enabledByUser)
+        {
+            decisions[i].reason = "plugin disabled by user";
+            continue;
+        }
 
         decisions[i].accepted = true;
         if (!PlatformSupported(*meta, platformId))
@@ -81,13 +96,70 @@ std::vector<PluginResolveDecision> ResolvePlugins(
         }
     }
 
+    // Claim plugin-provided features in ascending plugin-id order. Built-in host
+    // capabilities always win; among plugins the lowest id wins deterministically.
+    // Collision losers stay rejected even if the winner later fails a dependency.
+    std::vector<std::size_t> claimOrder;
+    claimOrder.reserve(candidates.size());
+    for (std::size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (decisions[i].accepted)
+        {
+            claimOrder.push_back(i);
+        }
+    }
+    std::ranges::sort(
+        claimOrder,
+        [&](const std::size_t a, const std::size_t b)
+        {
+            return candidates[a].meta->pluginId < candidates[b].meta->pluginId;
+        }
+    );
+
+    std::unordered_map<std::string, std::string> pluginFeatureProviders;
+    for (const std::size_t i : claimOrder)
+    {
+        const PluginMetadata* meta = candidates[i].meta;
+        for (const std::string& feature : meta->providesFeatures)
+        {
+            if (feature.empty())
+            {
+                continue;
+            }
+            if (hostProvidedFeatures.contains(feature))
+            {
+                decisions[i].accepted = false;
+                decisions[i].reason = PluginId(meta) + " conflicts with host-provided feature '" + feature + "'";
+                break;
+            }
+            const auto provider = pluginFeatureProviders.find(feature);
+            if (provider != pluginFeatureProviders.end() && provider->second != meta->pluginId)
+            {
+                decisions[i].accepted = false;
+                decisions[i].reason =
+                    PluginId(meta) + " conflicts with feature '" + feature + "' provided by '" + provider->second + "'";
+                break;
+            }
+        }
+        if (decisions[i].accepted)
+        {
+            for (const std::string& feature : meta->providesFeatures)
+            {
+                if (!feature.empty())
+                {
+                    pluginFeatureProviders.try_emplace(feature, meta->pluginId);
+                }
+            }
+        }
+    }
+
     bool changed = true;
     while (changed)
     {
         changed = false;
 
         std::unordered_set<std::string> providedPlugins;
-        std::unordered_set<std::string> providedFeatures;
+        std::unordered_set<std::string> providedFeatures = hostProvidedFeatures;
         for (std::size_t i = 0; i < candidates.size(); ++i)
         {
             if (!decisions[i].accepted)
@@ -219,7 +291,13 @@ std::vector<std::size_t> OrderPlugins(const std::vector<PluginResolveCandidate>&
                     rest.push_back(i);
                 }
             }
-            std::ranges::sort(rest, [&](std::size_t a, std::size_t b) { return ids[a] < ids[b]; });
+            std::ranges::sort(
+                rest,
+                [&](std::size_t a, std::size_t b)
+                {
+                    return ids[a] < ids[b];
+                }
+            );
             for (const std::size_t i : rest)
             {
                 order.push_back(i);
