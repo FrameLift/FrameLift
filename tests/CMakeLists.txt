@@ -145,6 +145,36 @@ target_link_libraries(framelift_tests PRIVATE Threads::Threads Qt6::Core Qt6::Gu
 framelift_apply_coverage(framelift_tests)
 framelift_qt_discover_tests(framelift_tests)
 
+foreach (_case IN ITEMS valid optional_disabled_provider missing_required_feature duplicate_provider
+                        disabled_required_provider required_cycle)
+    add_test(
+            NAME framelift_cmake_builtin_graph_${_case}
+            COMMAND ${CMAKE_COMMAND}
+                    "-DCASE=${_case}"
+                    "-DFRAMELIFT_ROOT=${FRAMELIFT_ROOT}"
+                    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/cmake-graph-${_case}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuiltinModuleGraphTest.cmake")
+endforeach ()
+set_tests_properties(
+        framelift_cmake_builtin_graph_missing_required_feature
+        framelift_cmake_builtin_graph_duplicate_provider
+        framelift_cmake_builtin_graph_disabled_required_provider
+        framelift_cmake_builtin_graph_required_cycle
+        PROPERTIES WILL_FAIL TRUE)
+
+add_test(
+        NAME framelift_cmake_prune_plugin_output
+        COMMAND ${CMAKE_COMMAND}
+                "-DFRAMELIFT_ROOT=${FRAMELIFT_ROOT}"
+                "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/prune-plugin-output"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PrunePluginOutputTest.cmake")
+
+add_test(
+        NAME framelift_cmake_plugin_source_boundary
+        COMMAND ${CMAKE_COMMAND}
+                "-DFRAMELIFT_ROOT=${FRAMELIFT_ROOT}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PluginSourceBoundaryTest.cmake")
+
 add_executable(framelift_tests_vulkan_off
         unit/gfx/VulkanModuleDisabledTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
