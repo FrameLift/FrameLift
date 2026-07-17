@@ -90,6 +90,11 @@ public:
 private:
     void CloseLocked();     // tear down sink + resampler (mutex_ held)
     void ApplyGainLocked(); // push volume_/muted_ to the device (mutex_ held)
+    // (Re)build swr_ for srcRate/srcLayout/srcFmt → F32 / dstChannels / dstRate_ and
+    // record the source format so Feed can detect a mid-stream change (mutex_ held).
+    [[nodiscard]] bool BuildSwrLocked(
+        int srcRate, const AVChannelLayout& srcLayout, AVSampleFormat srcFmt, int dstChannels
+    );
     [[nodiscard]] int DesiredChannelsLocked() const;
     [[nodiscard]] float CurrentGainLocked() const;   // effective gain from volume/mute/duck
     [[nodiscard]] int64_t QueuedBytesLocked() const; // unheard bytes (ring + sink buffer)
@@ -98,6 +103,14 @@ private:
     std::unique_ptr<AudioSink> sink_; // Qt QAudioSink PCM backend (own thread + ring buffer)
     SwrContext* swr_ = nullptr;
     std::vector<uint8_t> buffer_; // scratch for one resampled chunk (Feed only)
+
+    // Source format swr_ was built for. Feed compares each frame against this: a decoder
+    // resyncing on garbage (mp3 after a mid-frame seek) can emit frames whose layout
+    // differs from the stream's — converting those through a stale swr reads planes that
+    // don't exist. AVChannelLayout owns allocations for custom orders; uninit on rebuild.
+    int srcRate_ = 0;
+    AVSampleFormat srcFmt_ = AV_SAMPLE_FMT_NONE;
+    AVChannelLayout srcLayout_{};
 
     int bytesPerSec_ = 0; // device bytes/sec = freq * channels * sizeof(float)
     int dstChannels_ = 2;
