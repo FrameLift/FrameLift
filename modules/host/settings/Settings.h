@@ -1,68 +1,90 @@
 #pragma once
 
+#include "SettingsRegistry.h"
+
 #include <any>
+#include <functional>
 #include <string>
 #include <typeindex>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
-// The aggregate application settings. Dependency-free by design: it does NOT know
-// the concrete per-module settings structs. Each section (AudioSettings,
-// PlaybackSettings, …) is owned and defined by its module and stored type-erased
-// here; consumers reach a section with the Get<T>() template after including that
-// module's header. The former monolithic SETTINGS_FIELDS X-macro is gone — fields
-// are declared via each module's RegisterXSettings() (see SettingsRegistry.h).
-//
-// Settings.cpp is the single place that includes every section header: its
-// constructor registers each one, and BuildSettingsRegistry() binds their fields.
-
-class SettingsRegistry;
-
+// Dependency-free settings storage. Concrete modules register their own typed
+// sections from the host composition layer; this class owns only persistence,
+// type-erased storage, defaults, and registry assembly.
 class Settings
 {
 public:
     static constexpr const char* InterfaceId = "framelift.Settings";
 
-    // Registers every section (defined in Settings.cpp where the headers are known).
-    Settings();
+    Settings() = default;
 
-    // Access a settings section by type. T must be a registered section; including
-    // the owning module's header makes T complete at the call site.
+    template <class T, class RegisterFn>
+    bool RegisterSection(RegisterFn&& registerFn)
+    {
+        const std::type_index type(typeid(T));
+        if (sections_.contains(type))
+        {
+            return false;
+        }
+
+        auto fn = std::function<void(SettingsRegistry&, T&)>(std::forward<RegisterFn>(registerFn));
+        sections_.emplace(type, T{});
+        sectionBindings_.push_back(
+            {type,
+             [fn](SettingsRegistry& registry, std::any& section)
+             {
+                 fn(registry, std::any_cast<T&>(section));
+             },
+             [](std::any& section)
+             {
+                 std::any_cast<T&>(section) = T{};
+             }}
+        );
+
+        T defaults{};
+        SettingsRegistry defaultsRegistry;
+        fn(defaultsRegistry, defaults);
+        for (const SettingField& field : defaultsRegistry.Fields())
+        {
+            defaultValues_.try_emplace(field.key, field.save());
+        }
+        return true;
+    }
+
     template <class T>
     [[nodiscard]] T& Get()
     {
         return std::any_cast<T&>(sections_.at(std::type_index(typeid(T))));
     }
+
     template <class T>
     [[nodiscard]] const T& Get() const
     {
         return std::any_cast<const T&>(sections_.at(std::type_index(typeid(T))));
     }
 
-    // Reset every section to its defaults in place. The contained objects keep their
-    // addresses, so a SettingsRegistry already bound to this instance stays valid.
-    void ResetToDefaults();
+    [[nodiscard]] SettingsRegistry BuildRegistry();
 
-    // Read settings from the INI file at path via QSettings. Missing keys are left
-    // at their defaults; unknown keys are silently ignored.
-    void Load(const std::string& path);
-    // Write all settings to path via QSettings (IniFormat). QSettings merges around
-    // sections and keys owned by plugins so their data is preserved.
-    void Save(const std::string& path);
-    // Apply process-local launch overrides from FL_* environment flags. Call this
-    // after startup persistence so smoke-test overrides do not edit settings.ini.
-    void ApplyLaunchEnvironmentOverrides();
-
-private:
-    // Create + store a default-constructed section instance.
-    template <class T>
-    void Add()
+    [[nodiscard]] const std::unordered_map<std::string, std::string>& DefaultValues() const noexcept
     {
-        sections_[std::type_index(typeid(T))] = T{};
+        return defaultValues_;
     }
 
-    std::unordered_map<std::type_index, std::any> sections_;
-};
+    void ResetToDefaults();
+    void Load(const std::string& path);
+    void Save(const std::string& path);
 
-// Build a registry binding every section's fields to `s`, in INI section order.
-// `s` must outlive the returned registry (its closures hold references into `s`).
-SettingsRegistry BuildSettingsRegistry(Settings& s);
+private:
+    struct SectionBinding
+    {
+        std::type_index type;
+        std::function<void(SettingsRegistry&, std::any&)> bind;
+        std::function<void(std::any&)> reset;
+    };
+
+    std::unordered_map<std::type_index, std::any> sections_;
+    std::vector<SectionBinding> sectionBindings_;
+    std::unordered_map<std::string, std::string> defaultValues_;
+};

@@ -8,6 +8,8 @@ set(_FRAMELIFT_HOST_CORE_SOURCES
         "${CMAKE_SOURCE_DIR}/src/App.cpp"
         "${CMAKE_SOURCE_DIR}/src/App.h"
         "${CMAKE_SOURCE_DIR}/src/Cli.h"
+        "${CMAKE_SOURCE_DIR}/src/HostSettings.cpp"
+        "${CMAKE_SOURCE_DIR}/src/HostSettings.h"
         "${CMAKE_SOURCE_DIR}/src/TestMediaGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/TestMediaGenerator.h"
         "${CMAKE_SOURCE_DIR}/src/TestMediaSpec.h"

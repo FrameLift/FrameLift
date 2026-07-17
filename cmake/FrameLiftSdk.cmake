@@ -68,6 +68,27 @@ function(add_framelift_plugin NAME)
         message(FATAL_ERROR "add_framelift_plugin(${NAME}) requires PLUGIN_JSON <file>")
     endif ()
 
+    # Production plugins may compile their own sources and the SDK helpers, but
+    # never host implementation files. This guard applies only in-tree; a
+    # standalone SDK package has no host source tree to cross into.
+    if (NOT FRAMELIFT_SDK_STANDALONE)
+        set(_framelift_host_src_root "${CMAKE_SOURCE_DIR}/src")
+        set(_framelift_host_modules_root "${CMAKE_SOURCE_DIR}/modules")
+        foreach (_framelift_plugin_source IN LISTS _FL_PLUGIN_UNPARSED_ARGUMENTS)
+            get_filename_component(
+                    _framelift_plugin_source_abs "${_framelift_plugin_source}" ABSOLUTE
+                    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            cmake_path(IS_PREFIX _framelift_host_src_root "${_framelift_plugin_source_abs}" NORMALIZE _is_host_src)
+            cmake_path(
+                    IS_PREFIX _framelift_host_modules_root "${_framelift_plugin_source_abs}"
+                    NORMALIZE _is_host_module)
+            if (_is_host_src OR _is_host_module)
+                message(FATAL_ERROR
+                        "Plugin ${NAME} may not compile host source '${_framelift_plugin_source_abs}'")
+            endif ()
+        endforeach ()
+    endif ()
+
     framelift_generate_plugin_metadata(
             "${NAME}"
             "${_FL_PLUGIN_PLUGIN_JSON}"

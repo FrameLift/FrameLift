@@ -9,6 +9,7 @@
 #endif
 #include "GraphicsApi.h"
 #include "GraphicsInfoService.h"
+#include "HostSettings.h"
 #include "HotkeysImpl.h"
 #include "JsonServiceImpl.h"
 #include "MediaStoreImpl.h"
@@ -17,7 +18,6 @@
 #include "PlaybackControls.h"
 #include "PluginConfig.h"
 #include "PluginLoader.h"
-#include "Settings.h"
 #include "VideoDecodeCaps.h"
 #include <chrono>
 #include <framelift/platform/IAppWindow.h>
@@ -119,7 +119,7 @@ private:
     // first RenderVideo() (where the GL context is current).
     bool renderInit_ = false;
 
-    Settings settings_;
+    HostSettings settings_;
     PluginConfig pluginConfig_;
     std::string settingsPath_;
     std::string pluginsPath_;

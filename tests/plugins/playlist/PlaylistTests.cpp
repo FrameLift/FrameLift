@@ -1,7 +1,7 @@
 #include "Playlist.h"
 
+#include "HostSettings.h"
 #include "ModuleContext.h"
-#include "Settings.h"
 #include "TempIni.h"
 #include "fakes/FakeMediaPlayer.h"
 
@@ -233,7 +233,7 @@ private Q_SLOTS:
         tags.taggedPath = "/a.mp4";
         tags.tags = {"beach", "ocean"};
 
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         ctx.RegisterService<IMediaTags>(&tags);
@@ -344,7 +344,7 @@ private Q_SLOTS:
         pl.OpenFile((dir.path / "a.mp4").string().c_str());
         QVERIFY(pl.IsManualReloadRequired());
 
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         FakeEventPump eventPump;
@@ -389,7 +389,7 @@ private Q_SLOTS:
 
     void LoadFileDrivesPlayerAndPublishesEvent()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
 
@@ -418,7 +418,7 @@ private Q_SLOTS:
 
     void CleanEofAdvancesOnceAndClearsResumePosition()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         FakeMediaPlayer player;
@@ -457,7 +457,7 @@ private Q_SLOTS:
 
     void CleanEofOnLastItemStopsWithoutWrapping()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         FakeMediaPlayer player;
@@ -491,7 +491,7 @@ private Q_SLOTS:
 
     void InstallPersistsSettingsAndKeybindsOnFirstRun()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini; // unique path, file does not exist yet
         ModuleContext ctx("pref/", &settings, ini.str());
 
@@ -519,7 +519,7 @@ private Q_SLOTS:
     {
         const TempDir dir({"a.mp4", "b.mkv", "c.txt"});
 
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
         FakeMediaPlayer player;
@@ -545,7 +545,7 @@ private Q_SLOTS:
 
     void ThrowingSubscriberIsContained()
     {
-        Settings settings;
+        HostSettings settings;
         const TempFile ini;
         ModuleContext ctx("pref/", &settings, ini.str());
 

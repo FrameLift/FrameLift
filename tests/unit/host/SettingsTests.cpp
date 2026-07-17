@@ -1,4 +1,4 @@
-#include "Settings.h"
+#include "HostSettings.h"
 #include "TempIni.h"
 
 #include "AudioSettings.h"
@@ -73,9 +73,53 @@ class SettingsTest final : public QObject
 
 private Q_SLOTS:
 
+    void GenericRegistryPreservesOrderDefaultsAndRejectsDuplicates()
+    {
+        struct First
+        {
+            int value = 7;
+        };
+
+        struct Second
+        {
+            bool enabled = true;
+        };
+
+        Settings settings;
+        QVERIFY(settings.RegisterSection<First>(
+            [](SettingsRegistry& registry, First& section)
+            {
+                registry.AddInt("first.value", section.value, "first");
+            }
+        ));
+        QVERIFY(settings.RegisterSection<Second>(
+            [](SettingsRegistry& registry, Second& section)
+            {
+                registry.AddBool("second.enabled", section.enabled, "second");
+            }
+        ));
+        QVERIFY(!settings.RegisterSection<First>(
+            [](SettingsRegistry& registry, First& section)
+            {
+                registry.AddInt("duplicate.value", section.value, "duplicate");
+            }
+        ));
+
+        const SettingsRegistry registry = settings.BuildRegistry();
+        QCOMPARE(registry.Fields().size(), 2u);
+        QCOMPARE(registry.Fields()[0].key, std::string("first.value"));
+        QCOMPARE(registry.Fields()[1].key, std::string("second.enabled"));
+        QCOMPARE(settings.DefaultValues().at("first.value"), std::string("7"));
+        QCOMPARE(settings.DefaultValues().at("second.enabled"), std::string("1"));
+
+        settings.Get<First>().value = 99;
+        settings.ResetToDefaults();
+        QCOMPARE(settings.Get<First>().value, 7);
+    }
+
     void DefaultsAreSane()
     {
-        const Settings s;
+        const HostSettings s;
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);
         QVERIFY((s.Get<AudioSettings>().normalizeMode) == ("limiter"));
@@ -87,7 +131,7 @@ private Q_SLOTS:
 
     void ThemeDefaults()
     {
-        const Settings s;
+        const HostSettings s;
         QVERIFY((s.Get<ThemeSettings>().preset) == ("dark"));
         QVERIFY((s.Get<ThemeSettings>().accentColor) == ("#4296FA"));
     }
@@ -100,7 +144,7 @@ accentColor=#AABBCC
 )";
         const TempFile f(content);
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
         QVERIFY((s.Get<ThemeSettings>().preset) == ("light"));
         QVERIFY((s.Get<ThemeSettings>().accentColor) == ("#AABBCC"));
@@ -108,7 +152,7 @@ accentColor=#AABBCC
         // Round-trip: Save then Load into a fresh Settings.
         const TempFile out;
         s.Save(out.str());
-        Settings s2;
+        HostSettings s2;
         s2.Load(out.str());
         QVERIFY((s2.Get<ThemeSettings>().preset) == ("light"));
         QVERIFY((s2.Get<ThemeSettings>().accentColor) == ("#AABBCC"));
@@ -128,7 +172,7 @@ dynaudnormFrameLen=250
 )";
         const TempFile f(content);
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
@@ -142,7 +186,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[audio]\nnormalizeMode=unsupported\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QVERIFY((s.Get<AudioSettings>().normalizeMode) == ("limiter"));
@@ -150,7 +194,7 @@ dynaudnormFrameLen=250
 
     void ReadAheadCacheDefaults()
     {
-        const Settings s;
+        const HostSettings s;
         QVERIFY(s.Get<CacheSettings>().readAheadEnabled);
         QVERIFY((s.Get<CacheSettings>().readAheadSizeMB) == (64));
     }
@@ -160,7 +204,7 @@ dynaudnormFrameLen=250
         const EnvGuard env("FL_ACCEL_MODE", "cuda");
         const TempFile f("[playback]\nhwdecMode=off\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
         s.ApplyLaunchEnvironmentOverrides();
 
@@ -171,7 +215,7 @@ dynaudnormFrameLen=250
     {
         const EnvGuard env("FL_ACCEL_MODE", "off");
 
-        Settings s;
+        HostSettings s;
         s.ApplyLaunchEnvironmentOverrides();
 
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("off"));
@@ -181,7 +225,7 @@ dynaudnormFrameLen=250
     {
         const EnvGuard env("FL_ACCEL_MODE", "definitely-not-a-mode");
 
-        Settings s;
+        HostSettings s;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.ApplyLaunchEnvironmentOverrides();
 
@@ -193,12 +237,12 @@ dynaudnormFrameLen=250
         const EnvGuard env("FL_ACCEL_MODE", "cuda");
         const TempFile f("[playback]\nhwdecMode=off\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
         s.Save(f.str());
         s.ApplyLaunchEnvironmentOverrides();
 
-        Settings loaded;
+        HostSettings loaded;
         loaded.Load(f.str());
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("cuda"));
@@ -208,14 +252,14 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[cache]\nreadAheadEnabled=0\nreadAheadSizeMB=256\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
         QVERIFY(!(s.Get<CacheSettings>().readAheadEnabled));
         QVERIFY((s.Get<CacheSettings>().readAheadSizeMB) == (256));
 
         const TempFile out;
         s.Save(out.str());
-        Settings s2;
+        HostSettings s2;
         s2.Load(out.str());
         QVERIFY(!(s2.Get<CacheSettings>().readAheadEnabled));
         QVERIFY((s2.Get<CacheSettings>().readAheadSizeMB) == (256));
@@ -228,7 +272,7 @@ dynaudnormFrameLen=250
             "channelMode=2\nduckingEnabled=1\nduckingLevel=35\nnormalizeEnabled=1\n"
         );
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
         QVERIFY((s.Get<AudioSettings>().defaultLanguage) == ("jpn"));
         QVERIFY((s.Get<AudioSettings>().outputDevice) == ("Headphones"));
@@ -241,7 +285,7 @@ dynaudnormFrameLen=250
 
         const TempFile out;
         s.Save(out.str());
-        Settings s2;
+        HostSettings s2;
         s2.Load(out.str());
         QVERIFY((s2.Get<AudioSettings>().defaultLanguage) == ("jpn"));
         QVERIFY((s2.Get<AudioSettings>().outputDevice) == ("Headphones"));
@@ -257,7 +301,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[ui]\npanelWidth=400\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QCOMPARE(s.Get<UISettings>().panelWidth, 400.f);                           // overridden
@@ -269,7 +313,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[ui]\npanelWidth=350\nbogusKey=123\n[nosuchsection]\nfoo=bar\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QCOMPARE(s.Get<UISettings>().panelWidth, 350.f);
@@ -281,7 +325,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[ui]\npanelWidth=notanumber\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         // std::stof throws → caught → field keeps its default.
@@ -297,7 +341,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[cache]\nreadAheadSizeMB=abc\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         // std::stoi throws std::invalid_argument → caught → field keeps its default.
@@ -308,7 +352,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[cache]\nreadAheadSizeMB=999999999999\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         // std::stoi throws std::out_of_range → caught → field keeps its default.
@@ -319,7 +363,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[cache]\nreadAheadSizeMB=3.14\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         // std::stoi parses the leading integer prefix ("3") and stops — no crash,
@@ -330,19 +374,19 @@ dynaudnormFrameLen=250
     void BoolFieldOnlyOneIsTrue()
     {
         // Bool fields parse via (v == "1"); every other token is false, none throw.
-        const Settings def;
+        const HostSettings def;
         QVERIFY(def.Get<PlaybackSettings>().subAutoLoad); // default is true, so "not 1" must flip it to false
 
         for (const char* token : {"true", "2", "yes"})
         {
             const TempFile f(std::string("[playback]\nsubAutoLoad=") + token + "\n");
-            Settings s;
+            HostSettings s;
             s.Load(f.str());
             QVERIFY2(!(s.Get<PlaybackSettings>().subAutoLoad), (std::string("token=") + token).c_str());
         }
 
         const TempFile one("[playback]\nsubAutoLoad=1\n");
-        Settings s;
+        HostSettings s;
         s.Load(one.str());
         QVERIFY(s.Get<PlaybackSettings>().subAutoLoad);
     }
@@ -351,7 +395,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[playback]\nhwdecMode=definitely-not-a-mode\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QVERIFY((s.Get<PlaybackSettings>().hwdecMode) == ("auto"));
@@ -360,11 +404,11 @@ dynaudnormFrameLen=250
     void SaveNormalizesHwdecMode()
     {
         const TempFile f;
-        Settings s;
+        HostSettings s;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.Save(f.str());
 
-        Settings loaded;
+        HostSettings loaded;
         loaded.Load(f.str());
 
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
@@ -374,7 +418,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f("[ui]\npanelWidth=\n");
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         // std::stof("") throws → caught → field keeps its default.
@@ -385,7 +429,7 @@ dynaudnormFrameLen=250
     {
         // Load() of a missing file writes a default file; the in-memory object
         // must still hold defaults.
-        Settings s;
+        HostSettings s;
         const auto missing = UniqueTempPath();
         s.Load(missing.string());
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);
@@ -402,14 +446,14 @@ dynaudnormFrameLen=250
         QVERIFY(std::filesystem::exists(f.path));
         QVERIFY((std::filesystem::file_size(f.path)) == (0u));
 
-        Settings s;
+        HostSettings s;
         s.Load(f.str());
 
         QCOMPARE(s.Get<UISettings>().panelWidth, 320.f);      // in-memory defaults intact
         QVERIFY((std::filesystem::file_size(f.path)) > (0u)); // defaults written back to disk
 
         // Re-loading the now-populated file yields the same defaults.
-        Settings reloaded;
+        HostSettings reloaded;
         reloaded.Load(f.str());
         QCOMPARE(reloaded.Get<UISettings>().panelWidth, 320.f);
     }
@@ -418,7 +462,7 @@ dynaudnormFrameLen=250
     {
         const TempFile f;
 
-        Settings s;
+        HostSettings s;
         s.Get<PlaybackSettings>().hwdecMode = "off";
         s.Get<UISettings>().panelWidth = 444.f;
         s.Get<FilesSettings>().videoExtensions = "mkv;webm";
@@ -429,7 +473,7 @@ dynaudnormFrameLen=250
         s.Get<KeybindSettings>().togglePause = "P";
         s.Save(f.str());
 
-        Settings loaded;
+        HostSettings loaded;
         loaded.Load(f.str());
 
         QVERIFY((loaded.Get<PlaybackSettings>().hwdecMode) == ("off"));
@@ -448,7 +492,7 @@ dynaudnormFrameLen=250
         // owned section, while updating owned keys in place.
         const TempFile f("[Playlist]\nscanSubdirs=1\n\n[keybinds]\ntogglePause=Space\nhandAddedKey=Ctrl+J\n");
 
-        Settings s;
+        HostSettings s;
         s.Get<KeybindSettings>().togglePause = "P";
         s.Save(f.str());
 
@@ -465,7 +509,7 @@ dynaudnormFrameLen=250
     void CommentsWrittenForKnownSettings()
     {
         const TempFile f;
-        Settings s;
+        HostSettings s;
         s.Save(f.str());
 
         const std::string text = ReadAll(f.str());
@@ -478,7 +522,7 @@ dynaudnormFrameLen=250
     void CommentsAreIdempotent()
     {
         const TempFile f;
-        Settings s;
+        HostSettings s;
         s.Save(f.str());
         const std::string first = ReadAll(f.str());
 
@@ -496,7 +540,7 @@ dynaudnormFrameLen=250
         // An unknown key hand-added to an owned section must be preserved verbatim.
         const TempFile f("[keybinds]\ntogglePause=Space\nhandAddedKey=Ctrl+J\n");
 
-        Settings s;
+        HostSettings s;
         s.Save(f.str());
 
         const std::string text = ReadAll(f.str());

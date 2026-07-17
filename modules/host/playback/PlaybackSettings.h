@@ -36,6 +36,10 @@ inline void RegisterPlaybackSettings(SettingsRegistry& reg, PlaybackSettings& s)
         {
             const VideoDecodeMode mode = VideoDecodeModeFromString(s.hwdecMode);
             return std::string(VideoDecodeModeName(mode));
+        },
+        [&s](const std::string& value)
+        {
+            s.hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(value));
         }
     );
     reg.AddString(

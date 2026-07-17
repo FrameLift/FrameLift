@@ -1,7 +1,5 @@
 #include "SettingsService.h"
-#include "PlaybackSettings.h"
 #include "Settings.h"
-#include "VideoDecodeMode.h"
 #include <cstddef>
 #include <cstring>
 #include <ranges>
@@ -11,15 +9,8 @@
 SettingsService::SettingsService(Settings* settings, std::string settingsPath)
     : settingsPath_(std::move(settingsPath)), settings_(settings)
 {
-    // Bind the field registry to the live settings, and snapshot the serialized
-    // defaults from a fresh Settings so EnumerateSettings can report them.
-    settingsRegistry_ = BuildSettingsRegistry(*settings_);
-    Settings defaults;
-    const SettingsRegistry defaultsReg = BuildSettingsRegistry(defaults);
-    for (const auto& f : defaultsReg.Fields())
-    {
-        settingDefaults_.emplace(f.key, f.save());
-    }
+    settingsRegistry_ = settings_->BuildRegistry();
+    settingDefaults_ = settings_->DefaultValues();
 }
 
 // Anchors the vtable and the implicit-member destructor in this single TU (see header).
@@ -98,11 +89,6 @@ void SettingsService::CommitSettingString(const char* key, const char* value) no
     if (f && f->type == SettingType::String && f->setString)
     {
         f->setString(value);
-    }
-    if (std::strcmp(key, "playback.hwdecMode") == 0)
-    {
-        PlaybackSettings& pb = settings_->Get<PlaybackSettings>();
-        pb.hwdecMode = VideoDecodeModeName(VideoDecodeModeFromString(pb.hwdecMode));
     }
 }
 

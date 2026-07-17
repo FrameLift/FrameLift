@@ -112,6 +112,7 @@ add_executable(framelift_tests
         unit/gfx/VulkanTextureRingTests.cpp
         unit/gfx/VulkanUploadPolicyTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
+        "${FRAMELIFT_ROOT}/src/HostSettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginConfig.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginLoader.cpp"
@@ -147,6 +148,7 @@ framelift_qt_discover_tests(framelift_tests)
 add_executable(framelift_tests_vulkan_off
         unit/gfx/VulkanModuleDisabledTests.cpp
         ${FRAMELIFT_QT_TEST_RUNNER}
+        "${FRAMELIFT_ROOT}/src/HostSettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp"
 )
 set_target_properties(framelift_tests_vulkan_off PROPERTIES
@@ -304,6 +306,7 @@ add_framelift_plugin_test(framelift_test_playlist
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/SettingsService.cpp"
+        "${FRAMELIFT_ROOT}/src/HostSettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 target_link_libraries(framelift_test_playlist PRIVATE Qt6::Qml)
 
@@ -316,6 +319,7 @@ add_framelift_plugin_test(framelift_test_settingsmenu
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/AppPaths.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/PluginCatalog.cpp"
         "${FRAMELIFT_ROOT}/modules/host/module-runtime/SettingsService.cpp"
+        "${FRAMELIFT_ROOT}/src/HostSettings.cpp"
         "${FRAMELIFT_ROOT}/modules/host/settings/Settings.cpp")
 
 add_framelift_plugin_test(framelift_test_overlay

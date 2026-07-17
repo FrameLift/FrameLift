@@ -13,7 +13,8 @@
   },
   "requires": {
     "modules": [
-      "framelift.graphics_core"
+      "framelift.graphics_core",
+      "framelift.settings"
     ],
     "features": []
   },

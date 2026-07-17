@@ -13,7 +13,9 @@
     ]
   },
   "requires": {
-    "modules": [],
+    "modules": [
+      "framelift.settings"
+    ],
     "features": []
   },
   "optional": {
