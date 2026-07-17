@@ -339,6 +339,7 @@ endif ()
 # Qt's offscreen platform and software scene-graph backend.
 if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TESTS)
     find_package(Threads REQUIRED)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
     add_executable(framelift_test_packet_queue tests/unit/media/FFmpegPacketQueueTests.cpp)
     set_target_properties(framelift_test_packet_queue PROPERTIES
             CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -346,6 +347,28 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
     target_link_libraries(framelift_test_packet_queue PRIVATE Threads::Threads ffmpeg)
     add_test(NAME framelift_packet_queue_generation COMMAND framelift_test_packet_queue)
     set_tests_properties(framelift_packet_queue_generation PROPERTIES LABELS "launch;unit" TIMEOUT 10)
+
+    if (FRAMELIFT_MODULE_FRAME_SAMPLER)
+        add_executable(framelift_test_frame_sampler
+                tests/integration/FrameSamplerIntegrationTests.cpp
+                modules/host/frame-sampler/FrameSamplerService.cpp
+                src/TestMediaGenerator.cpp
+                sdk/src/Log.cpp)
+        set_target_properties(framelift_test_frame_sampler PROPERTIES
+                CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF AUTOMOC ON)
+        target_include_directories(framelift_test_frame_sampler PRIVATE
+                "${CMAKE_SOURCE_DIR}/sdk/include"
+                "${CMAKE_SOURCE_DIR}/src"
+                ${FRAMELIFT_HOST_MODULE_INCLUDE_DIRS})
+        target_link_libraries(framelift_test_frame_sampler PRIVATE
+                FrameLiftSdk Threads::Threads Qt6::Core Qt6::Test ffmpeg)
+        add_test(NAME framelift_frame_sampler_integration COMMAND framelift_test_frame_sampler)
+        set_tests_properties(framelift_frame_sampler_integration PROPERTIES
+                LABELS "launch;integration"
+                TIMEOUT 35
+                ENVIRONMENT
+                "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_frame_sampler")
+    endif ()
 
     set(_framelift_launch_env
             "QT_QPA_PLATFORM=offscreen"
