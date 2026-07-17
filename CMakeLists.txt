@@ -355,7 +355,7 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             "FL_LOG_LEVEL=debug"
             "FL_LOG_PERF=1"
             "FL_TEST_EXIT_AFTER_MS=1500"
-            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl_offscreen")
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_qml_software")
     set(_framelift_launch_fail_regex
             "TypeError"
             "ReferenceError"
@@ -368,15 +368,37 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
             "Assertion"
             "AddressSanitizer"
             "UndefinedBehaviorSanitizer")
-    add_test(NAME framelift_launch_opengl_offscreen
+    add_test(NAME framelift_launch_qml_software
             COMMAND $<TARGET_FILE:FrameLift>)
-    set_tests_properties(framelift_launch_opengl_offscreen PROPERTIES
+    set_tests_properties(framelift_launch_qml_software PROPERTIES
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:FrameLift>"
             LABELS launch
             TIMEOUT 20
             ENVIRONMENT "${_framelift_launch_env}"
             PASS_REGULAR_EXPRESSION "startup-first-frame [0-9]+\\.[0-9]+ ms"
             FAIL_REGULAR_EXPRESSION "${_framelift_launch_fail_regex}")
+
+    set(_framelift_opengl_launch_env
+            "QT_QPA_PLATFORM=xcb"
+            "QSG_RHI_BACKEND=opengl"
+            "LIBGL_ALWAYS_SOFTWARE=1"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_LOG_PERF=1"
+            "FL_TEST_FILE=2s-360p-mpeg4-noaudio"
+            "FL_TEST_EXIT_AFTER_MS=3000"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_opengl"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_opengl")
+    add_test(NAME framelift_launch_opengl
+            COMMAND ${CMAKE_COMMAND}
+                    "-DTEST_EXECUTABLE=$<TARGET_FILE:FrameLift>"
+                    "-DTEST_WORKING_DIRECTORY=$<TARGET_FILE_DIR:FrameLift>"
+                    "-DTEST_ENVIRONMENT=${_framelift_opengl_launch_env}"
+                    "-DREQUIRED_REGEXES=video renderer initialized: OpenGL;file-open [0-9]+\\.[0-9]+ ms"
+                    "-DFORBIDDEN_REGEXES=${_framelift_launch_fail_regex};GlVideoRenderer:;video renderer init failed"
+                    -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
+    set_tests_properties(framelift_launch_opengl PROPERTIES LABELS launch TIMEOUT 35)
 
     set(_framelift_lazy_surfaces_env ${_framelift_launch_env})
     list(FILTER _framelift_lazy_surfaces_env EXCLUDE REGEX "^(FL_TEST_EXIT_AFTER_MS|XDG_CONFIG_HOME)=")

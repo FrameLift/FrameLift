@@ -34,6 +34,10 @@ void FFmpegPlayer::InitRender(void* graphicsBackend) noexcept
     {
         Log::Error("FFmpegPlayer: video renderer init failed; showing black");
     }
+    else
+    {
+        Log::Debug("FFmpegPlayer: video renderer initialized: {}", backend->Name());
+    }
 
     // If the active backend is Vulkan and exposes a video-decode device, wrap it for
     // FFmpeg so we can decode straight onto the render device (#18). Non-fatal on
