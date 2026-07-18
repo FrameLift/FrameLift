@@ -2,8 +2,15 @@ if (NOT DEFINED TEST_EXECUTABLE OR NOT DEFINED TEST_WORKING_DIRECTORY)
     message(FATAL_ERROR "TEST_EXECUTABLE and TEST_WORKING_DIRECTORY are required")
 endif ()
 
+# Optional pre-launch hook, e.g. generating a media file the FL_TEST_FILE spec
+# grammar can't express (GenerateFormatSwitchAudio.cmake). The script sees this
+# file's -D variables. TEST_ARGS (if set) are passed to the executable.
+if (DEFINED SETUP_SCRIPT)
+    include("${SETUP_SCRIPT}")
+endif ()
+
 execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env ${TEST_ENVIRONMENT} "${TEST_EXECUTABLE}"
+        COMMAND "${CMAKE_COMMAND}" -E env ${TEST_ENVIRONMENT} "${TEST_EXECUTABLE}" ${TEST_ARGS}
         WORKING_DIRECTORY "${TEST_WORKING_DIRECTORY}"
         RESULT_VARIABLE result
         OUTPUT_VARIABLE stdout

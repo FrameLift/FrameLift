@@ -593,6 +593,36 @@ if (UNIX AND NOT APPLE AND FRAMELIFT_BUILD_PLUGINS AND FRAMELIFT_BUILD_LAUNCH_TE
                     -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
     set_tests_properties(framelift_launch_seek_back_stops_cleanly PROPERTIES LABELS launch TIMEOUT 30)
 
+    # A decoder-level audio format change (stereo 44.1k → mono 22.05k mid-mp3) must
+    # rebuild the playback resampler, not crash: a mono frame pushed through a
+    # stereo-configured SwrContext dereferences a plane that doesn't exist (also
+    # reachable via mp3 false-sync frames after mid-frame AVI seeks). The clip is a
+    # byte-concatenation of two encodes, which FL_TEST_FILE's grammar can't express,
+    # so the wrapper's SETUP_SCRIPT generates it. On hosts without an audio device
+    # the sink never opens (CI stays independent of an audio daemon) — the required
+    # alternation accepts that path, and a crash still fails via the exit code.
+    set(_framelift_audio_format_switch_env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_QUICK_BACKEND=software"
+            "FL_BACKEND=gl"
+            "FL_ACCEL_MODE=off"
+            "FL_LOG_LEVEL=debug"
+            "FL_TEST_EXIT_AFTER_MS=3500"
+            "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/test-config/framelift_launch_audio_format_switch"
+            "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/test-cache/framelift_launch_audio_format_switch")
+    add_test(NAME framelift_launch_audio_format_switch
+            COMMAND ${CMAKE_COMMAND}
+                    "-DTEST_EXECUTABLE=$<TARGET_FILE:FrameLift>"
+                    "-DTEST_WORKING_DIRECTORY=$<TARGET_FILE_DIR:FrameLift>"
+                    "-DTEST_ENVIRONMENT=${_framelift_audio_format_switch_env}"
+                    "-DSETUP_SCRIPT=${CMAKE_SOURCE_DIR}/tests/support/GenerateFormatSwitchAudio.cmake"
+                    "-DFORMAT_SWITCH_AUDIO_FILE=${CMAKE_BINARY_DIR}/test-media/format-switch.mp3"
+                    "-DTEST_ARGS=${CMAKE_BINARY_DIR}/test-media/format-switch.mp3"
+                    "-DREQUIRED_REGEXES=rebuilding resampler|QAudioSink start failed"
+                    "-DFORBIDDEN_REGEXES=${_framelift_launch_fail_regex}"
+                    -P "${CMAKE_SOURCE_DIR}/tests/support/RunLaunchAndCheck.cmake")
+    set_tests_properties(framelift_launch_audio_format_switch PROPERTIES LABELS launch TIMEOUT 30)
+
     # Same launch on a real Vulkan device with the Khronos validation layer forced on,
     # playing a short software-decoded clip when ${CMAKE_BINARY_DIR}/test-media/smoke.mp4
     # exists (CI generates it; without it the smoke still covers init/teardown). Any

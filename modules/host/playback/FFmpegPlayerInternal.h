@@ -5,6 +5,8 @@
 // FFmpegPlayer.h or anything outside modules/host/playback (App.cpp includes
 // FFmpegPlayer.h and has to stay libav-free).
 
+#include "LogRepeatCollapse.h"
+
 #include <framelift/Log.h>
 #include <framelift/platform/IMediaPlayer.h>
 
@@ -43,6 +45,7 @@ extern "C"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -137,6 +140,16 @@ inline void CountDecodeError(std::atomic<int64_t>& counter, const AVCodecContext
     }
 }
 
+// Error/warning lines libav emits on this thread that are *expected* and should be
+// demoted to Debug instead of alarming the log. The audio worker arms this around
+// avcodec_send_packet for the first packets after a codec flush: in non-interleaved
+// AVIs every seek hands the mp3 decoder 1-3 misaligned leading packets, and the
+// decoder logs "Header missing" per packet before the parser resyncs — inherent
+// demuxer behavior (plain ffmpeg CLI logs the same), not a playback fault. Audio
+// decode is synchronous on the calling thread, so thread_local scoping catches
+// exactly the armed send's lines and nothing else.
+inline thread_local int gExpectedResyncErrorLogs = 0;
+
 // Route FFmpeg's libav* logging through the host logger (mirrors AssLogCallback for
 // libass). FFmpeg's default callback writes raw to stderr, bypassing our message
 // pattern *and* the IsSuppressed filter in Log.cpp; routing it through Log::* gives
@@ -166,18 +179,48 @@ inline void FFmpegLogCallback(void* /*avcl*/, int level, const char* fmt, va_lis
     {
         return;
     }
-    if (level <= AV_LOG_ERROR)
+
+    if (gExpectedResyncErrorLogs > 0 && level <= AV_LOG_WARNING)
     {
-        Log::Error("FFmpeg: {}", buf);
+        --gExpectedResyncErrorLogs;
+        Log::Debug("FFmpeg: {} (post-seek resync)", buf);
+        return;
     }
-    else if (level <= AV_LOG_WARNING)
-    {
-        Log::Warn("FFmpeg: {}", buf);
-    }
-    else
-    {
-        Log::Info("FFmpeg: {}", buf);
-    }
+
+    // Collapse repeat storms (mp3 "Header missing" once per misaligned packet after
+    // each seek in an AVI, and similar per-packet libav errors) into "(xN)" lines.
+    // The callback arrives on any decode/demux thread, so guard the shared collapser.
+    static std::mutex repeatMutex;
+    static LogRepeatCollapser collapser(std::chrono::seconds(3));
+
+    std::lock_guard lock(repeatMutex);
+    collapser.Observe(
+        level, buf, std::chrono::steady_clock::now(),
+        [](int lvl, const char* msg, std::uint64_t occurrences)
+        {
+            char line[1064];
+            if (occurrences > 1)
+            {
+                std::snprintf(line, sizeof(line), "%s (x%llu)", msg, static_cast<unsigned long long>(occurrences));
+            }
+            else
+            {
+                std::snprintf(line, sizeof(line), "%s", msg);
+            }
+            if (lvl <= AV_LOG_ERROR)
+            {
+                Log::Error("FFmpeg: {}", line);
+            }
+            else if (lvl <= AV_LOG_WARNING)
+            {
+                Log::Warn("FFmpeg: {}", line);
+            }
+            else
+            {
+                Log::Info("FFmpeg: {}", line);
+            }
+        }
+    );
 }
 
 // (Re)install our av_log callback. av_log_set_callback is global libav state, and on

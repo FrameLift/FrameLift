@@ -83,6 +83,7 @@ add_executable(framelift_tests
         unit/media/MediaEventTests.cpp
         unit/host/SettingsMappingTests.cpp
         unit/host/ReadAheadCacheTests.cpp
+        unit/host/LogRepeatCollapseTests.cpp
         unit/misc/ThemeUtilTests.cpp
         unit/media/FFmpegClockTests.cpp
         unit/media/FFmpegTimelineTests.cpp

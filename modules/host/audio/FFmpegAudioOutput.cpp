@@ -352,30 +352,7 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     dstRate_ = newRate;
     dstChannels_ = newChannels;
 
-    // Build the resampler to F32 interleaved / dstChannels_ / dstRate_, retrying at stereo
-    // if a surround sink isn't available.
-    auto buildSwr = [&](int channels) -> bool
-    {
-        if (swr_)
-        {
-            swr_free(&swr_); // drop the previous file's resampler (kept across a reuse)
-        }
-        AVChannelLayout dstLayout;
-        av_channel_layout_default(&dstLayout, channels);
-        SwrContext* swr = nullptr;
-        const int ret =
-            swr_alloc_set_opts2(&swr, &dstLayout, AV_SAMPLE_FMT_FLT, dstRate_, &srcLayout, srcFmt, srcRate, 0, nullptr);
-        av_channel_layout_uninit(&dstLayout);
-        if (ret < 0 || !swr || swr_init(swr) < 0)
-        {
-            swr_free(&swr);
-            return false;
-        }
-        swr_ = swr;
-        return true;
-    };
-
-    if (!buildSwr(dstChannels_))
+    if (!BuildSwrLocked(srcRate, srcLayout, srcFmt, dstChannels_))
     {
         Log::Error("FFmpegAudioOutput: resampler init failed");
         CloseLocked();
@@ -403,9 +380,8 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     if (!ok && dstChannels_ == 6)
     {
         Log::Warn("FFmpegAudioOutput: surround output unavailable, falling back to stereo");
-        swr_free(&swr_);
         dstChannels_ = 2;
-        if (buildSwr(dstChannels_))
+        if (BuildSwrLocked(srcRate, srcLayout, srcFmt, dstChannels_))
         {
             bytesPerSec_ = dstRate_ * dstChannels_ * static_cast<int>(sizeof(float));
             bufBytes = static_cast<int>(static_cast<double>(bytesPerSec_) * kSinkBufferSeconds);
@@ -431,6 +407,39 @@ bool FFmpegAudioOutput::Open(int srcRate, const AVChannelLayout& srcLayout, AVSa
     return true;
 }
 
+bool FFmpegAudioOutput::BuildSwrLocked(
+    int srcRate, const AVChannelLayout& srcLayout, AVSampleFormat srcFmt, int dstChannels
+)
+{
+    if (swr_)
+    {
+        swr_free(&swr_); // drop the previous resampler (kept across a sink reuse)
+    }
+    AVChannelLayout dstLayout;
+    av_channel_layout_default(&dstLayout, dstChannels);
+    SwrContext* swr = nullptr;
+    const int ret =
+        swr_alloc_set_opts2(&swr, &dstLayout, AV_SAMPLE_FMT_FLT, dstRate_, &srcLayout, srcFmt, srcRate, 0, nullptr);
+    av_channel_layout_uninit(&dstLayout);
+    if (ret < 0 || !swr || swr_init(swr) < 0)
+    {
+        swr_free(&swr);
+        av_channel_layout_uninit(&srcLayout_);
+        srcRate_ = 0;
+        srcFmt_ = AV_SAMPLE_FMT_NONE;
+        return false;
+    }
+    swr_ = swr;
+    av_channel_layout_uninit(&srcLayout_);
+    if (av_channel_layout_copy(&srcLayout_, &srcLayout) < 0)
+    {
+        srcLayout_ = AVChannelLayout{};
+    }
+    srcRate_ = srcRate;
+    srcFmt_ = srcFmt;
+    return true;
+}
+
 bool FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec, std::uint64_t generation)
 {
     std::lock_guard lock(mutex_);
@@ -445,6 +454,27 @@ bool FFmpegAudioOutput::Feed(const AVFrame* frame, double ptsSec, std::uint64_t 
     {
         ducked_ = false;
         ApplyGainLocked();
+    }
+
+    // A frame whose format differs from what swr_ was built for must not be converted
+    // as-is: swr reads the source plane pointers per its *configured* layout, so e.g. a
+    // mono frame pushed through a stereo-configured context dereferences a plane that
+    // doesn't exist. This happens in the wild — an mp3 decoder fed mid-frame data after
+    // an AVI seek can resync on a false header and emit a mono/low-rate frame. Rebuild
+    // the resampler for the new source format (also covers genuine mid-stream changes).
+    const auto frameFmt = static_cast<AVSampleFormat>(frame->format);
+    if (frame->sample_rate != srcRate_ || frameFmt != srcFmt_ ||
+        av_channel_layout_compare(&srcLayout_, &frame->ch_layout) != 0)
+    {
+        Log::Debug(
+            "FFmpegAudioOutput: source format changed ({} Hz {}ch fmt {} -> {} Hz {}ch fmt {}), rebuilding resampler",
+            srcRate_, srcLayout_.nb_channels, static_cast<int>(srcFmt_), frame->sample_rate,
+            frame->ch_layout.nb_channels, frame->format
+        );
+        if (!BuildSwrLocked(frame->sample_rate, frame->ch_layout, frameFmt, dstChannels_))
+        {
+            return false;
+        }
     }
 
     const int inRate = frame->sample_rate > 0 ? frame->sample_rate : dstRate_;
@@ -668,6 +698,9 @@ void FFmpegAudioOutput::CloseLocked()
     {
         swr_free(&swr_);
     }
+    av_channel_layout_uninit(&srcLayout_);
+    srcRate_ = 0;
+    srcFmt_ = AV_SAMPLE_FMT_NONE;
     bytesPerSec_ = 0;
     lastQueuedPts_ = 0.0;
     feedInterrupted_ = false;
