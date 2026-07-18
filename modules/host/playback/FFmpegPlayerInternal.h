@@ -140,6 +140,16 @@ inline void CountDecodeError(std::atomic<int64_t>& counter, const AVCodecContext
     }
 }
 
+// Error/warning lines libav emits on this thread that are *expected* and should be
+// demoted to Debug instead of alarming the log. The audio worker arms this around
+// avcodec_send_packet for the first packets after a codec flush: in non-interleaved
+// AVIs every seek hands the mp3 decoder 1-3 misaligned leading packets, and the
+// decoder logs "Header missing" per packet before the parser resyncs — inherent
+// demuxer behavior (plain ffmpeg CLI logs the same), not a playback fault. Audio
+// decode is synchronous on the calling thread, so thread_local scoping catches
+// exactly the armed send's lines and nothing else.
+inline thread_local int gExpectedResyncErrorLogs = 0;
+
 // Route FFmpeg's libav* logging through the host logger (mirrors AssLogCallback for
 // libass). FFmpeg's default callback writes raw to stderr, bypassing our message
 // pattern *and* the IsSuppressed filter in Log.cpp; routing it through Log::* gives
@@ -167,6 +177,13 @@ inline void FFmpegLogCallback(void* /*avcl*/, int level, const char* fmt, va_lis
     }
     if (buf[0] == '\0')
     {
+        return;
+    }
+
+    if (gExpectedResyncErrorLogs > 0 && level <= AV_LOG_WARNING)
+    {
+        --gExpectedResyncErrorLogs;
+        Log::Debug("FFmpeg: {} (post-seek resync)", buf);
         return;
     }
 

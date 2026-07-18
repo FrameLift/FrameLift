@@ -46,6 +46,16 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
     bool filterActive = false;
     std::uint64_t workerGeneration = 0;
     double workerSeekSkipPts = kSeekNoSkipPts;
+    // Expected-resync window: in non-interleaved AVIs every seek — and the initial
+    // open, whose first packets arrive without a Flush (the worker adopts the first
+    // generation directly) — hands the mp3 decoder 1-3 misaligned leading packets
+    // before the parser resyncs. Their decode failures are demoted to Debug and not
+    // counted; anything past the window is a real error again. The first successful
+    // decode closes the window, so a generous size only affects how many pre-sync
+    // failures stay quiet (~26 ms of audio each for mp3) — sustained corruption blows
+    // straight past it. Storm-tested: ffmpeg CLI shows 1-3 per seek, in-app rarely >4.
+    constexpr int kPostFlushResyncPackets = 16;
+    int resyncGrace = kPostFlushResyncPackets;
 
     // Queue one output frame (post seek-skip) and drive the audio-only TimePos clock.
     // ptsSec is the frame's start timestamp, already normalised to the 0 origin.
@@ -267,6 +277,7 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
             filter.Close();
             filterActive = false;
             seenGen = ~0ull;
+            resyncGrace = kPostFlushResyncPackets;
             workerGeneration = item.generation;
             workerSeekSkipPts = seekSkipPts_.load(std::memory_order_acquire);
             LogSeekPerf("seek-audio-flush", item.generation, item.requestedAt);
@@ -294,9 +305,19 @@ void FFmpegPlayer::AudioWorker(AVCodecContext* dec, AVStream* stream, double tim
             av_packet_unref(pkt);
             continue;
         }
-        if (avcodec_send_packet(dec, pkt) == 0)
+        // The window counts *failures*, not packets: a partially-valid packet can
+        // decode "successfully" between misaligned ones during the same resync, so
+        // closing on first success would let its neighbours through at ERROR.
+        gExpectedResyncErrorLogs = resyncGrace > 0 ? kPostFlushResyncPackets : 0;
+        const int sendRet = avcodec_send_packet(dec, pkt);
+        gExpectedResyncErrorLogs = 0;
+        if (sendRet == 0)
         {
             feedFrames();
+        }
+        else if (resyncGrace > 0)
+        {
+            --resyncGrace; // expected post-flush resync failure: demoted, not counted
         }
         else
         {
